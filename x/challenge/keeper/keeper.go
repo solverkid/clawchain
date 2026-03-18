@@ -59,28 +59,102 @@ func (k Keeper) GeneratePublicChallenge(ctx sdk.Context, epoch uint64) {
 	}
 	rng := rand.New(rand.NewSource(seed))
 
-	// 生成简单数学题
-	a := rng.Intn(900) + 100
-	b := rng.Intn(900) + 100
-	ops := []string{"+", "-", "*"}
-	op := ops[rng.Intn(len(ops))]
-	var answer int
-	switch op {
-	case "+":
-		answer = a + b
-	case "-":
-		answer = a - b
-	case "*":
-		answer = a * b
+	// 随机选择挑战类型（4种类型：数学、文本、逻辑、JSON、哈希）
+	challengeTypes := []struct {
+		ctype  types.ChallengeType
+		weight int
+	}{
+		{types.ChallengeMath, 3},           // 数学题权重高
+		{types.ChallengeTextTransform, 2},  // 文本处理
+		{types.ChallengeLogic, 2},          // 逻辑推理
+		{types.ChallengeJSONExtract, 2},    // JSON 提取
+		{types.ChallengeHash, 1},           // 哈希计算
+	}
+
+	// 加权随机选择
+	totalWeight := 0
+	for _, ct := range challengeTypes {
+		totalWeight += ct.weight
+	}
+	roll := rng.Intn(totalWeight)
+	var selectedType types.ChallengeType
+	cumulative := 0
+	for _, ct := range challengeTypes {
+		cumulative += ct.weight
+		if roll < cumulative {
+			selectedType = ct.ctype
+			break
+		}
+	}
+
+	// 根据类型生成挑战
+	var prompt, answer string
+	switch selectedType {
+	case types.ChallengeMath:
+		a := rng.Intn(900) + 100
+		b := rng.Intn(900) + 100
+		ops := []string{"+", "-", "*"}
+		op := ops[rng.Intn(len(ops))]
+		var result int
+		switch op {
+		case "+":
+			result = a + b
+		case "-":
+			result = a - b
+		case "*":
+			result = a * b
+		}
+		prompt = fmt.Sprintf("计算 %d %s %d 的结果", a, op, b)
+		answer = fmt.Sprintf("%d", result)
+
+	case types.ChallengeTextTransform:
+		texts := []string{"hello world", "clawchain mining", "distributed ai"}
+		text := texts[rng.Intn(len(texts))]
+		prompt = fmt.Sprintf("将以下文本转为大写: %s", text)
+		answer = fmt.Sprintf("%s", fmt.Sprintf("%s", text))
+		// 实际答案需要转大写
+		var upper []rune
+		for _, r := range answer {
+			if r >= 'a' && r <= 'z' {
+				upper = append(upper, r-32)
+			} else {
+				upper = append(upper, r)
+			}
+		}
+		answer = string(upper)
+
+	case types.ChallengeLogic:
+		prompt = "如果 A > B 且 B > C，那么 A 和 C 的关系是？"
+		answer = "A > C"
+
+	case types.ChallengeJSONExtract:
+		names := []string{"Alice", "Bob", "Charlie"}
+		ages := []int{25, 30, 35}
+		idx := rng.Intn(len(names))
+		prompt = fmt.Sprintf(`从 {"name":"%s","age":%d} 中提取 name 的值`, names[idx], ages[idx])
+		answer = names[idx]
+
+	case types.ChallengeHash:
+		prompt = "计算 'clawchain' 的 SHA256 前 8 位"
+		// 预计算固定答案
+		h := sha256.Sum256([]byte("clawchain"))
+		answer = hex.EncodeToString(h[:])[:8]
+
+	default:
+		// fallback 数学题
+		a := rng.Intn(100) + 1
+		b := rng.Intn(100) + 1
+		prompt = fmt.Sprintf("计算 %d + %d 的结果", a, b)
+		answer = fmt.Sprintf("%d", a+b)
 	}
 
 	challenge := types.Challenge{
 		ID:             fmt.Sprintf("ch-%d-0", epoch),
 		Epoch:          epoch,
-		Type:           types.ChallengeMath,
-		Prompt:         fmt.Sprintf("计算 %d %s %d 的结果", a, op, b),
-		ExpectedAnswer: fmt.Sprintf("%d", answer),
-		Assignees:      []string{},  // 公开挑战，任何人可提交
+		Type:           selectedType,
+		Prompt:         prompt,
+		ExpectedAnswer: answer,
+		Assignees:      []string{}, // 公开挑战，任何人可提交
 		Status:         types.ChallengeStatusPending,
 		CreatedHeight:  ctx.BlockHeight(),
 		Commits:        make(map[string]string),
@@ -91,7 +165,11 @@ func (k Keeper) GeneratePublicChallenge(ctx sdk.Context, epoch uint64) {
 	bz, _ := json.Marshal(challenge)
 	store.Set([]byte(fmt.Sprintf("challenge:%s", challenge.ID)), bz)
 
-	k.Logger(ctx).Info("生成公开挑战", "id", challenge.ID, "prompt", challenge.Prompt)
+	k.Logger(ctx).Info("生成公开挑战",
+		"id", challenge.ID,
+		"type", selectedType,
+		"prompt", prompt,
+		"answer", answer)
 }
 
 // GetActiveMiners 获取活跃矿工列表

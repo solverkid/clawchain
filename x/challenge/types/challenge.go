@@ -10,6 +10,9 @@ const (
 	ChallengeFormatConvert    ChallengeType = "format_convert"
 	ChallengeMath             ChallengeType = "math"
 	ChallengeLogic            ChallengeType = "logic"
+	ChallengeTextTransform    ChallengeType = "text_transform"  // 文本转换（大写等）
+	ChallengeJSONExtract      ChallengeType = "json_extract"    // JSON 提取
+	ChallengeHash             ChallengeType = "hash"            // 哈希计算
 )
 
 // ChallengeStatus 挑战状态
