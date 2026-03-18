@@ -23,6 +23,45 @@ type Miner struct {
 	ChallengesCompleted uint64      `json:"challenges_completed"`
 	ChallengesFailed    uint64      `json:"challenges_failed"`
 	LastActiveEpoch     uint64      `json:"last_active_epoch"`
+	RegistrationIndex   uint64      `json:"registration_index"`   // 全局注册序号（用于早鸟倍率）
+	ConsecutiveDays     uint64      `json:"consecutive_days"`     // 连续在线天数
+	LastCheckinEpoch    uint64      `json:"last_checkin_epoch"`   // 最后签到 epoch
+}
+
+// ──────────────────────────────────────────────
+// 早鸟奖励倍率
+// ──────────────────────────────────────────────
+
+// GetEarlyBirdMultiplier 根据注册序号返回早鸟倍率（百分比形式，300=3x）
+func GetEarlyBirdMultiplier(registrationIndex uint64) uint64 {
+	switch {
+	case registrationIndex <= 1000:
+		return 300 // 3x
+	case registrationIndex <= 5000:
+		return 200 // 2x
+	case registrationIndex <= 10000:
+		return 150 // 1.5x
+	default:
+		return 100 // 1x
+	}
+}
+
+// ──────────────────────────────────────────────
+// 连续在线签到奖励
+// ──────────────────────────────────────────────
+
+// GetStreakBonus 根据连续天数返回签到奖励百分比（110=+10%）
+func GetStreakBonus(consecutiveDays uint64) uint64 {
+	switch {
+	case consecutiveDays >= 90:
+		return 150 // +50%
+	case consecutiveDays >= 30:
+		return 125 // +25%
+	case consecutiveDays >= 7:
+		return 110 // +10%
+	default:
+		return 100 // no bonus
+	}
 }
 
 // UnstakeEntry 解质押队列条目

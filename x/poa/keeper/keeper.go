@@ -38,6 +38,21 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 // 矿工管理
 // ──────────────────────────────────────────────
 
+// GetAndIncrementMinerCount 获取并递增全局矿工注册计数
+func (k Keeper) GetAndIncrementMinerCount(ctx sdk.Context) uint64 {
+	store := ctx.KVStore(k.storeKey)
+	countKey := []byte("global_miner_count")
+	bz := store.Get(countKey)
+	var count uint64
+	if bz != nil {
+		json.Unmarshal(bz, &count)
+	}
+	count++
+	newBz, _ := json.Marshal(count)
+	store.Set(countKey, newBz)
+	return count
+}
+
 // RegisterMiner 注册新矿工
 func (k Keeper) RegisterMiner(ctx sdk.Context, address string) error {
 	store := ctx.KVStore(k.storeKey)
@@ -48,13 +63,18 @@ func (k Keeper) RegisterMiner(ctx sdk.Context, address string) error {
 		return types.ErrMinerAlreadyRegistered
 	}
 
+	regIndex := k.GetAndIncrementMinerCount(ctx)
+
 	miner := types.Miner{
-		Address:         address,
-		StakeAmount:     0,
-		Status:          types.MinerStatusInactive,
-		RegisteredAt:    ctx.BlockTime(),
-		ReputationScore: 500, // 初始声誉
-		TotalRewards:    0,
+		Address:           address,
+		StakeAmount:       0,
+		Status:            types.MinerStatusInactive,
+		RegisteredAt:      ctx.BlockTime(),
+		ReputationScore:   500, // 初始声誉
+		TotalRewards:      0,
+		RegistrationIndex: regIndex,
+		ConsecutiveDays:   0,
+		LastCheckinEpoch:  0,
 	}
 
 	bz, err := json.Marshal(miner)
@@ -63,7 +83,8 @@ func (k Keeper) RegisterMiner(ctx sdk.Context, address string) error {
 	}
 	store.Set(key, bz)
 
-	k.Logger(ctx).Info("矿工注册成功", "address", address)
+	k.Logger(ctx).Info("矿工注册成功", "address", address, "index", regIndex,
+		"early_bird_multiplier", types.GetEarlyBirdMultiplier(regIndex))
 	return nil
 }
 
@@ -182,7 +203,7 @@ func (k Keeper) GetActiveMiners(ctx sdk.Context) []types.Miner {
 // 奖励分发
 // ──────────────────────────────────────────────
 
-// DistributeEpochRewards 分发 epoch 奖励
+// DistributeEpochRewards 分发 epoch 奖励（含早鸟倍率、连续签到奖励）
 func (k Keeper) DistributeEpochRewards(ctx sdk.Context, epochNumber uint64, completedMiners []string) {
 	reward := types.CalculateEpochReward(epochNumber, k.params)
 	if reward == 0 || len(completedMiners) == 0 {
@@ -205,14 +226,30 @@ func (k Keeper) DistributeEpochRewards(ctx sdk.Context, epochNumber uint64, comp
 			continue
 		}
 
-		// 新矿工冷启动期奖励减半
-		minerEpochs := epochNumber - miner.LastActiveEpoch
-		_ = minerEpochs // TODO: 用注册时的 epoch 来判断
-		actualReward := perMiner
+		// 计算实际奖励 = 基础奖励 * 早鸟倍率 * 签到倍率 / 10000
+		earlyBird := types.GetEarlyBirdMultiplier(miner.RegistrationIndex)
+		streak := types.GetStreakBonus(miner.ConsecutiveDays)
+		actualReward := perMiner * earlyBird * streak / 10000
+
+		// 新矿工冷启动期（前100 epoch）奖励减半
+		if miner.ChallengesCompleted < 100 {
+			actualReward = actualReward / 2
+		}
+
+		// 更新连续签到
+		epochsPerDay := uint64(144) // ~24h / 10min per epoch
+		if miner.LastCheckinEpoch > 0 && epochNumber-miner.LastCheckinEpoch <= epochsPerDay {
+			if epochNumber-miner.LastCheckinEpoch >= epochsPerDay-10 { // roughly 1 day
+				miner.ConsecutiveDays++
+			}
+		} else if miner.LastCheckinEpoch > 0 {
+			miner.ConsecutiveDays = 0 // streak broken
+		}
 
 		miner.TotalRewards += actualReward
 		miner.ChallengesCompleted++
 		miner.LastActiveEpoch = epochNumber
+		miner.LastCheckinEpoch = epochNumber
 
 		bz, _ = json.Marshal(miner)
 		store.Set(key, bz)

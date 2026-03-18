@@ -30,17 +30,64 @@ const (
 
 // Challenge 挑战
 type Challenge struct {
-	ID            string          `json:"id"`
-	Epoch         uint64          `json:"epoch"`
-	Type          ChallengeType   `json:"type"`
-	Prompt        string          `json:"prompt"`
-	ExpectedAnswer string         `json:"expected_answer,omitempty"` // 精确匹配类有此字段
-	Assignees     []string        `json:"assignees"`
-	Status        ChallengeStatus `json:"status"`
-	CreatedHeight int64           `json:"created_height"`
-	Commits       map[string]string `json:"commits"`  // addr → hash
-	Reveals       map[string]string `json:"reveals"`   // addr → answer
-	Winner        string          `json:"winner,omitempty"`
+	ID             string            `json:"id"`
+	Epoch          uint64            `json:"epoch"`
+	Type           ChallengeType     `json:"type"`
+	Tier           TaskTier          `json:"tier"`                      // 任务难度等级 (1/2/3)
+	Prompt         string            `json:"prompt"`
+	ExpectedAnswer string            `json:"expected_answer,omitempty"` // 精确匹配类有此字段
+	Assignees      []string          `json:"assignees"`
+	Status         ChallengeStatus   `json:"status"`
+	CreatedHeight  int64             `json:"created_height"`
+	Commits        map[string]string `json:"commits"`                  // addr → hash
+	Reveals        map[string]string `json:"reveals"`                  // addr → answer
+	Winner         string            `json:"winner,omitempty"`
+	IsSpotCheck    bool              `json:"is_spot_check"`            // Spot Check 标记
+	KnownAnswer    string            `json:"known_answer,omitempty"`   // Spot Check 预设正确答案
+}
+
+// ──────────────────────────────────────────────
+// 任务难度分级
+// ──────────────────────────────────────────────
+
+// TaskTier 任务难度等级
+type TaskTier int
+
+const (
+	TierBasic    TaskTier = 1 // 基础：数学、逻辑 → 1x 奖励
+	TierMedium   TaskTier = 2 // 中级：情感分析、分类 → 2x 奖励
+	TierAdvanced TaskTier = 3 // 高级：摘要、翻译、实体抽取 → 3x 奖励
+)
+
+// GetTaskTier 返回挑战类型对应的难度等级
+func GetTaskTier(ctype ChallengeType) TaskTier {
+	switch ctype {
+	case ChallengeMath, ChallengeLogic, ChallengeHash, ChallengeTextTransform:
+		return TierBasic
+	case ChallengeSentiment, ChallengeClassification, ChallengeFormatConvert, ChallengeJSONExtract:
+		return TierMedium
+	case ChallengeTextSummary, ChallengeTranslation, ChallengeEntityExtraction:
+		return TierAdvanced
+	default:
+		return TierBasic
+	}
+}
+
+// GetTierMultiplier 返回难度等级的奖励倍率
+func GetTierMultiplier(tier TaskTier) uint64 {
+	return uint64(tier) // 1x, 2x, 3x
+}
+
+// MinReputationForTier 返回参与该难度所需的最低声誉分
+func MinReputationForTier(tier TaskTier) int32 {
+	switch tier {
+	case TierAdvanced:
+		return 800
+	case TierMedium:
+		return 600
+	default:
+		return 0
+	}
 }
 
 // ChallengeResult 挑战结果

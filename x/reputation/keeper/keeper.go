@@ -115,6 +115,50 @@ func (k Keeper) UpdateScore(ctx sdk.Context, addr string, delta int32, reason st
 	}
 }
 
+// UpdateStreak 更新矿工连续签到天数（每次完成挑战时调用）
+// blockTime 是当前区块的 Unix 秒时间戳
+func (k Keeper) UpdateStreak(ctx sdk.Context, addr string, blockTime int64) {
+	score, found := k.GetScore(ctx, addr)
+	if !found {
+		k.InitMiner(ctx, addr)
+		score, _ = k.GetScore(ctx, addr)
+	}
+
+	currentDay := blockTime / 86400 // Unix 天数
+
+	if score.LastActiveDay == 0 {
+		// 首次活跃
+		score.ConsecutiveDays = 1
+	} else if currentDay == score.LastActiveDay {
+		// 同一天，不更新
+		return
+	} else if currentDay == score.LastActiveDay+1 {
+		// 连续天
+		score.ConsecutiveDays++
+	} else {
+		// 中断，重置
+		score.ConsecutiveDays = 1
+	}
+	score.LastActiveDay = currentDay
+
+	k.SetScore(ctx, score)
+
+	k.Logger(ctx).Info("连续签到更新",
+		"address", addr,
+		"consecutive_days", score.ConsecutiveDays,
+		"streak_bonus", types.GetStreakBonus(score.ConsecutiveDays),
+	)
+}
+
+// GetStreakInfo 获取矿工连续签到信息
+func (k Keeper) GetStreakInfo(ctx sdk.Context, addr string) (consecutiveDays uint64, streakBonus uint64, found bool) {
+	score, f := k.GetScore(ctx, addr)
+	if !f {
+		return 0, 100, false
+	}
+	return score.ConsecutiveDays, types.GetStreakBonus(score.ConsecutiveDays), true
+}
+
 // GetAllScores 获取所有声誉
 func (k Keeper) GetAllScores(ctx sdk.Context) []types.ReputationScore {
 	store := ctx.KVStore(k.storeKey)

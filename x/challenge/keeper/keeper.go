@@ -18,10 +18,11 @@ import (
 
 // Keeper 挑战模块 keeper
 type Keeper struct {
-	cdc        codec.BinaryCodec
-	storeKey   storetypes.StoreKey
-	params     types.Params
-	bankKeeper BankKeeper // 新增：用于转账奖励
+	cdc              codec.BinaryCodec
+	storeKey         storetypes.StoreKey
+	params           types.Params
+	bankKeeper       BankKeeper       // 用于转账奖励
+	reputationKeeper ReputationKeeper // 用于声誉检查和更新
 }
 
 // BankKeeper 银行模块接口
@@ -29,6 +30,12 @@ type BankKeeper interface {
 	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
 	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
 	MintCoins(ctx context.Context, moduleName string, amounts sdk.Coins) error
+}
+
+// ReputationKeeper 声誉模块接口（用于 tier 检查和 spot check 惩罚/奖励）
+type ReputationKeeper interface {
+	GetMinerScore(ctx sdk.Context, addr string) (int32, bool)
+	UpdateScore(ctx sdk.Context, addr string, delta int32, reason string)
 }
 
 // NewKeeper 创建新 keeper
@@ -39,6 +46,16 @@ func NewKeeper(cdc codec.BinaryCodec, storeKey storetypes.StoreKey, bankKeeper B
 		params:     types.DefaultChallengeParams(),
 		bankKeeper: bankKeeper,
 	}
+}
+
+// SetReputationKeeper 设置声誉 keeper（避免循环依赖，在 app 层设置）
+func (k *Keeper) SetReputationKeeper(rk ReputationKeeper) {
+	k.reputationKeeper = rk
+}
+
+// StoreKey 返回存储 key（供测试使用）
+func (k Keeper) StoreKey() storetypes.StoreKey {
+	return k.storeKey
 }
 
 // Logger 日志
@@ -234,10 +251,23 @@ func (k Keeper) GeneratePublicChallenge(ctx sdk.Context, epoch uint64) {
 		answer = fmt.Sprintf("%d", a+b)
 	}
 
+	tier := types.GetTaskTier(selectedType)
+
+	// Spot Check: 10% 概率
+	isSpotCheck := rng.Intn(10) == 0
+	knownAnswer := ""
+	if isSpotCheck && answer != "" {
+		knownAnswer = answer
+	} else if isSpotCheck && answer == "" {
+		// 无固定答案的题目不适合做 spot check
+		isSpotCheck = false
+	}
+
 	challenge := types.Challenge{
 		ID:             fmt.Sprintf("ch-%d-0", epoch),
 		Epoch:          epoch,
 		Type:           selectedType,
+		Tier:           tier,
 		Prompt:         prompt,
 		ExpectedAnswer: answer,
 		Assignees:      []string{}, // 公开挑战，任何人可提交
@@ -245,6 +275,8 @@ func (k Keeper) GeneratePublicChallenge(ctx sdk.Context, epoch uint64) {
 		CreatedHeight:  ctx.BlockHeight(),
 		Commits:        make(map[string]string),
 		Reveals:        make(map[string]string),
+		IsSpotCheck:    isSpotCheck,
+		KnownAnswer:    knownAnswer,
 	}
 
 	store := ctx.KVStore(k.storeKey)
@@ -254,6 +286,8 @@ func (k Keeper) GeneratePublicChallenge(ctx sdk.Context, epoch uint64) {
 	k.Logger(ctx).Info("生成公开挑战",
 		"id", challenge.ID,
 		"type", selectedType,
+		"tier", tier,
+		"is_spot_check", isSpotCheck,
 		"prompt", prompt[:50]+"...",
 		"has_expected_answer", answer != "")
 }
@@ -315,10 +349,22 @@ func (k Keeper) GenerateChallenges(ctx sdk.Context, epoch uint64, activeMiners [
 		// 随机选择 K 个矿工
 		assignees := selectMiners(activeMiners, int(k.params.AssigneesPerChallenge), rng)
 
+		tier := types.GetTaskTier(cType)
+
+		// Spot Check: 10% 概率（仅对有预设答案的题目）
+		isSpotCheck := rng.Intn(10) == 0
+		knownAnswer := ""
+		if isSpotCheck && expected != "" {
+			knownAnswer = expected
+		} else if isSpotCheck && expected == "" {
+			isSpotCheck = false
+		}
+
 		challenge := types.Challenge{
 			ID:             fmt.Sprintf("ch-%d-%d", epoch, i),
 			Epoch:          epoch,
 			Type:           cType,
+			Tier:           tier,
 			Prompt:         prompt,
 			ExpectedAnswer: expected,
 			Assignees:      assignees,
@@ -326,6 +372,8 @@ func (k Keeper) GenerateChallenges(ctx sdk.Context, epoch uint64, activeMiners [
 			CreatedHeight:  ctx.BlockHeight(),
 			Commits:        make(map[string]string),
 			Reveals:        make(map[string]string),
+			IsSpotCheck:    isSpotCheck,
+			KnownAnswer:    knownAnswer,
 		}
 		challenges = append(challenges, challenge)
 	}
@@ -397,6 +445,60 @@ func (k Keeper) SubmitReveal(ctx sdk.Context, challengeID, minerAddr, answer, sa
 
 	ch.Reveals[minerAddr] = answer
 	ch.Status = types.ChallengeStatusReveal
+
+	bz, _ = json.Marshal(ch)
+	store.Set(key, bz)
+	return nil
+}
+
+// SubmitAnswerWithChecks 提交答案并检查 Tier 声誉门槛和 Spot Check
+func (k Keeper) SubmitAnswerWithChecks(ctx sdk.Context, challengeID, minerAddr, answer string) error {
+	store := ctx.KVStore(k.storeKey)
+	key := []byte(fmt.Sprintf("challenge:%s", challengeID))
+	bz := store.Get(key)
+	if bz == nil {
+		return types.ErrChallengeNotFound
+	}
+
+	var ch types.Challenge
+	json.Unmarshal(bz, &ch)
+
+	// 检查 Tier 声誉门槛
+	minRep := types.MinReputationForTier(ch.Tier)
+	if minRep > 0 && k.reputationKeeper != nil {
+		score, found := k.reputationKeeper.GetMinerScore(ctx, minerAddr)
+		if !found {
+			score = 500 // 默认初始分
+		}
+		if score < minRep {
+			return types.ErrInsufficientReputation
+		}
+	}
+
+	// 记录答案
+	if ch.Reveals == nil {
+		ch.Reveals = make(map[string]string)
+	}
+	ch.Reveals[minerAddr] = answer
+
+	// Spot Check 验证
+	if ch.IsSpotCheck && ch.KnownAnswer != "" && k.reputationKeeper != nil {
+		if answer != ch.KnownAnswer {
+			// 答错：声誉 -50
+			k.reputationKeeper.UpdateScore(ctx, minerAddr, -50, "spot_check_failed")
+			k.Logger(ctx).Warn("Spot Check 失败",
+				"challenge", challengeID,
+				"miner", minerAddr,
+			)
+		} else {
+			// 答对：声誉 +10
+			k.reputationKeeper.UpdateScore(ctx, minerAddr, 10, "spot_check_passed")
+			k.Logger(ctx).Info("Spot Check 通过",
+				"challenge", challengeID,
+				"miner", minerAddr,
+			)
+		}
+	}
 
 	bz, _ = json.Marshal(ch)
 	store.Set(key, bz)

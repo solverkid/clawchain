@@ -2,6 +2,7 @@
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
+
 LDFLAGS := -X github.com/cosmos/cosmos-sdk/version.Name=clawchain \
            -X github.com/cosmos/cosmos-sdk/version.AppName=clawchaind \
            -X github.com/cosmos/cosmos-sdk/version.Version=$(VERSION) \

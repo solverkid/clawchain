@@ -10,5 +10,7 @@ var (
 	ErrAlreadyRevealed     = errors.Register(ModuleName, 5, "already revealed")
 	ErrNotAssigned         = errors.Register(ModuleName, 6, "miner not assigned to this challenge")
 	ErrCommitHashMismatch  = errors.Register(ModuleName, 7, "reveal does not match commit hash")
-	ErrWindowClosed        = errors.Register(ModuleName, 8, "submission window closed")
+	ErrWindowClosed             = errors.Register(ModuleName, 8, "submission window closed")
+	ErrInsufficientReputation   = errors.Register(ModuleName, 9, "miner reputation too low for this tier")
+	ErrSpotCheckFailed          = errors.Register(ModuleName, 10, "spot check answer incorrect")
 )
