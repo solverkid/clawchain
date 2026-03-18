@@ -600,16 +600,20 @@ func selectMiners(miners []string, k int, rng *rand.Rand) []string {
 	return result
 }
 
-// GetBlockReward 获取当前区块高度的挑战奖励（带减半逻辑）
+// GetBlockReward 获取当前区块高度对应 epoch 的矿工池奖励（带减半逻辑）
+// 返回值单位: uclaw。每 epoch 总奖励 50 CLAW = 50,000,000 uclaw，其中矿工池 60% = 30,000,000 uclaw。
+// 此函数返回矿工池部分，按活跃矿工数分配给各矿工。
 func (k Keeper) GetBlockReward(height int64) int64 {
 	const (
-		initialReward = int64(1000)      // 初始奖励 1000 uclaw
-		halvingBlocks = int64(100000)    // 每 100,000 block 减半
-		minReward     = int64(10)        // 最低奖励 10 uclaw
+		epochBlocks       = int64(100)
+		initialMinerPool  = int64(30_000_000) // 30 CLAW in uclaw (60% of 50 CLAW epoch reward)
+		halvingEpochs     = int64(210_000)
+		minReward         = int64(1)          // 最低奖励 1 uclaw
 	)
 
-	halvings := height / halvingBlocks
-	reward := initialReward
+	epoch := height / epochBlocks
+	halvings := epoch / halvingEpochs
+	reward := initialMinerPool
 	for i := int64(0); i < halvings; i++ {
 		reward = reward / 2
 		if reward < minReward {

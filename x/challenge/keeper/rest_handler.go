@@ -122,15 +122,18 @@ func (h *RESTHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) {
 	var ch challengetypes.Challenge
 	json.Unmarshal(bz, &ch)
 	
-	// 检查挑战是否过期（创建后 50 block 内有效）
+	// 检查挑战是否过期（创建后 200 blocks 内有效 ≈ 2 epoch @6s = 20 分钟）
 	cms := h.storeGetter()
 	currentHeight := cms.LatestVersion()
-	if currentHeight-ch.CreatedHeight > 50 {
-		ch.Status = challengetypes.ChallengeStatusExpired
-		bz, _ := json.Marshal(ch)
-		store.Set(key, bz)
-		http.Error(w, "challenge expired", http.StatusGone)
-		return
+	if os.Getenv("CLAWCHAIN_DEV") != "1" {
+		// 生产模式才检查过期（测试模式跳过过期检查）
+		if currentHeight-ch.CreatedHeight > 200 {
+			ch.Status = challengetypes.ChallengeStatusExpired
+			bz, _ := json.Marshal(ch)
+			store.Set(key, bz)
+			http.Error(w, "challenge expired", http.StatusGone)
+			return
+		}
 	}
 
 	// 验证矿工是否被分配（公开挑战 Assignees 为空，任何人可参与）
@@ -323,7 +326,7 @@ func (h *RESTHandler) RegisterMiner(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"message": "miner registered successfully (note: minimum 10000 uclaw balance required for mining)",
+		"message": "miner registered successfully (note: minimum 100 CLAW = 100,000,000 uclaw stake required for active mining)",
 		"address": req.Address,
 	})
 }

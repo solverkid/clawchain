@@ -92,29 +92,29 @@ func TestGenerateChallengesNoMiners(t *testing.T) {
 func TestGetBlockReward(t *testing.T) {
 	k, _, _ := setupKeeper(t)
 
-	// Height 0: 1000 uclaw
+	// Epoch 0 (height 0): 30,000,000 uclaw (30 CLAW miner pool per epoch)
 	r := k.GetBlockReward(0)
-	require.Equal(t, int64(1000), r)
+	require.Equal(t, int64(30_000_000), r)
 
-	// Height 50000: still 1000
-	r = k.GetBlockReward(50000)
-	require.Equal(t, int64(1000), r)
+	// Height 5000 (epoch 50): still 30,000,000 (no halving yet)
+	r = k.GetBlockReward(5000)
+	require.Equal(t, int64(30_000_000), r)
 
-	// Height 100000: 500 (first halving)
-	r = k.GetBlockReward(100000)
-	require.Equal(t, int64(500), r)
+	// Height 21,000,000 (epoch 210,000): first halving → 15,000,000
+	r = k.GetBlockReward(21_000_000)
+	require.Equal(t, int64(15_000_000), r)
 
-	// Height 200000: 250 (second halving)
-	r = k.GetBlockReward(200000)
-	require.Equal(t, int64(250), r)
+	// Height 42,000,000 (epoch 420,000): second halving → 7,500,000
+	r = k.GetBlockReward(42_000_000)
+	require.Equal(t, int64(7_500_000), r)
 }
 
 func TestGetBlockRewardMinimum(t *testing.T) {
 	k, _, _ := setupKeeper(t)
 
-	// Very high height should not go below minimum
-	r := k.GetBlockReward(10_000_000)
-	require.GreaterOrEqual(t, r, int64(10))
+	// Very high height should not go below minimum (1 uclaw)
+	r := k.GetBlockReward(10_000_000_000)
+	require.GreaterOrEqual(t, r, int64(1))
 }
 
 func TestChallengeTypes(t *testing.T) {
