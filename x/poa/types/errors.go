@@ -23,4 +23,6 @@ var (
 	ErrMaxMinersPerIP = errors.Register(ModuleName, 9, "exceeded maximum miners per IP")
 	// ErrInvalidParams 参数验证错误
 	ErrInvalidParams = errors.Register(ModuleName, 10, "invalid params")
+	// ErrInvalidStake 无效的质押操作
+	ErrInvalidStake = errors.Register(ModuleName, 11, "invalid stake operation")
 )

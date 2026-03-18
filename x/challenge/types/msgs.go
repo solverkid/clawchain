@@ -12,7 +12,7 @@ const (
 // MsgSubmitCommit 提交挑战答案的承诺（哈希）
 type MsgSubmitCommit struct {
 	MinerAddress string `json:"miner_address"`
-	ChallengeID  string `json:"challenge_id"`
+	ChallengeId  string `json:"challenge_id"`
 	CommitHash   string `json:"commit_hash"` // SHA256(answer + salt)
 }
 
@@ -21,7 +21,7 @@ func (msg MsgSubmitCommit) ValidateBasic() error {
 	if err != nil {
 		return err
 	}
-	if msg.ChallengeID == "" || msg.CommitHash == "" {
+	if msg.ChallengeId == "" || msg.CommitHash == "" {
 		return ErrInvalidChallenge
 	}
 	return nil
@@ -35,7 +35,7 @@ func (msg MsgSubmitCommit) GetSigners() []sdk.AccAddress {
 // MsgSubmitReveal 揭示挑战答案
 type MsgSubmitReveal struct {
 	MinerAddress string `json:"miner_address"`
-	ChallengeID  string `json:"challenge_id"`
+	ChallengeId  string `json:"challenge_id"`
 	Answer       string `json:"answer"`
 	Salt         string `json:"salt"`
 }
@@ -45,7 +45,7 @@ func (msg MsgSubmitReveal) ValidateBasic() error {
 	if err != nil {
 		return err
 	}
-	if msg.ChallengeID == "" || msg.Answer == "" {
+	if msg.ChallengeId == "" || msg.Answer == "" {
 		return ErrInvalidChallenge
 	}
 	return nil
