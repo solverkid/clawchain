@@ -359,7 +359,18 @@ func BlockedModuleAccountAddrs() map[string]bool {
 
 // RegisterAPIRoutes 注册 API 路由
 func (app *ClawChainApp) RegisterAPIRoutes(apiSvr *api.Server, apiConfig serverconfig.APIConfig) {
-	// Register gRPC Gateway routes
+	// 创建 REST handler，传递 store getter
+	restHandler := challengekeeper.NewRESTHandler(
+		&app.ChallengeKeeper,
+		&app.BankKeeper,
+		func() storetypes.CommitMultiStore {
+			return app.CommitMultiStore()
+		},
+	)
+	
+	// 注册自定义 REST 路由
+	mux := apiSvr.Router
+	restHandler.RegisterRoutes(mux)
 }
 
 // RegisterTxService 注册 tx 服务

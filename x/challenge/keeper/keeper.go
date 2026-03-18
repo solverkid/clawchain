@@ -48,6 +48,75 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) *types.GenesisState {
 	}
 }
 
+// GeneratePublicChallenge 生成一个公开挑战（任何矿工可参与）
+func (k Keeper) GeneratePublicChallenge(ctx sdk.Context, epoch uint64) {
+	blockHash := ctx.HeaderHash()
+	seed := int64(epoch)
+	if len(blockHash) > 0 {
+		for i := 0; i < 8 && i < len(blockHash); i++ {
+			seed = seed<<8 | int64(blockHash[i])
+		}
+	}
+	rng := rand.New(rand.NewSource(seed))
+
+	// 生成简单数学题
+	a := rng.Intn(900) + 100
+	b := rng.Intn(900) + 100
+	ops := []string{"+", "-", "*"}
+	op := ops[rng.Intn(len(ops))]
+	var answer int
+	switch op {
+	case "+":
+		answer = a + b
+	case "-":
+		answer = a - b
+	case "*":
+		answer = a * b
+	}
+
+	challenge := types.Challenge{
+		ID:             fmt.Sprintf("ch-%d-0", epoch),
+		Epoch:          epoch,
+		Type:           types.ChallengeMath,
+		Prompt:         fmt.Sprintf("计算 %d %s %d 的结果", a, op, b),
+		ExpectedAnswer: fmt.Sprintf("%d", answer),
+		Assignees:      []string{},  // 公开挑战，任何人可提交
+		Status:         types.ChallengeStatusPending,
+		CreatedHeight:  ctx.BlockHeight(),
+		Commits:        make(map[string]string),
+		Reveals:        make(map[string]string),
+	}
+
+	store := ctx.KVStore(k.storeKey)
+	bz, _ := json.Marshal(challenge)
+	store.Set([]byte(fmt.Sprintf("challenge:%s", challenge.ID)), bz)
+
+	k.Logger(ctx).Info("生成公开挑战", "id", challenge.ID, "prompt", challenge.Prompt)
+}
+
+// GetActiveMiners 获取活跃矿工列表
+func (k Keeper) GetActiveMiners(ctx sdk.Context) []string {
+	store := ctx.KVStore(k.storeKey)
+	var miners []string
+	
+	iter := storetypes.KVStorePrefixIterator(store, []byte("miner:"))
+	defer iter.Close()
+	
+	for ; iter.Valid(); iter.Next() {
+		var minerData map[string]interface{}
+		if err := json.Unmarshal(iter.Value(), &minerData); err != nil {
+			continue
+		}
+		if status, ok := minerData["status"].(string); ok && status == "active" {
+			if addr, ok := minerData["address"].(string); ok {
+				miners = append(miners, addr)
+			}
+		}
+	}
+	
+	return miners
+}
+
 // GenerateChallenges 生成 epoch 挑战
 func (k Keeper) GenerateChallenges(ctx sdk.Context, epoch uint64, activeMiners []string) []types.Challenge {
 	if len(activeMiners) == 0 {

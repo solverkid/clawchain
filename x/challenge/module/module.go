@@ -1,6 +1,7 @@
 package module
 
 import (
+	"context"
 	"encoding/json"
 
 	gwruntime "github.com/grpc-ecosystem/grpc-gateway/runtime"
@@ -74,6 +75,16 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, _ codec.JSONCodec) json.RawMe
 }
 
 func (am AppModule) ConsensusVersion() uint64 { return 1 }
+
+func (am AppModule) BeginBlock(goCtx context.Context) error {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	// 每 10 个区块生成一次公开挑战（任何矿工都可以参与）
+	if ctx.BlockHeight()%10 == 0 && ctx.BlockHeight() > 0 {
+		epoch := uint64(ctx.BlockHeight() / 10)
+		am.keeper.GeneratePublicChallenge(ctx, epoch)
+	}
+	return nil
+}
 
 func (am AppModule) IsOnePerModuleType() {}
 func (am AppModule) IsAppModule()        {}
