@@ -28,3 +28,4 @@ coverage.txt
 
 # Logs
 *.log
+data/
