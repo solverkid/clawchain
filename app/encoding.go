@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/codec"
+	"github.com/cosmos/cosmos-sdk/codec/address"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/std"
 	"github.com/cosmos/cosmos-sdk/types/module"
@@ -11,6 +12,8 @@ import (
 	distr "github.com/cosmos/cosmos-sdk/x/distribution"
 	"github.com/cosmos/cosmos-sdk/x/mint"
 	"github.com/cosmos/cosmos-sdk/x/staking"
+	txsigning "cosmossdk.io/x/tx/signing"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 type EncodingConfig struct {
@@ -29,7 +32,19 @@ var extraBasics = module.NewBasicManager(
 
 func MakeEncodingConfig() EncodingConfig {
 	amino := codec.NewLegacyAmino()
-	interfaceRegistry := codectypes.NewInterfaceRegistry()
+
+	// 创建带有 address codec 的 InterfaceRegistry（修复 gentx address codec 问题）
+	interfaceRegistry, err := codectypes.NewInterfaceRegistryWithOptions(codectypes.InterfaceRegistryOptions{
+		ProtoFiles: protoregistry.GlobalFiles,
+		SigningOptions: txsigning.Options{
+			AddressCodec:          address.NewBech32Codec(AccountAddressPrefix),
+			ValidatorAddressCodec: address.NewBech32Codec(AccountAddressPrefix + "valoper"),
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
 	cdc := codec.NewProtoCodec(interfaceRegistry)
 	txCfg := tx.NewTxConfig(cdc, tx.DefaultSignModes)
 

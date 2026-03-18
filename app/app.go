@@ -118,6 +118,7 @@ func NewClawChainApp(
 	traceStore io.Writer,
 	loadLatest bool,
 	appOpts servertypes.AppOptions,
+	baseAppOptions ...func(*baseapp.BaseApp),
 ) *ClawChainApp {
 	encodingConfig := MakeEncodingConfig()
 	appCodec := encodingConfig.Codec
@@ -125,7 +126,7 @@ func NewClawChainApp(
 	interfaceRegistry := encodingConfig.InterfaceRegistry
 	txConfig := encodingConfig.TxConfig
 
-	bApp := baseapp.NewBaseApp(AppName, logger, db, txConfig.TxDecoder())
+	bApp := baseapp.NewBaseApp(AppName, logger, db, txConfig.TxDecoder(), baseAppOptions...)
 	bApp.SetCommitMultiStoreTracer(traceStore)
 	bApp.SetVersion("0.1.0")
 	bApp.SetInterfaceRegistry(interfaceRegistry)
@@ -183,6 +184,8 @@ func NewClawChainApp(
 		authtypes.NewModuleAddress("gov").String(),
 		runtime.EventService{},
 	)
+	// 关键：设置 consensus params store，否则 replay 时报错
+	bApp.SetParamStore(app.ConsensusKeeper.ParamsStore)
 
 	app.StakingKeeper = stakingkeeper.NewKeeper(
 		appCodec,
@@ -327,8 +330,7 @@ func (app *ClawChainApp) InitChainer(ctx sdk.Context, req *abci.RequestInitChain
 	if err := json.Unmarshal(req.AppStateBytes, &genesisState); err != nil {
 		return nil, err
 	}
-	_, err := app.ModuleManager.InitGenesis(ctx, app.appCodec, genesisState)
-	return &abci.ResponseInitChain{}, err
+	return app.ModuleManager.InitGenesis(ctx, app.appCodec, genesisState)
 }
 
 // BeginBlocker 区块开始处理

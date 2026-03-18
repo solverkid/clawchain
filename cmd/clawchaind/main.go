@@ -1,16 +1,14 @@
 package main
 
 import (
-	"fmt"
-	"io"
 	"os"
 
-	dbm "github.com/cosmos/cosmos-db"
-	"github.com/spf13/cobra"
-
 	"cosmossdk.io/log"
+	dbm "github.com/cosmos/cosmos-db"
+	"io"
 
 	cmtcfg "github.com/cometbft/cometbft/config"
+	"github.com/spf13/cobra"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/config"
@@ -19,7 +17,7 @@ import (
 	serverconfig "github.com/cosmos/cosmos-sdk/server/config"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
-	"github.com/cosmos/cosmos-sdk/x/auth/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	genutilcli "github.com/cosmos/cosmos-sdk/x/genutil/client/cli"
 
 	"github.com/clawchain/clawchain/app"
@@ -27,15 +25,12 @@ import (
 
 func main() {
 	app.SetConfig()
-
 	rootCmd := NewRootCmd()
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-// NewRootCmd 创建根命令
 func NewRootCmd() *cobra.Command {
 	encodingConfig := app.MakeEncodingConfig()
 
@@ -45,19 +40,13 @@ func NewRootCmd() *cobra.Command {
 		WithTxConfig(encodingConfig.TxConfig).
 		WithLegacyAmino(encodingConfig.Amino).
 		WithInput(os.Stdin).
-		WithAccountRetriever(types.AccountRetriever{}).
+		WithAccountRetriever(authtypes.AccountRetriever{}).
 		WithHomeDir(app.DefaultNodeHome).
 		WithViper("")
 
 	rootCmd := &cobra.Command{
 		Use:   "clawchaind",
 		Short: "ClawChain - Proof of Availability AI Agent Blockchain",
-		Long: `ClawChain daemon — A Cosmos SDK blockchain for AI Agent mining
-via Proof of Availability consensus.
-
-Chain ID: clawchain-testnet-1
-Token: $CLAW (uclaw)
-Bech32: claw`,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SetOut(cmd.OutOrStdout())
 			cmd.SetErr(cmd.ErrOrStderr())
@@ -87,110 +76,75 @@ Bech32: claw`,
 	return rootCmd
 }
 
-// initRootCmd 初始化根命令的所有子命令
-func initRootCmd(
-	rootCmd *cobra.Command,
-	encodingConfig app.EncodingConfig,
-	basicManager module.BasicManager,
-) {
-	rootCmd.AddCommand(
-		genutilcli.InitCmd(app.AllModuleBasics(), app.DefaultNodeHome),
-		genutilcli.Commands(encodingConfig.TxConfig, app.AllModuleBasics(), app.DefaultNodeHome),
-		keys.Commands(),
-	)
-
-	server.AddCommands(rootCmd, app.DefaultNodeHome, newApp, appExport, addModuleInitFlags)
-
-	// add query and tx commands
-	queryCmd := &cobra.Command{
-		Use:                        "query",
-		Aliases:                    []string{"q"},
-		Short:                      "Querying subcommands",
-		DisableFlagParsing:         false,
-		SuggestionsMinimumDistance: 2,
-		RunE:                       client.ValidateCmd,
-	}
-
-	txCmd := &cobra.Command{
-		Use:                        "tx",
-		Short:                      "Transactions subcommands",
-		DisableFlagParsing:         false,
-		SuggestionsMinimumDistance: 2,
-		RunE:                       client.ValidateCmd,
-	}
-
-	// ModuleBasics 不包含 staking/distr/mint（它们需要 codec），所以这里安全
-	basicManager.AddQueryCommands(queryCmd)
-	basicManager.AddTxCommands(txCmd)
-
-	rootCmd.AddCommand(queryCmd, txCmd)
+// initCometBFTConfig returns default CometBFT config
+func initCometBFTConfig() *cmtcfg.Config {
+	cfg := cmtcfg.DefaultConfig()
+	return cfg
 }
 
-// newApp 创建新的应用实例
-func newApp(
-	logger log.Logger,
-	db dbm.DB,
-	traceStore io.Writer,
-	appOpts servertypes.AppOptions,
-) servertypes.Application {
-	return app.NewClawChainApp(
-		logger,
-		db,
-		traceStore,
-		true,
-		appOpts,
-	)
-}
-
-// appExport 导出应用状态
-func appExport(
-	logger log.Logger,
-	db dbm.DB,
-	traceStore io.Writer,
-	height int64,
-	forZeroHeight bool,
-	jailAllowedAddrs []string,
-	appOpts servertypes.AppOptions,
-	modulesToExport []string,
-) (servertypes.ExportedApp, error) {
-	var clawApp *app.ClawChainApp
-	if height != -1 {
-		clawApp = app.NewClawChainApp(logger, db, traceStore, false, appOpts)
-		if err := clawApp.LoadHeight(height); err != nil {
-			return servertypes.ExportedApp{}, err
-		}
-	} else {
-		clawApp = app.NewClawChainApp(logger, db, traceStore, true, appOpts)
-	}
-
-	return clawApp.ExportAppStateAndValidators(forZeroHeight, jailAllowedAddrs, modulesToExport)
-}
-
-// addModuleInitFlags 添加模块初始化标志
-func addModuleInitFlags(startCmd *cobra.Command) {
-	// Add any module-specific init flags here if needed
-}
-
-// initAppConfig 初始化应用配置
+// initAppConfig returns custom app config template and config.
+// Key: must return a struct with `mapstructure:",squash"` embedding
+// so that viper can properly unmarshal all fields.
 func initAppConfig() (string, interface{}) {
 	type CustomAppConfig struct {
-		serverconfig.Config
+		serverconfig.Config `mapstructure:",squash"`
 	}
 
 	srvCfg := serverconfig.DefaultConfig()
-	// 设置默认最小 gas 价格
 	srvCfg.MinGasPrices = "0uclaw"
 
 	customAppConfig := CustomAppConfig{
 		Config: *srvCfg,
 	}
 
-	customAppTemplate := serverconfig.DefaultConfigTemplate
-
-	return customAppTemplate, customAppConfig
+	return serverconfig.DefaultConfigTemplate, customAppConfig
 }
 
-// initCometBFTConfig 初始化 CometBFT 配置
-func initCometBFTConfig() *cmtcfg.Config {
-	return cmtcfg.DefaultConfig()
+func initRootCmd(rootCmd *cobra.Command, encodingConfig app.EncodingConfig, basicManager module.BasicManager) {
+	rootCmd.AddCommand(
+		genutilcli.InitCmd(app.AllModuleBasics(), app.DefaultNodeHome),
+		genutilcli.Commands(encodingConfig.TxConfig, app.AllModuleBasics(), app.DefaultNodeHome),
+		keys.Commands(),
+	)
+
+	// Use AddCommands (which internally calls StartCmd)
+	server.AddCommands(rootCmd, app.DefaultNodeHome, newApp, appExport, addModuleInitFlags)
+
+	// query/tx subcommands
+	queryCmd := &cobra.Command{
+		Use:     "query",
+		Aliases: []string{"q"},
+		Short:   "Querying subcommands",
+		RunE:    client.ValidateCmd,
+	}
+	txCmd := &cobra.Command{
+		Use:   "tx",
+		Short: "Transactions subcommands",
+		RunE:  client.ValidateCmd,
+	}
+	rootCmd.AddCommand(queryCmd, txCmd)
+}
+
+func newApp(logger log.Logger, db dbm.DB, traceStore io.Writer, appOpts servertypes.AppOptions) servertypes.Application {
+	// Key fix: use DefaultBaseappOptions which handles min gas prices, pruning, etc.
+	baseappOptions := server.DefaultBaseappOptions(appOpts)
+	return app.NewClawChainApp(logger, db, traceStore, true, appOpts, baseappOptions...)
+}
+
+func appExport(
+	logger log.Logger, db dbm.DB, traceStore io.Writer,
+	height int64, forZeroHeight bool, jailAllowedAddrs []string,
+	appOpts servertypes.AppOptions, modulesToExport []string,
+) (servertypes.ExportedApp, error) {
+	clawApp := app.NewClawChainApp(logger, db, traceStore, height == -1, appOpts)
+	if height != -1 {
+		if err := clawApp.LoadHeight(height); err != nil {
+			return servertypes.ExportedApp{}, err
+		}
+	}
+	return clawApp.ExportAppStateAndValidators(forZeroHeight, jailAllowedAddrs, modulesToExport)
+}
+
+func addModuleInitFlags(startCmd *cobra.Command) {
+	// Add module-specific init flags here if needed
 }
