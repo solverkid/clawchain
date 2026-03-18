@@ -1,161 +1,154 @@
 # ClawChain
 
-ClawChain is a Cosmos SDK blockchain implementing **Proof of Availability (PoA)** consensus for AI Agent mining.
+> **Proof of Availability blockchain for AI Agent mining**
+
+ClawChain is a Cosmos SDK-based blockchain implementing Proof of Availability (PoA) consensus, where AI agents compete to solve computational challenges and earn rewards.
 
 🌐 **[Official Website](https://0xverybigorange.github.io/clawchain/)**
 
-## Project Info
+---
 
-- **Chain ID**: `clawchain-testnet-1`
-- **Binary**: `clawchaind`
-- **Token**: `$CLAW` (denomination: `uclaw`, 1 CLAW = 1,000,000 uclaw)
-- **Bech32 Prefix**: `claw`
-- **Cosmos SDK Version**: v0.50.x
-- **Go Version**: 1.22+
-
-## Architecture
-
-This is a minimal skeleton implementing three custom modules:
-
-### Custom Modules
-
-1. **x/poa** - Proof of Availability consensus module
-2. **x/challenge** - Challenge Engine for distributing and verifying AI tasks
-3. **x/reputation** - Reputation scoring system for miners
-
-Each module currently contains only the basic structure:
-- `types/` - Type definitions (keys, genesis)
-- `keeper/` - State management keeper
-- `module/` - Module implementation (AppModule interface)
-
-## Directory Structure
+## 📁 Project Structure
 
 ```
-chain/
-├── app/                    # Application-level code
-│   ├── app.go             # Main app struct and initialization
-│   ├── config.go          # Chain configuration (denom, prefix, etc.)
-│   └── encoding.go        # Codec configuration
-├── cmd/
-│   └── clawchaind/        # Binary entry point
-│       └── main.go        # CLI root command
-├── x/                     # Custom modules
-│   ├── poa/
-│   ├── challenge/
-│   └── reputation/
-├── proto/                 # Protobuf definitions (empty skeleton)
-├── scripts/               # Utility scripts
-├── config/                # Configuration files
-├── go.mod
-├── go.sum
-└── README.md
+clawchain/
+├── chain/          # Blockchain core (Cosmos SDK)
+│   ├── x/poa/      # Proof of Availability consensus module
+│   ├── x/challenge/# Challenge Engine for AI tasks
+│   └── x/reputation/# Reputation scoring system
+├── miner/          # Mining client (Go)
+│   └── client/     # Chain API integration
+├── website/        # Official landing page (Next.js)
+└── docs/           # Documentation & whitepaper
 ```
 
-## Quick Start (5 Steps)
+---
+
+## 🚀 Quick Start
+
+### Option 1: Run Testnet + Mine (Full Stack)
 
 ```bash
-# 1. Build the chain
-cd chain
+# 1. Clone repo
+git clone https://github.com/0xVeryBigOrange/clawchain.git
+cd clawchain
+
+# 2. Build chain
 go mod tidy
 go build -o build/clawchaind ./cmd/clawchaind
 
-# 2. Initialize testnet
+# 3. Initialize testnet
 ./build/clawchaind init my-node --chain-id clawchain-testnet-1
 
-# 3. Add a test account
-./build/clawchaind keys add alice
-
 # 4. Add genesis account
+./build/clawchaind keys add alice
 ./build/clawchaind genesis add-genesis-account alice 1000000000uclaw
 
-# 5. Start the node
+# 5. Start chain
 ./build/clawchaind start
+
+# 6. (In new terminal) Start miner
+cd miner
+go build -o clawminer ./cmd/clawminer
+./clawminer start --config config.toml
 ```
 
-For mining, see [../miner/README.md](../miner/README.md)
+### Option 2: Component-Specific Setup
 
-## Building
+Choose your path:
 
-```bash
-# Tidy dependencies
-go mod tidy
+- **[Blockchain Development](./chain/README.md)** - Build and run ClawChain node
+- **[Mining Client](./miner/README.md)** - Setup mining agent
+- **[Website Development](./website/README.md)** - Contribute to landing page
 
-# Build the binary
-go build -o build/clawchaind ./cmd/clawchaind
+---
 
-# Run
-./build/clawchaind version
-```
+## 🎯 Core Features
 
-## Next Steps (Phase 1 Implementation)
+- **Proof of Availability (PoA)** - Novel consensus mechanism for AI agent participation
+- **Challenge Engine** - Dynamic task distribution system (math, text, logic, hash, JSON)
+- **Reputation System** - Merit-based scoring for miners
+- **Cosmos SDK v0.50** - Built on battle-tested blockchain framework
+- **REST & gRPC APIs** - Developer-friendly interfaces
+- **Multi-Miner Competition** - First-correct-answer wins reward
 
-This is a **skeleton only**. To make it a functional blockchain, implement:
+---
 
-### 1. Module Logic
-- [ ] PoA consensus integration with CometBFT
-- [ ] Challenge generation and distribution system
-- [ ] Reputation scoring algorithms
-- [ ] Reward distribution logic
+## 📚 Documentation
 
-### 2. Protobuf Definitions
-- [ ] Define message types in `proto/clawchain/*/v1/*.proto`
-- [ ] Generate Go code with `buf` or `protoc`
+| Resource | Description |
+|----------|-------------|
+| [WHITEPAPER.md](./WHITEPAPER.md) | System design and consensus mechanism |
+| [Chain README](./chain/README.md) | Blockchain development guide |
+| [Miner README](./miner/README.md) | Mining client setup |
+| [Official Site](https://0xverybigorange.github.io/clawchain/) | Project overview |
 
-### 3. State Management
-- [ ] Implement keeper methods for each module
-- [ ] Add state queries (gRPC/REST)
-- [ ] Add transactions (Msg handlers)
+---
 
-### 4. Genesis Configuration
-- [ ] Define initial parameters
-- [ ] Set up validator set
-- [ ] Configure token distribution
+## 🛠️ Tech Stack
 
-### 5. Testing
-- [ ] Unit tests for keepers
-- [ ] Integration tests
-- [ ] Local testnet setup
+- **Blockchain**: Cosmos SDK v0.50 + CometBFT
+- **Language**: Go 1.22+
+- **Frontend**: Next.js 14 + TypeScript + TailwindCSS
+- **Miner**: Go (local solver + LLM fallback)
 
-### 6. Node Operations
-- [ ] Init command
-- [ ] Start command
-- [ ] Key management
-- [ ] Genesis accounts
+---
 
-## API Documentation
+## 🔗 Links
 
-Once the chain is running, access:
-- **REST API**: `http://localhost:1317`
-- **RPC**: `http://localhost:26657`
-- **gRPC**: `localhost:9090`
+- **Website**: https://0xverybigorange.github.io/clawchain/
+- **GitHub**: https://github.com/0xVeryBigOrange/clawchain
+- **Chain ID**: `clawchain-testnet-1`
+- **Token**: `$CLAW` (denomination: `uclaw`, 1 CLAW = 1,000,000 uclaw)
 
-## Architecture Diagram
+---
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      ClawChain Network                       │
-├─────────────────────────────────────────────────────────────┤
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
-│  │ x/poa      │  │ x/challenge│  │ x/reputation│            │
-│  │ Consensus  │  │ Engine     │  │ Scoring     │            │
-│  └────────────┘  └────────────┘  └────────────┘            │
-├─────────────────────────────────────────────────────────────┤
-│              Cosmos SDK v0.50 + CometBFT                     │
-└─────────────────────────────────────────────────────────────┘
-         ▲                                          ▲
-         │                                          │
-    ┌────┴────┐                              ┌──────┴──────┐
-    │  Miner  │                              │   Miner     │
-    │  Agent  │                              │   Agent     │
-    └─────────┘                              └─────────────┘
-```
+## 📝 Current Status
 
-## Reference
+**Phase 5**: Multi-Miner + Extended Challenges ✅
+- Public challenge generation (every 10 blocks)
+- Multiple challenge types (math, text, logic, JSON, hash)
+- Multi-miner competition support
+- REST API for mining operations
 
-- Full system design: `../docs/WHITEPAPER.md`
-- Official Website: https://0xverybigorange.github.io/clawchain/
-- Miner Setup: `../miner/README.md`
+**Next**: Phase 6 - Token Economy
+- On-chain reward distribution
+- Staking mechanism
+- Reputation-based mining
 
-## License
+---
+
+## 🤝 Contributing
+
+See individual component READMEs for development setup.
+
+---
+
+## 📄 License
 
 TBD
+
+---
+
+**Quick Commands Cheatsheet:**
+
+```bash
+# Chain operations
+./build/clawchaind init <node-name> --chain-id clawchain-testnet-1
+./build/clawchaind keys add <key-name>
+./build/clawchaind start
+
+# Development
+go build -o build/clawchaind ./cmd/clawchaind
+cd miner && go build -o clawminer ./cmd/clawminer
+
+# Query chain
+curl http://localhost:1317/cosmos/base/tendermint/v1beta1/node_info
+curl http://localhost:1317/clawchain/challenges/pending
+curl http://localhost:1317/clawchain/miner/{address}
+
+# Submit challenge answer
+curl -X POST http://localhost:1317/clawchain/challenge/submit \
+  -H "Content-Type: application/json" \
+  -d '{"challenge_id":"ch-10-0","miner_address":"claw1...","answer":"1245"}'
+```
