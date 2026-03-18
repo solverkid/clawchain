@@ -1,15 +1,23 @@
 .PHONY: build install clean test lint proto-gen
 
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
+COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
+LDFLAGS := -X github.com/cosmos/cosmos-sdk/version.Name=clawchain \
+           -X github.com/cosmos/cosmos-sdk/version.AppName=clawchaind \
+           -X github.com/cosmos/cosmos-sdk/version.Version=$(VERSION) \
+           -X github.com/cosmos/cosmos-sdk/version.Commit=$(COMMIT) \
+           -X github.com/cosmos/cosmos-sdk/version.BuildTags=netgo
+
 # Build the clawchaind binary
 build:
-	@echo "Building clawchaind..."
-	@go build -o build/clawchaind ./cmd/clawchaind
+	@echo "Building clawchaind $(VERSION)..."
+	@go build -ldflags '$(LDFLAGS)' -o build/clawchaind ./cmd/clawchaind
 	@echo "Built: build/clawchaind"
 
 # Install the binary to $GOPATH/bin
 install:
-	@echo "Installing clawchaind..."
-	@go install ./cmd/clawchaind
+	@echo "Installing clawchaind $(VERSION)..."
+	@go install -ldflags '$(LDFLAGS)' ./cmd/clawchaind
 
 # Clean build artifacts
 clean:
