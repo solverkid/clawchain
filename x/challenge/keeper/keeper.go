@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,17 +18,26 @@ import (
 
 // Keeper 挑战模块 keeper
 type Keeper struct {
-	cdc      codec.BinaryCodec
-	storeKey storetypes.StoreKey
-	params   types.Params
+	cdc        codec.BinaryCodec
+	storeKey   storetypes.StoreKey
+	params     types.Params
+	bankKeeper BankKeeper // 新增：用于转账奖励
+}
+
+// BankKeeper 银行模块接口
+type BankKeeper interface {
+	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
+	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
+	MintCoins(ctx context.Context, moduleName string, amounts sdk.Coins) error
 }
 
 // NewKeeper 创建新 keeper
-func NewKeeper(cdc codec.BinaryCodec, storeKey storetypes.StoreKey) Keeper {
+func NewKeeper(cdc codec.BinaryCodec, storeKey storetypes.StoreKey, bankKeeper BankKeeper) Keeper {
 	return Keeper{
-		cdc:      cdc,
-		storeKey: storeKey,
-		params:   types.DefaultChallengeParams(),
+		cdc:        cdc,
+		storeKey:   storeKey,
+		params:     types.DefaultChallengeParams(),
+		bankKeeper: bankKeeper,
 	}
 }
 
@@ -39,6 +49,15 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 // InitGenesis 初始化创世
 func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) {
 	k.params = gs.Params
+	
+	// Mint 10亿 uclaw 到 challenge 模块账户作为挖矿奖励池
+	rewardPool := sdk.NewCoins(sdk.NewInt64Coin("uclaw", 1_000_000_000))
+	if err := k.bankKeeper.MintCoins(ctx, types.ModuleName, rewardPool); err != nil {
+		// InitGenesis 阶段如果 mint 失败，记录日志但不 panic（模块账户可能还没注册完）
+		k.Logger(ctx).Error("初始化奖励池失败", "error", err)
+	} else {
+		k.Logger(ctx).Info("挖矿奖励池初始化完成", "amount", rewardPool.String())
+	}
 }
 
 // ExportGenesis 导出创世
@@ -410,6 +429,127 @@ func selectMiners(miners []string, k int, rng *rand.Rand) []string {
 		result[i] = miners[perm[i]]
 	}
 	return result
+}
+
+// GetBlockReward 获取当前区块高度的挑战奖励（带减半逻辑）
+func (k Keeper) GetBlockReward(height int64) int64 {
+	const (
+		initialReward = int64(1000)      // 初始奖励 1000 uclaw
+		halvingBlocks = int64(100000)    // 每 100,000 block 减半
+		minReward     = int64(10)        // 最低奖励 10 uclaw
+	)
+
+	halvings := height / halvingBlocks
+	reward := initialReward
+	for i := int64(0); i < halvings; i++ {
+		reward = reward / 2
+		if reward < minReward {
+			reward = minReward
+			break
+		}
+	}
+	return reward
+}
+
+// PendingReward 待结算的奖励记录
+type PendingReward struct {
+	ChallengeID string `json:"challenge_id"`
+	MinerAddr   string `json:"miner_addr"`
+	Amount      int64  `json:"amount"`
+	Height      int64  `json:"height"`
+}
+
+// AddPendingReward 添加待结算奖励
+func (k Keeper) AddPendingReward(ctx sdk.Context, challengeID, minerAddr string, amount int64) {
+	store := ctx.KVStore(k.storeKey)
+	key := []byte(fmt.Sprintf("pending_reward:%d:%s:%s", ctx.BlockHeight(), challengeID, minerAddr))
+	
+	pr := PendingReward{
+		ChallengeID: challengeID,
+		MinerAddr:   minerAddr,
+		Amount:      amount,
+		Height:      ctx.BlockHeight(),
+	}
+	
+	bz, _ := json.Marshal(pr)
+	store.Set(key, bz)
+}
+
+// ProcessPendingRewards 处理所有待结算奖励（在 EndBlock 调用）
+func (k Keeper) ProcessPendingRewards(ctx sdk.Context) error {
+	store := ctx.KVStore(k.storeKey)
+	
+	// 扫描所有待结算奖励
+	iter := storetypes.KVStorePrefixIterator(store, []byte("pending_reward:"))
+	defer iter.Close()
+	
+	for ; iter.Valid(); iter.Next() {
+		var pr PendingReward
+		if err := json.Unmarshal(iter.Value(), &pr); err != nil {
+			k.Logger(ctx).Error("解析待结算奖励失败", "error", err)
+			continue
+		}
+		
+		// 转账
+		recipientAddr, err := sdk.AccAddressFromBech32(pr.MinerAddr)
+		if err != nil {
+			k.Logger(ctx).Error("矿工地址无效", "addr", pr.MinerAddr, "error", err)
+			store.Delete(iter.Key())
+			continue
+		}
+		
+		coins := sdk.NewCoins(sdk.NewInt64Coin("uclaw", pr.Amount))
+		if err := k.bankKeeper.SendCoinsFromModuleToAccount(
+			ctx,
+			types.ModuleName,
+			recipientAddr,
+			coins,
+		); err != nil {
+			k.Logger(ctx).Error("奖励转账失败",
+				"challenge", pr.ChallengeID,
+				"miner", pr.MinerAddr,
+				"amount", pr.Amount,
+				"error", err,
+			)
+			// 转账失败不删除，下次重试
+			continue
+		}
+		
+		k.Logger(ctx).Info("奖励转账成功",
+			"challenge", pr.ChallengeID,
+			"miner", pr.MinerAddr,
+			"amount", pr.Amount,
+		)
+		
+		// 更新矿工统计信息
+		minerKey := []byte(fmt.Sprintf("miner:%s", pr.MinerAddr))
+		minerBz := store.Get(minerKey)
+		if minerBz != nil {
+			var minerData map[string]interface{}
+			if err := json.Unmarshal(minerBz, &minerData); err == nil {
+				// 更新完成挑战数和总奖励
+				completed := int64(0)
+				totalRewards := int64(0)
+				if v, ok := minerData["challenges_completed"].(float64); ok {
+					completed = int64(v)
+				}
+				if v, ok := minerData["total_rewards"].(float64); ok {
+					totalRewards = int64(v)
+				}
+				
+				minerData["challenges_completed"] = completed + 1
+				minerData["total_rewards"] = totalRewards + pr.Amount
+				
+				minerBz, _ = json.Marshal(minerData)
+				store.Set(minerKey, minerBz)
+			}
+		}
+		
+		// 删除已结算记录
+		store.Delete(iter.Key())
+	}
+	
+	return nil
 }
 
 func generateTask(cType types.ChallengeType, rng *rand.Rand) (prompt, expected string) {

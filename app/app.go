@@ -78,6 +78,7 @@ var (
 		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
 		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
 		poatypes.ModuleName:            {authtypes.Minter, authtypes.Burner},
+		challengetypes.ModuleName:      {authtypes.Minter}, // 挑战奖励池（mint + 转出）
 	}
 )
 
@@ -225,6 +226,7 @@ func NewClawChainApp(
 	app.ChallengeKeeper = challengekeeper.NewKeeper(
 		appCodec,
 		keys[challengetypes.StoreKey],
+		app.BankKeeper,
 	)
 
 	app.ReputationKeeper = reputationkeeper.NewKeeper(
@@ -285,8 +287,8 @@ func NewClawChainApp(
 		stakingtypes.ModuleName,
 		consensustypes.ModuleName,
 		poatypes.ModuleName,
-		challengetypes.ModuleName,
 		reputationtypes.ModuleName,
+		challengetypes.ModuleName, // 挑战奖励结算放最后
 	)
 
 	// register module services

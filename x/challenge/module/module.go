@@ -86,5 +86,14 @@ func (am AppModule) BeginBlock(goCtx context.Context) error {
 	return nil
 }
 
+func (am AppModule) EndBlock(goCtx context.Context) error {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	// 处理待结算的奖励（转账）
+	if err := am.keeper.ProcessPendingRewards(ctx); err != nil {
+		am.keeper.Logger(ctx).Error("处理待结算奖励失败", "error", err)
+	}
+	return nil
+}
+
 func (am AppModule) IsOnePerModuleType() {}
 func (am AppModule) IsAppModule()        {}
