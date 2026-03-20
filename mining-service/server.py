@@ -577,7 +577,7 @@ class MiningHandler(BaseHTTPRequestHandler):
         if miner and miner["faucet_claimed"]:
             self._json_response({
                 "success": False,
-                "message": "已领取过水龙头代币",
+                "message": "faucet tokens already claimed",
             })
             return
 
@@ -586,7 +586,7 @@ class MiningHandler(BaseHTTPRequestHandler):
         if get_global(db, faucet_key):
             self._json_response({
                 "success": False,
-                "message": "已领取过水龙头代币",
+                "message": "faucet tokens already claimed",
             })
             return
 
@@ -598,7 +598,7 @@ class MiningHandler(BaseHTTPRequestHandler):
 
         self._json_response({
             "success": True,
-            "message": f"已向 {address} 发放 200 CLAW (200,000,000 uclaw)",
+            "message": f"sent 200 CLAW (200,000,000 uclaw) to {address}",
             "amount": FAUCET_AMOUNT,
         })
 

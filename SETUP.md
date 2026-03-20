@@ -1,18 +1,18 @@
 # ClawChain Setup Guide
 
-This document describes what was created and how to proceed with development.
+This document describes the project structure and how to proceed with development.
 
 ## What Was Built
 
 A **minimal Cosmos SDK v0.50 project skeleton** with:
 
-✅ **Project structure** matching Cosmos SDK conventions  
-✅ **Three custom modules** (poa, challenge, reputation) with basic scaffolding  
-✅ **Compilable binary** (`clawchaind`)  
-✅ **Configuration** for bech32 prefix, denom, and chain ID  
-✅ **Build system** (Makefile)  
+✅ **Project structure** matching Cosmos SDK conventions
+✅ **Three custom modules** (poa, challenge, reputation) with basic scaffolding
+✅ **Compilable binary** (`clawchaind`)
+✅ **Configuration** for bech32 prefix, denom, and chain ID
+✅ **Build system** (Makefile)
 
-## Created Files and Directories
+## Project Files and Directories
 
 ```
 chain/
@@ -25,8 +25,8 @@ chain/
 ├── x/poa/
 │   ├── keeper/keeper.go        # State keeper skeleton
 │   ├── types/
-│   │   ├── keys.go            # Module constants
-│   │   └── genesis.go         # Genesis state
+│   │   ├── keys.go             # Module constants
+│   │   └── genesis.go          # Genesis state
 │   └── module/module.go        # AppModule implementation
 ├── x/challenge/
 │   ├── keeper/keeper.go
@@ -45,17 +45,17 @@ chain/
 │   ├── challenge/v1/
 │   └── reputation/v1/
 ├── config/
-│   ├── app.toml               # App config template
-│   └── config.toml            # CometBFT config template
-├── scripts/                   # Empty (ready for utility scripts)
+│   ├── app.toml                # App config template
+│   └── config.toml             # CometBFT config template
+├── scripts/                    # Utility scripts
 ├── build/
-│   └── clawchaind             # Compiled binary (45MB)
-├── go.mod                     # Dependencies (Cosmos SDK v0.50.10)
+│   └── clawchaind              # Compiled binary (~82MB)
+├── go.mod                      # Dependencies (Cosmos SDK v0.50.10)
 ├── go.sum
-├── Makefile                   # Build automation
+├── Makefile                    # Build automation
 ├── .gitignore
-├── README.md                  # Project overview
-└── SETUP.md                   # This file
+├── README.md                   # Project overview
+└── SETUP.md                    # This file
 ```
 
 ## Verification
@@ -90,7 +90,7 @@ go mod tidy
 - [x] Module registration interfaces
 - [x] Chain constants configured
 
-### ❌ Not Implemented (Phase 1 Work)
+### ❌ Not Yet Implemented (Phase 1 Work)
 - [ ] Module logic (PoA consensus, challenges, reputation)
 - [ ] Protobuf message definitions
 - [ ] State queries (gRPC/REST endpoints)
@@ -155,7 +155,7 @@ func (k Keeper) UpdateScore(ctx sdk.Context, miner sdk.AccAddress, delta int64) 
 func (k Keeper) GetScore(ctx sdk.Context, miner sdk.AccAddress) (int64, error)
 ```
 
-### 3. Module Wiring (Week 2-3)
+### 3. Module Wiring (Week 2–3)
 
 Update `app/app.go` to:
 - Create store keys
@@ -200,7 +200,7 @@ make test
 
 ## Reference
 
-- **Whitepaper**: `../docs/WHITEPAPER.md`
+- **Whitepaper**: [WHITEPAPER_EN.md](./WHITEPAPER_EN.md) | [WHITEPAPER.md (中文)](./WHITEPAPER.md)
 - **Cosmos SDK Docs**: https://docs.cosmos.network/v0.50
 - **CometBFT Docs**: https://docs.cometbft.com/v0.38
 

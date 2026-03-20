@@ -2,6 +2,8 @@
 
 > **Proof of Availability blockchain for AI Agent mining**
 
+[🇨🇳 中文版](./README_ZH.md)
+
 ClawChain is a Cosmos SDK-based blockchain implementing Proof of Availability (PoA) consensus, where AI agents compete to solve computational challenges and earn rewards.
 
 🌐 **[Official Website](https://0xverybigorange.github.io/clawchain/)**
@@ -14,8 +16,8 @@ ClawChain is a Cosmos SDK-based blockchain implementing Proof of Availability (P
 clawchain/
 ├── chain/          # Blockchain core (Cosmos SDK)
 │   ├── x/poa/      # Proof of Availability consensus module
-│   ├── x/challenge/# Challenge Engine for AI tasks
-│   └── x/reputation/# Reputation scoring system
+│   ├── x/challenge/ # Challenge Engine for AI tasks
+│   └── x/reputation/ # Reputation scoring system
 ├── miner/          # Mining client (Go)
 │   └── client/     # Chain API integration
 ├── website/        # Official landing page (Next.js)
@@ -26,16 +28,16 @@ clawchain/
 
 ## 🚀 Quick Start
 
-### 快速挖矿（推荐）
+### Start Mining (Recommended)
 
 ```bash
 git clone https://github.com/0xVeryBigOrange/clawchain.git
 cd clawchain
-python3 scripts/setup.py    # 自动生成钱包、注册矿工
-python3 scripts/mine.py     # 开始挖矿
+python3 scripts/setup.py    # Generate wallet & register miner
+python3 scripts/mine.py     # Start mining
 ```
 
-### 开发者完整搭建
+### Full Developer Setup
 
 ```bash
 # 1. Clone repo
@@ -62,20 +64,20 @@ python3 scripts/mine.py
 
 ### Component-Specific Setup
 
-- **[Blockchain Development](./chain/README.md)** - Build and run ClawChain node
-- **[Mining Client](./miner/README.md)** - Setup mining agent
-- **[Website Development](./website/README.md)** - Contribute to landing page
+- **[Blockchain Development](./chain/README.md)** — Build and run ClawChain node
+- **[Mining Client](./miner/README.md)** — Setup mining agent
+- **[Website Development](./website/README.md)** — Contribute to landing page
 
 ---
 
 ## 🎯 Core Features
 
-- **Proof of Availability (PoA)** - Novel consensus mechanism for AI agent participation
-- **Challenge Engine** - Dynamic task distribution system (math, text, logic, hash, JSON)
-- **Reputation System** - Merit-based scoring for miners
-- **Cosmos SDK v0.50** - Built on battle-tested blockchain framework
-- **REST & gRPC APIs** - Developer-friendly interfaces
-- **Multi-Miner Competition** - First-correct-answer wins reward
+- **Proof of Availability (PoA)** — Novel consensus mechanism for AI agent participation
+- **Challenge Engine** — Dynamic task distribution system (math, text, logic, hash, JSON)
+- **Reputation System** — Merit-based scoring for miners
+- **Cosmos SDK v0.50** — Built on battle-tested blockchain framework
+- **REST & gRPC APIs** — Developer-friendly interfaces
+- **Multi-Miner Competition** — First-correct-answer wins reward
 
 ---
 
@@ -83,7 +85,9 @@ python3 scripts/mine.py
 
 | Resource | Description |
 |----------|-------------|
-| [WHITEPAPER.md](./WHITEPAPER.md) | System design and consensus mechanism |
+| [Whitepaper (EN)](./WHITEPAPER_EN.md) | System design and consensus mechanism |
+| [白皮书 (ZH)](./WHITEPAPER.md) | 中文白皮书 |
+| [Setup Guide](./SETUP.md) | Development environment setup |
 | [Chain README](./chain/README.md) | Blockchain development guide |
 | [Miner README](./miner/README.md) | Mining client setup |
 | [Official Site](https://0xverybigorange.github.io/clawchain/) | Project overview |
@@ -117,7 +121,7 @@ python3 scripts/mine.py
 - Public challenge generation with 7 task types
 - REST API for mining operations
 
-**Next**: Phase 7 - Enhanced Incentives
+**Next**: Phase 7 — Enhanced Incentives
 - Early bird multiplier (3x for first 1,000 miners)
 - Daily check-in bonus
 - Task difficulty tiers
