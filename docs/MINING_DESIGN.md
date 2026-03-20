@@ -115,10 +115,10 @@ Tier 3 (高级): 文本摘要、翻译、创意写作 → 奖励 3x
 ### 3.2 改进后的奖励分配
 
 ```
-每 epoch 50 CLAW:
-├── 矿工奖励:     30 CLAW (60%) → 按完成数+声誉加权
-├── 验证者奖励:    10 CLAW (20%) → 按质押权重
-└── 生态基金:       10 CLAW (20%) → 自动进入基金
+每 epoch 50 CLAW (100% Fair Launch):
+└── 矿工奖励:     50 CLAW (100%) → 按完成数+声誉加权
+
+验证者收益: 从交易手续费获取（Task Marketplace 上线后）
 
 矿工奖励加权公式:
   miner_share = (challenges_completed * reputation_weight * early_bird_multiplier * streak_bonus)

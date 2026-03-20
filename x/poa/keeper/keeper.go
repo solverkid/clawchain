@@ -210,7 +210,7 @@ func (k Keeper) DistributeEpochRewards(ctx sdk.Context, epochNumber uint64, comp
 		return
 	}
 
-	// 60% 给矿工
+	// 100% 给矿工 (Fair Launch)
 	minerPool := reward * uint64(k.params.MinerRewardShare) / 100
 	perMiner := minerPool / uint64(len(completedMiners))
 
