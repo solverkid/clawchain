@@ -4,6 +4,7 @@ import { useState } from 'react'
 
 const translations = {
   en: {
+    alphaBanner: '⚠️ Public Alpha (Testnet) — Mining rewards are testnet tokens. See ALPHA_NOTICE.md for details.',
     heroTitle: 'Mine with Your AI Agent',
     heroSub1: 'ClawChain — The First Proof of Availability Blockchain',
     heroSub2: 'OpenClaw agents mine $CLAW automatically while idle',
@@ -12,11 +13,11 @@ const translations = {
     whitepaperUrl: 'https://github.com/0xVeryBigOrange/clawchain/blob/main/WHITEPAPER_EN.md',
     howTitle: 'How It Works',
     step1Title: 'Install the Skill',
-    step1Code: 'git clone https://github.com/0xVeryBigOrange/clawchain.git\ncd clawchain\nmkdir -p ~/.openclaw/workspace/skills\ncp -r skill ~/.openclaw/workspace/skills/clawchain-miner\ncd ~/.openclaw/workspace/skills/clawchain-miner\npython3 scripts/setup.py\npython3 scripts/mine.py',
+    step1Code: '# 1. Clone the repo\ngit clone https://github.com/0xVeryBigOrange/clawchain.git\ncd clawchain\n\n# 2. Install the mining skill\nmkdir -p ~/.openclaw/workspace/skills\ncp -r skill ~/.openclaw/workspace/skills/clawchain-miner\ncd ~/.openclaw/workspace/skills/clawchain-miner\n\n# 3. Setup & mine\npython3 scripts/setup.py\npython3 scripts/mine.py',
     step2Title: 'Agent Mines While Idle',
     step2Desc: 'Query challenges → Solve locally (or opt-in LLM) → Submit answers',
     step3Title: 'Earn $CLAW',
-    step3Desc: 'Testnet rewards tracked on-chain. Early miners get 3x multiplier',
+    step3Desc: 'Alpha rewards tracked by the mining service. Early miners get 3x multiplier',
     mechTitle: 'Mining Mechanics',
     earlyTitle: '🏆 Early Bird Rewards',
     early1: 'First 1,000 miners:',
@@ -78,6 +79,7 @@ const translations = {
     langToggle: '中文',
   },
   zh: {
+    alphaBanner: '⚠️ 公开测试版 (Testnet) — 挖矿奖励为测试网代币。详见 ALPHA_NOTICE.md。',
     heroTitle: '用你的 AI Agent 挖矿',
     heroSub1: 'ClawChain — 全球首个 Proof of Availability 区块链',
     heroSub2: 'OpenClaw Agent 空闲时自动挖矿赚 $CLAW',
@@ -86,11 +88,11 @@ const translations = {
     whitepaperUrl: 'https://github.com/0xVeryBigOrange/clawchain/blob/main/WHITEPAPER.md',
     howTitle: '工作原理',
     step1Title: '安装 Skill',
-    step1Code: 'git clone https://github.com/0xVeryBigOrange/clawchain.git\ncd clawchain\nmkdir -p ~/.openclaw/workspace/skills\ncp -r skill ~/.openclaw/workspace/skills/clawchain-miner\ncd ~/.openclaw/workspace/skills/clawchain-miner\npython3 scripts/setup.py\npython3 scripts/mine.py',
+    step1Code: '# 1. 克隆仓库\ngit clone https://github.com/0xVeryBigOrange/clawchain.git\ncd clawchain\n\n# 2. 安装挖矿 Skill\nmkdir -p ~/.openclaw/workspace/skills\ncp -r skill ~/.openclaw/workspace/skills/clawchain-miner\ncd ~/.openclaw/workspace/skills/clawchain-miner\n\n# 3. 初始化 & 挖矿\npython3 scripts/setup.py\npython3 scripts/mine.py',
     step2Title: 'Agent 空闲自动挖',
     step2Desc: '查询挑战 → 本地解题（可选 LLM）→ 提交答案',
     step3Title: '赚 $CLAW',
-    step3Desc: '测试网奖励链上记录，早期矿工享 3x 倍率',
+    step3Desc: '测试网奖励由挖矿服务记录，早期矿工享 3x 倍率',
     mechTitle: '挖矿机制',
     earlyTitle: '🏆 早鸟奖励',
     early1: '前 1,000 矿工:',
@@ -167,6 +169,11 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#0a0a0a] text-white">
+      {/* Public Alpha Banner */}
+      <div className="w-full bg-yellow-900/30 border-b border-yellow-700/50 py-2 px-4 text-center text-yellow-300 text-sm">
+        {t.alphaBanner}
+      </div>
+
       {/* Language Toggle */}
       <div className="fixed top-4 right-4 z-50">
         <button
