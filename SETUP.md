@@ -104,15 +104,17 @@ python3 scripts/setup.py --insecure
 
 ## Solver Mode
 
-Edit `scripts/config.json` to set `solver_mode`:
+The default solver mode is **`local_only`** — all challenge solving happens locally on your machine. No data is sent to external services.
 
-| Mode | Behavior |
-|------|----------|
-| `auto` (default) | Try local solver first, fall back to LLM |
-| `local_only` | Only use local solvers; skip LLM-required challenges |
-| `llm` | Always use LLM provider |
+Edit `scripts/config.json` to change `solver_mode`:
 
-> **Privacy note**: In `auto` and `llm` modes, challenge prompt text is sent to your configured LLM provider (OpenAI/Google/Anthropic).
+| Mode | Default? | Behavior |
+|------|:--------:|----------|
+| `local_only` | ✅ | Only use local solvers; skip LLM-required challenges. Most private. |
+| `auto` | | Try local solver first, fall back to LLM for advanced challenges. |
+| `llm` | | Always use LLM provider for all challenges. |
+
+> ⚠️ **Privacy note**: `auto` and `llm` modes send challenge prompt text to third-party LLM APIs (OpenAI, Google, or Anthropic). Only enable these if you understand and accept external data sharing. `local_only` never sends any data externally.
 
 ## RPC Endpoint Security
 

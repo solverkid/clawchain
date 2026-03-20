@@ -67,7 +67,11 @@ def main():
         try:
             with open(CONFIG_PATH) as f:
                 config = json.load(f)
-            has_rpc = "rpc_url" in config or "node_url" in config
+            has_rpc = "rpc_url" in config
+            if "node_url" in config and "rpc_url" not in config:
+                print("  ⚠️  Config uses deprecated 'node_url' — please rename to 'rpc_url'")
+                print("     Run: python3 scripts/setup.py to auto-migrate")
+                has_rpc = True  # still usable via backward compat
             ok = has_rpc
             detail = "valid JSON" + ("" if has_rpc else ", but missing rpc_url")
         except (json.JSONDecodeError, IOError) as e:
@@ -141,7 +145,9 @@ def main():
     print(f"  {icon} LLM API key set (optional){suffix}")
 
     # 7b. RPC endpoint sanity check
-    rpc_url = config.get("rpc_url", config.get("node_url", "")) if config else ""
+    rpc_url = config.get("rpc_url", "") if config else ""
+    if not rpc_url and config:
+        rpc_url = config.get("node_url", "")  # legacy fallback
     if rpc_url:
         is_localhost = "localhost" in rpc_url or "127.0.0.1" in rpc_url
         is_tunnel = "trycloudflare" in rpc_url or "ngrok" in rpc_url
