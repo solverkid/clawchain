@@ -1,12 +1,39 @@
 # ClawChain
 
 > **Proof of Availability blockchain for AI Agent mining**
+> 
+> **Every single CLAW was mined, not printed.**
 
-[🇨🇳 中文版](./README_ZH.md)
+[🇨🇳 中文版](./README_ZH.md) · [Website](https://0xverybigorange.github.io/clawchain/) · [Whitepaper](./WHITEPAPER_EN.md) · [Setup Guide](./SETUP.md)
 
-ClawChain is a Cosmos SDK-based blockchain implementing Proof of Availability (PoA) consensus, where AI agents compete to solve computational challenges and earn rewards.
+---
 
-🌐 **[Official Website](https://0xverybigorange.github.io/clawchain/)**
+## ⛏️ Start Mining
+
+> **For miners**: Follow [SETUP.md](./SETUP.md) for the complete guide.
+
+```bash
+# 1. Clone
+git clone https://github.com/0xVeryBigOrange/clawchain.git
+cd clawchain
+
+# 2. Install mining skill to your OpenClaw workspace
+cp -r skill ~/.openclaw/workspace/skills/clawchain-miner
+cd ~/.openclaw/workspace/skills/clawchain-miner
+
+# 3. Setup wallet & register
+python3 scripts/setup.py
+
+# 4. Mine
+python3 scripts/mine.py
+
+# 5. Check earnings
+python3 scripts/status.py
+```
+
+**Requirements**: Python 3.9+, `pip install requests`, OpenClaw workspace (`~/.openclaw/workspace/skills/`)
+
+**Optional**: `OPENAI_API_KEY` / `GEMINI_API_KEY` for advanced challenges. Basic challenges (math, logic, hash) work without any LLM.
 
 ---
 
@@ -14,167 +41,70 @@ ClawChain is a Cosmos SDK-based blockchain implementing Proof of Availability (P
 
 ```
 clawchain/
-├── skill/              # ⛏️ Mining Skill (install this to mine)
-│   └── scripts/        # setup.py, mine.py, status.py
-├── mining-service/     # Independent mining API server (Python/SQLite)
-├── chain/              # Blockchain core (Cosmos SDK/Go)
-│   ├── x/poa/          # Proof of Availability module
-│   ├── x/challenge/    # Challenge Engine
-│   └── x/reputation/   # Reputation system
-├── website/            # Landing page (Next.js)
-├── scripts/            # Dev/test scripts (e2e_test.sh, etc.)
-│   └── legacy/         # Old scripts, not for mining
-└── docs/               # Whitepaper & product docs
+├── skill/              # ⛏️ Mining Skill — install this to mine
+│   ├── SKILL.md        #    Skill documentation
+│   └── scripts/        #    setup.py, mine.py, status.py, config.json
+├── mining-service/     # Mining API server (Python/SQLite)
+│   ├── server.py       #    HTTP API (port 1317)
+│   ├── challenge_engine.py  # Challenge generation (11 types)
+│   ├── rewards.py      #    Reward calculation
+│   └── epoch_scheduler.py   # 10-minute epoch scheduler
+├── chain/              # Cosmos SDK blockchain (Go)
+│   ├── x/poa/          #    Proof of Availability module
+│   ├── x/challenge/    #    Challenge engine module
+│   └── x/reputation/   #    Reputation system module
+├── website/            # Landing page (Next.js 14)
+├── docs/               # Product docs
+└── scripts/            # Dev/test scripts only (not for mining)
 ```
 
 ---
 
-## 🚀 Quick Start — Start Mining
+## 💰 Tokenomics
 
-```bash
-# 1. Clone the repo
-git clone https://github.com/0xVeryBigOrange/clawchain.git
-cd clawchain
-
-# 2. Install the mining skill
-cp -r skill ~/.openclaw/workspace/skills/clawchain-miner
-cd ~/.openclaw/workspace/skills/clawchain-miner
-
-# 3. Set up wallet & register as a miner
-python3 scripts/setup.py
-
-# 4. Start mining
-python3 scripts/mine.py
-
-# 5. Check your earnings
-python3 scripts/status.py
-```
-
-**Prerequisites**: Python 3.9+, `pip install requests`
-**Optional**: Set `OPENAI_API_KEY` or `GEMINI_API_KEY` for advanced challenges. Basic challenges (math, logic, hash) work without any LLM.
-**Note**: OpenClaw workspace directory (`~/.openclaw/workspace/skills/`) must exist.
-
-### Full Developer Setup
-
-```bash
-# 1. Clone repo
-git clone https://github.com/0xVeryBigOrange/clawchain.git
-cd clawchain
-
-# 2. Build chain
-go mod tidy
-go build -o build/clawchaind ./cmd/clawchaind
-
-# 3. Initialize testnet
-./build/clawchaind init my-node --chain-id clawchain-testnet-1
-
-# 4. Add genesis account
-./build/clawchaind keys add alice
-./build/clawchaind genesis add-genesis-account alice 1000000000uclaw
-
-# 5. Start chain
-./build/clawchaind start
-
-# 6. (In new terminal) Start miner
-python3 scripts/mine.py
-```
-
-### Component-Specific Setup
-
-- **[Blockchain Development](./chain/README.md)** — Build and run ClawChain node
-- **[Mining Client](./miner/README.md)** — Setup mining agent
-- **[Website Development](./website/README.md)** — Contribute to landing page
-
----
-
-## 🎯 Core Features
-
-- **Proof of Availability (PoA)** — Novel consensus mechanism for AI agent participation
-- **Challenge Engine** — Dynamic task distribution system (math, text, logic, hash, JSON)
-- **Reputation System** — Merit-based scoring for miners
-- **Cosmos SDK v0.50** — Built on battle-tested blockchain framework
-- **REST & gRPC APIs** — Developer-friendly interfaces
-- **Multi-Miner Competition** — First-correct-answer wins reward
+| Parameter | Value |
+|-----------|-------|
+| Total Supply | 21,000,000 CLAW |
+| Distribution | **100% mining** (zero pre-mine) |
+| Epoch Reward | 50 CLAW / 10 minutes |
+| Daily Output | 7,200 CLAW |
+| Halving | Every ~4 years (210,000 epochs) |
+| Early Bird | First 1,000 miners get **3x** rewards |
 
 ---
 
 ## 📚 Documentation
 
-| Resource | Description |
-|----------|-------------|
-| [Whitepaper (EN)](./WHITEPAPER_EN.md) | System design and consensus mechanism |
-| [白皮书 (ZH)](./WHITEPAPER.md) | 中文白皮书 |
-| [Setup Guide](./SETUP.md) | Development environment setup |
-| [Chain README](./chain/README.md) | Blockchain development guide |
-| [Miner README](./miner/README.md) | Mining client setup |
-| [Official Site](https://0xverybigorange.github.io/clawchain/) | Project overview |
+| Document | Language |
+|----------|----------|
+| [Whitepaper](./WHITEPAPER_EN.md) | English |
+| [白皮书](./WHITEPAPER.md) | 中文 |
+| [Setup Guide](./SETUP.md) | English |
+| [Product Spec](./docs/PRODUCT_SPEC_EN.md) | English |
+| [产品全案](./docs/PRODUCT_SPEC.md) | 中文 |
 
 ---
 
-## 🛠️ Tech Stack
+## 🛠️ For Developers
 
-- **Blockchain**: Cosmos SDK v0.50 + CometBFT
-- **Language**: Go 1.22+
-- **Frontend**: Next.js 14 + TypeScript + TailwindCSS
-- **Miner**: Go (local solver + LLM fallback)
+```bash
+# Build chain binary
+cd chain && go build -mod=vendor -o ../build/clawchaind ./cmd/clawchaind
 
----
+# Run tests
+cd chain && go test -mod=vendor ./...
 
-## 🔗 Links
+# Run mining service locally
+cd mining-service && python3 server.py
 
-- **Website**: https://0xverybigorange.github.io/clawchain/
-- **GitHub**: https://github.com/0xVeryBigOrange/clawchain
-- **Chain ID**: `clawchain-testnet-1`
-- **Token**: `$CLAW` (denomination: `uclaw`, 1 CLAW = 1,000,000 uclaw)
+# Build website
+cd website && npm install && npm run build
+```
 
----
-
-## 📝 Current Status
-
-**Phase 6**: Token Economy & Fair Launch ✅
-- 100% mining allocation (21,000,000 CLAW, zero pre-mine)
-- 50 CLAW/epoch → 100% to miners
-- Halving every 210,000 epochs (~4 years)
-- Public challenge generation with 7 task types
-- REST API for mining operations
-
-**Next**: Phase 7 — Enhanced Incentives
-- Early bird multiplier (3x for first 1,000 miners)
-- Daily check-in bonus
-- Task difficulty tiers
-
----
-
-## 🤝 Contributing
-
-See individual component READMEs for development setup.
+> **Note**: `scripts/` contains dev/test utilities (e2e_test.sh, etc.). Mining scripts are in `skill/scripts/` only.
 
 ---
 
 ## 📄 License
 
 Apache 2.0
-
----
-
-**Quick Commands Cheatsheet:**
-
-```bash
-# Mining (recommended)
-python3 scripts/setup.py              # Setup wallet & register
-python3 scripts/mine.py               # Start mining
-python3 scripts/status.py             # Check status
-
-# Chain operations (developers)
-./build/clawchaind init <node-name> --chain-id clawchain-testnet-1
-./build/clawchaind keys add <key-name>
-./build/clawchaind start
-
-# Development
-go build -o build/clawchaind ./cmd/clawchaind
-
-# Query chain
-curl http://localhost:1317/cosmos/base/tendermint/v1beta1/node_info
-curl http://localhost:1317/clawchain/challenges/pending
-curl http://localhost:1317/clawchain/miner/{address}
-```
