@@ -276,14 +276,27 @@ def main():
     result = register_miner(rpc_url, wallet["address"], miner_name)
     print(f"   {'✅' if result.get('success') else '⚠️'} {result.get('message', '')}")
 
+    # Solver mode selection
+    if not args.non_interactive:
+        print("\n🤖 Solver Mode Selection:")
+        print("   1. local_only — Solve challenges locally only (most secure, no external API calls)")
+        print("   2. auto — Try local first, fall back to LLM (sends challenge text to LLM provider)")
+        print("   3. llm — Always use LLM (requires API key)")
+        mode_choice = input("Choose solver mode [1/2/3] (default: 1): ").strip()
+        solver_mode = {"2": "auto", "3": "llm"}.get(mode_choice, "local_only")
+    else:
+        solver_mode = config.get("solver_mode", "local_only")
+
     # Update config.json
     config["miner_address"] = wallet["address"]
     config["miner_name"] = miner_name
+    config["solver_mode"] = solver_mode
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)
 
     print(f"\n✅ Initialization complete!")
     print(f"   Wallet address: {wallet['address']}")
+    print(f"   Solver mode: {solver_mode}")
     print(f"   Next step: python3 scripts/mine.py to start mining")
 
 if __name__ == "__main__":

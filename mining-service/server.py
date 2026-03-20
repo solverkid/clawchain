@@ -21,8 +21,11 @@ from urllib.parse import urlparse, parse_qs
 # 确保能 import 同目录模块
 sys.path.insert(0, str(Path(__file__).parent))
 
-from models import init_db, get_db, get_global, set_global, DB_PATH
-from challenge_engine import generate_challenges, calc_num_challenges
+from models import init_db, get_db, get_global, set_global, DB_PATH, migrate_db
+from challenge_engine import (
+    generate_challenges, calc_num_challenges, compute_commitment,
+    DETERMINISTIC_TYPES, NON_DETERMINISTIC_TYPES,
+)
 from rewards import (
     get_epoch_miner_pool,
     get_epoch_validator_pool,
@@ -34,7 +37,10 @@ from epoch_scheduler import start_scheduler, get_current_epoch, run_epoch_tick
 
 # ─── 配置 ───
 
+SERVER_VERSION = "0.2.0"
+MIN_MINER_VERSION = "0.1.0"
 DEFAULT_PORT = 1317
+MAX_MINERS_PER_IP = 3
 DEV_MODE = os.getenv("CLAWCHAIN_DEV", "1") == "1"
 REQUIRED_SUBMISSIONS = 1 if DEV_MODE else 3
 MIN_MAJORITY = 1 if DEV_MODE else 2
@@ -66,6 +72,7 @@ class MiningHandler(BaseHTTPRequestHandler):
     GET_ROUTES = {
         "/clawchain/challenges/pending": "handle_get_pending",
         "/clawchain/stats": "handle_get_stats",
+        "/clawchain/version": "handle_get_version",
     }
     POST_ROUTES = {
         "/clawchain/challenge/submit": "handle_submit_answer",
@@ -162,20 +169,28 @@ class MiningHandler(BaseHTTPRequestHandler):
                 if s["answer"]:
                     reveals[s["miner_address"]] = s["answer"]
 
+            # Determine verification mode for this challenge type
+            ctype = r["type"]
+            if ctype in DETERMINISTIC_TYPES:
+                verification_mode = "deterministic"
+            else:
+                verification_mode = "server_trust"  # will become "majority_vote" with multi-validator
+
             challenges.append({
                 "id": r["id"],
                 "epoch": r["epoch"],
-                "type": r["type"],
+                "type": ctype,
                 "tier": r["tier"],
                 "prompt": r["prompt"],
-                "expected_answer": r["expected_answer"] or "",
+                # SECURITY: expected_answer and known_answer are NEVER sent to miners
                 "assignees": [],  # 公开挑战
                 "status": r["status"],
                 "created_height": 0,
                 "commits": commits,
                 "reveals": reveals,
                 "is_spot_check": bool(r["is_spot_check"]),
-                "known_answer": r["known_answer"] or "",
+                "commitment": r["commitment"] or "",
+                "verification_mode": verification_mode,
             })
 
         self._json_response({"challenges": challenges})
@@ -240,16 +255,31 @@ class MiningHandler(BaseHTTPRequestHandler):
 
         # 尝试即时结算
         status = ch["status"]
+        settle_result = None
         if sub_count >= REQUIRED_SUBMISSIONS:
-            status = self._try_settle_challenge(db, ch_id)
+            settle_result = self._try_settle_challenge(db, ch_id)
+            status = settle_result["status"] if isinstance(settle_result, dict) else settle_result
 
-        self._json_response({
+        response = {
             "success": True,
             "submission_count": sub_count,
             "required_submissions": REQUIRED_SUBMISSIONS,
             "status": status,
             "message": "answer recorded, waiting for other miners to submit",
-        })
+        }
+
+        # After settlement, reveal answer + salt for miner verification
+        if isinstance(settle_result, dict) and settle_result.get("settled"):
+            ch_fresh = db.execute("SELECT * FROM challenges WHERE id=?", (ch_id,)).fetchone()
+            ctype = ch_fresh["type"]
+            response["verification"] = {
+                "verification_mode": "deterministic" if ctype in DETERMINISTIC_TYPES else "server_trust",
+                "commitment": ch_fresh["commitment"] or "",
+                "revealed_answer": ch_fresh["expected_answer"] or "",
+                "salt": ch_fresh["salt"] or "",
+            }
+
+        self._json_response(response)
 
     # ═══════════════════════════════════════
     # POST /clawchain/challenge/commit
@@ -375,15 +405,40 @@ class MiningHandler(BaseHTTPRequestHandler):
 
         # 尝试结算
         status = ch["status"]
+        settle_result = None
         if sub_count >= REQUIRED_SUBMISSIONS:
-            status = self._try_settle_challenge(db, ch_id)
+            settle_result = self._try_settle_challenge(db, ch_id)
+            status = settle_result["status"] if isinstance(settle_result, dict) else settle_result
 
-        self._json_response({
+        response = {
             "success": True,
             "submission_count": sub_count,
             "required_submissions": REQUIRED_SUBMISSIONS,
             "status": status,
             "message": "reveal recorded",
+        }
+
+        # After settlement, reveal answer + salt for miner verification
+        if isinstance(settle_result, dict) and settle_result.get("settled"):
+            ch_fresh = db.execute("SELECT * FROM challenges WHERE id=?", (ch_id,)).fetchone()
+            ctype = ch_fresh["type"]
+            response["verification"] = {
+                "verification_mode": "deterministic" if ctype in DETERMINISTIC_TYPES else "server_trust",
+                "commitment": ch_fresh["commitment"] or "",
+                "revealed_answer": ch_fresh["expected_answer"] or "",
+                "salt": ch_fresh["salt"] or "",
+            }
+
+        self._json_response(response)
+
+    # ═══════════════════════════════════════
+    # GET /clawchain/version
+    # ═══════════════════════════════════════
+    def handle_get_version(self):
+        self._json_response({
+            "server_version": SERVER_VERSION,
+            "min_miner_version": MIN_MINER_VERSION,
+            "protocol": "clawchain-testnet-1",
         })
 
     # ═══════════════════════════════════════
@@ -392,6 +447,7 @@ class MiningHandler(BaseHTTPRequestHandler):
     def handle_register_miner(self, body):
         address = body.get("address", "")
         name = body.get("name", "")
+        miner_version = body.get("miner_version", "")
 
         if not address:
             self._error("address is required", 400)
@@ -402,7 +458,28 @@ class MiningHandler(BaseHTTPRequestHandler):
             self._error("invalid address format", 400)
             return
 
+        # Version compatibility check
+        if miner_version and miner_version < MIN_MINER_VERSION:
+            self._error(
+                f"miner version {miner_version} is below minimum {MIN_MINER_VERSION}, please upgrade",
+                400,
+            )
+            return
+
         db = get_shared_db()
+
+        # Anti-Sybil: IP rate limit
+        client_ip = self.client_address[0] if self.client_address else ""
+        if client_ip:
+            ip_count = db.execute(
+                "SELECT COUNT(*) AS cnt FROM miners WHERE ip_address=?",
+                (client_ip,),
+            ).fetchone()["cnt"]
+            if ip_count >= MAX_MINERS_PER_IP:
+                self._error(
+                    f"too many miners from this IP (max {MAX_MINERS_PER_IP})", 429
+                )
+                return
 
         # 检查已注册
         existing = db.execute("SELECT * FROM miners WHERE address=?", (address,)).fetchone()
@@ -444,11 +521,19 @@ class MiningHandler(BaseHTTPRequestHandler):
         reg_count = int(get_global(db, "miner_count", "0")) + 1
         set_global(db, "miner_count", reg_count)
 
+        # Progressive staking requirement
+        stake_required = self._get_stake_requirement(db)
+        staked_amount = 0
+        if stake_required > 0:
+            # For new miners, staking is deducted from faucet/future rewards
+            # In testnet, we allow registration and track the stake debt
+            staked_amount = 0  # Will be enforced when miner has rewards
+
         # 插入矿工
         db.execute(
-            """INSERT INTO miners (address, name, registration_index, status, reputation)
-            VALUES (?, ?, ?, 'active', 500)""",
-            (address, name or "miner", reg_count),
+            """INSERT INTO miners (address, name, registration_index, status, reputation, ip_address, staked_amount, staked_at)
+            VALUES (?, ?, ?, 'active', 500, ?, ?, CURRENT_TIMESTAMP)""",
+            (address, name or "miner", reg_count, client_ip, staked_amount),
         )
         db.commit()
 
@@ -457,6 +542,7 @@ class MiningHandler(BaseHTTPRequestHandler):
             "message": "miner registered successfully",
             "address": address,
             "registration_index": reg_count,
+            "stake_required": stake_required,
         })
 
     # ═══════════════════════════════════════
@@ -605,11 +691,11 @@ class MiningHandler(BaseHTTPRequestHandler):
     # ═══════════════════════════════════════
     # 内部：即时结算
     # ═══════════════════════════════════════
-    def _try_settle_challenge(self, db, ch_id) -> str:
-        """尝试即时结算一道挑战，返回新状态"""
+    def _try_settle_challenge(self, db, ch_id):
+        """尝试即时结算一道挑战，返回 {"status": str, "settled": bool}"""
         ch = db.execute("SELECT * FROM challenges WHERE id=?", (ch_id,)).fetchone()
         if not ch or ch["status"] == "complete":
-            return ch["status"] if ch else "unknown"
+            return {"status": ch["status"] if ch else "unknown", "settled": False}
 
         subs = db.execute(
             "SELECT * FROM submissions WHERE challenge_id=? AND answer IS NOT NULL",
@@ -617,7 +703,7 @@ class MiningHandler(BaseHTTPRequestHandler):
         ).fetchall()
 
         if len(subs) < REQUIRED_SUBMISSIONS:
-            return ch["status"]
+            return {"status": ch["status"], "settled": False}
 
         # 构建答案分组
         answer_votes = {}
@@ -638,7 +724,7 @@ class MiningHandler(BaseHTTPRequestHandler):
             majority_miners = answer_votes[majority_answer]
 
         if not is_spot and len(majority_miners) < MIN_MAJORITY:
-            return ch["status"]
+            return {"status": ch["status"], "settled": False}
 
         # 结算！
         epoch = ch["epoch"]
@@ -703,11 +789,20 @@ class MiningHandler(BaseHTTPRequestHandler):
 
                     new_failures = (miner["consecutive_failures"] or 0) + 1
                     new_rep = (miner["reputation"] or 500) - rep_penalty
+                    staked = miner["staked_amount"] or 0
+                    slash_amount = 0
 
-                    # 连续答错 5 次以上 → 疑似作弊，-500 + suspended
+                    # Slashing: 3+ consecutive failures on spot checks → 10% stake
+                    if is_spot and new_failures >= 3 and staked > 0:
+                        slash_amount = staked // 10
+                        logger.warning(f"Miner {addr} slashed 10% stake ({slash_amount} uclaw): {new_failures} consecutive spot-check failures")
+
+                    # 连续答错 5 次以上 → 疑似作弊，-500 + 50% slash + suspended
                     if new_failures > 5:
                         new_rep = (miner["reputation"] or 500) - 500
-                        logger.warning(f"Miner {addr} suspected cheating: {new_failures} consecutive failures")
+                        if staked > 0:
+                            slash_amount = staked // 2  # 50% slash
+                        logger.warning(f"Miner {addr} suspected cheating: {new_failures} consecutive failures, slashed 50% stake")
 
                     new_status = miner["status"]
                     suspended_at = None
@@ -722,16 +817,33 @@ class MiningHandler(BaseHTTPRequestHandler):
                             consecutive_failures = ?,
                             reputation = ?,
                             status = ?,
-                            suspended_at = COALESCE(?, suspended_at)
+                            suspended_at = COALESCE(?, suspended_at),
+                            staked_amount = staked_amount - ?
                         WHERE address=?""",
-                        (new_failures, max(new_rep, 0), new_status, suspended_at, addr),
+                        (new_failures, max(new_rep, 0), new_status, suspended_at, slash_amount, addr),
                     )
 
         db.execute("UPDATE challenges SET status='complete' WHERE id=?", (ch_id,))
         db.commit()
 
         logger.info(f"Challenge {ch_id} settled: {len(majority_miners)} correct miners")
-        return "complete"
+        return {"status": "complete", "settled": True}
+
+
+    # ═══════════════════════════════════════
+    # Internal: Progressive staking
+    # ═══════════════════════════════════════
+    def _get_stake_requirement(self, db) -> int:
+        """Progressive stake requirement based on active miner count (uclaw)."""
+        active = db.execute(
+            "SELECT COUNT(*) AS cnt FROM miners WHERE status='active'"
+        ).fetchone()["cnt"]
+        if active < 1000:
+            return 0
+        elif active < 5000:
+            return 10_000_000  # 10 CLAW
+        else:
+            return 100_000_000  # 100 CLAW
 
 
 def get_current_epoch(db):
@@ -755,6 +867,7 @@ def main():
         models.DB_PATH = Path(args.db)
 
     db = init_db()
+    migrate_db(db)
     global _db
     _db = db
 
@@ -773,13 +886,13 @@ def main():
         challenges = generate_challenges(epoch, max(active, 1))
         for ch in challenges:
             db.execute(
-                """INSERT OR IGNORE INTO challenges (id, epoch, type, tier, prompt, expected_answer, status, is_spot_check, known_answer, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT OR IGNORE INTO challenges (id, epoch, type, tier, prompt, expected_answer, status, is_spot_check, known_answer, salt, commitment, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     ch["id"], ch["epoch"], ch["type"], ch["tier"],
                     ch["prompt"], ch["expected_answer"], ch["status"],
                     1 if ch["is_spot_check"] else 0,
-                    ch["known_answer"], ch["created_at"],
+                    ch["known_answer"], ch["salt"], ch["commitment"], ch["created_at"],
                 ),
             )
         db.commit()
@@ -795,6 +908,7 @@ def main():
     logger.info("  POST /clawchain/challenge/reveal")
     logger.info("  POST /clawchain/miner/register")
     logger.info("  GET  /clawchain/miner/{address}")
+    logger.info("  GET  /clawchain/version")
     logger.info("  GET  /clawchain/miner/{address}/stats")
     logger.info("  GET  /clawchain/stats")
     logger.info("  POST /clawchain/faucet")

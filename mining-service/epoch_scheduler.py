@@ -9,7 +9,7 @@ import time
 import logging
 from datetime import datetime, date, timedelta
 
-from models import get_db, get_global, set_global, DB_PATH
+from models import get_db, get_global, set_global, DB_PATH, migrate_db
 from challenge_engine import generate_challenges
 from rewards import (
     get_epoch_miner_pool,
@@ -155,9 +155,18 @@ def settle_epoch(db, epoch: int):
 
                     new_failures = (miner["consecutive_failures"] or 0) + 1
                     new_rep = (miner["reputation"] or 500) - rep_penalty
+                    staked = miner["staked_amount"] if "staked_amount" in miner.keys() else 0
+                    staked = staked or 0
+                    slash_amount = 0
+
+                    # Slashing: 3+ consecutive failures on spot checks → 10% stake
+                    if is_spot and new_failures >= 3 and staked > 0:
+                        slash_amount = staked // 10
 
                     if new_failures > 5:
                         new_rep = (miner["reputation"] or 500) - 500
+                        if staked > 0:
+                            slash_amount = staked // 2  # 50% slash
 
                     new_status = miner["status"]
                     suspended_at = None
@@ -171,9 +180,10 @@ def settle_epoch(db, epoch: int):
                             consecutive_failures = ?,
                             reputation = ?,
                             status = ?,
-                            suspended_at = COALESCE(?, suspended_at)
+                            suspended_at = COALESCE(?, suspended_at),
+                            staked_amount = MAX(COALESCE(staked_amount, 0) - ?, 0)
                         WHERE address=?""",
-                        (new_failures, max(new_rep, 0), new_status, suspended_at, addr),
+                        (new_failures, max(new_rep, 0), new_status, suspended_at, slash_amount, addr),
                     )
 
         # 标记挑战完成
@@ -232,13 +242,13 @@ def run_epoch_tick(db):
     new_challenges = generate_challenges(current_epoch, active_miners)
     for ch in new_challenges:
         db.execute(
-            """INSERT OR IGNORE INTO challenges (id, epoch, type, tier, prompt, expected_answer, status, is_spot_check, known_answer, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO challenges (id, epoch, type, tier, prompt, expected_answer, status, is_spot_check, known_answer, salt, commitment, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ch["id"], ch["epoch"], ch["type"], ch["tier"],
                 ch["prompt"], ch["expected_answer"], ch["status"],
                 1 if ch["is_spot_check"] else 0,
-                ch["known_answer"], ch["created_at"],
+                ch["known_answer"], ch["salt"], ch["commitment"], ch["created_at"],
             ),
         )
     db.commit()
@@ -270,6 +280,7 @@ def run_epoch_tick(db):
 def epoch_loop(db_path=None):
     """后台 epoch 调度循环"""
     db = get_db(db_path)
+    migrate_db(db)
     logger.info("Epoch scheduler started")
 
     # 启动时立即执行一次

@@ -6,5 +6,6 @@
   "max_challenges_per_run": 5,
   "wallet_path": "~/.clawchain/wallet.json",
   "log_dir": "~/.openclaw/workspace/skills/clawchain-miner/data",
-  "solver_mode": "auto"
+  "solver_mode": "local_only",
+  "miner_address": "claw17k3ty3z5jd8as3sfwkk7ralpqzjkzmtcum72ue"
 }

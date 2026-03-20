@@ -1,135 +1,190 @@
 # ClawChain Security Model
 
-This document describes ClawChain's security assumptions, threat model, and known limitations as of v0.1.0-testnet.
+This document describes ClawChain's security assumptions, threat model, and defense mechanisms as of v0.2.0-testnet.
 
 ## 1. Trust Assumptions
 
-### Miner → Mining Service
-Miners trust the mining service (the HTTP API server) to:
-- Generate challenges fairly and non-deterministically.
-- Accept and store submissions honestly.
-- Settle rewards accurately based on majority consensus or known answers.
-- Not leak submitted answers to other miners before the reveal phase.
+### Deterministic Challenges (math, logic, hash, text_transform, json_extract, format_convert)
+**Miners do NOT need to trust the server.**
+- Answers have a single correct value that anyone can independently compute.
+- Server publishes a commitment hash `H(challenge_id || expected_answer || salt)` at challenge creation.
+- After settlement, the server reveals `expected_answer` and `salt`.
+- Miners verify: `sha256(challenge_id + revealed_answer + salt) == commitment`.
+- If the commitment doesn't match, the server is provably dishonest.
+
+### Non-Deterministic Challenges (sentiment, classification, translation, text_summary, entity_extraction)
+**Miners need partial trust in the server** (until multi-validator consensus is implemented).
+- Answers are subjective — no single "correct" value.
+- In DEV mode (single miner), the server judges correctness (`verification_mode: "server_trust"`).
+- In production mode (3+ miners), majority vote determines correctness (`verification_mode: "majority_vote"`).
+- Commitment mechanism still applies for spot-check challenges with known answers.
 
 ### Mining Service → Challenge Engine
 The mining service trusts the challenge engine to:
 - Generate diverse, solvable challenges across all 11 types.
 - Produce correct `known_answer` values for spot-check challenges.
-- Distribute challenges with appropriate difficulty tiers based on the miner population.
+- Generate cryptographic commitments at challenge creation time (immutable).
 
 ### Miners ↔ Miners (Indirect)
-Miners do not communicate directly. Trust between miners is mediated by the consensus mechanism:
-- In production mode, a challenge requires 3 independent submissions with majority agreement.
-- In DEV mode (current testnet), a single miner can settle a challenge.
+Miners do not communicate directly. Trust is mediated by consensus:
+- Production: 3 independent submissions with majority agreement.
+- DEV mode (testnet): single miner can settle.
 
-## 2. Attacker Model
+## 2. Challenge Commitment Protocol
 
-### 2.1 Sybil Attacks
-**Threat**: An attacker registers many fake miners to dominate reward distribution.
+### How It Works
+1. **Challenge Creation**: Server generates challenge + expected_answer. Computes:
+   ```
+   salt = random_hex(16)
+   commitment = SHA256(challenge_id || expected_answer || salt)
+   ```
+2. **Challenge Distribution**: Server sends to miners:
+   - `prompt`, `commitment`, `verification_mode`
+   - **NOT** `expected_answer`, `salt`, or `known_answer`
+3. **Miner Submission**: Miner computes answer independently and submits.
+4. **Settlement**: Server reveals `expected_answer` and `salt` in the response.
+5. **Verification**: Miner checks `SHA256(challenge_id + revealed_answer + salt) == commitment`.
 
-**Current mitigations**:
-- Progressive staking (planned): free → 10 CLAW → 100 CLAW as network grows.
-- Cool-start period: new miners receive only 50% rewards for the first 100 epochs.
-- Registration index tracking: early miners get higher multipliers, making late Sybil accounts less profitable.
+### What This Prevents
+- **Post-hoc answer modification**: Server cannot change the correct answer after distributing the challenge, because the commitment would not match.
+- **Selective grading**: For deterministic challenges, the answer is verifiable by anyone.
 
-**Known gaps**: In testnet/DEV mode, there is no staking requirement. Sybil resistance relies on the mining service being the sole registrar.
+### What This Does NOT Prevent (Yet)
+- **Challenge withholding**: Server could refuse to settle or reveal.
+- **Answer quality disputes**: For non-deterministic challenges, "correctness" is still server-judged in single-miner mode.
 
-### 2.2 Collusion
-**Threat**: Multiple miners coordinate to submit identical wrong answers, gaming majority consensus.
+## 3. Attacker Model
 
-**Current mitigations**:
-- Spot checks (10% of challenges): Use known answers as ground truth. Wrong answers on spot checks incur -50 reputation penalty regardless of majority.
-- Reputation system: Miners with reputation below 100 are suspended. Tier 2 challenges require reputation ≥ 600, Tier 3 requires ≥ 800.
-- Consecutive failure detection: 5+ consecutive wrong answers → -500 reputation + suspension.
+### 3.1 Malicious Server
+**Threat**: The server operator modifies answers after distribution to deny rewards.
 
-**Known gaps**: If colluding miners outnumber honest miners on non-spot-check challenges, they can establish a false majority. This is acceptable in testnet but will be addressed with signature-based assignment in mainnet.
+**Mitigations**:
+- Commitment scheme makes post-hoc modification detectable.
+- Deterministic challenges are fully verifiable by miners.
+- `verification_mode` field explicitly tells miners the trust level of each challenge.
 
-### 2.3 Answer Stealing / Front-Running
-**Threat**: A miner observes another miner's submitted answer and copies it.
+**Residual risk**: Server can still selectively withhold challenges or refuse to reveal. This will be addressed by on-chain settlement in mainnet.
 
-**Current mitigations**:
-- Commit-reveal protocol: Miners first submit a SHA256 hash of (answer + random nonce), then reveal the answer and nonce after a delay. The hash must match.
-- The API does not expose raw answers until after the reveal phase.
+### 3.2 Sybil Attacks
+**Threat**: Attacker registers many fake miners to dominate rewards.
 
-**Known gaps**: In DEV mode, direct submission (bypassing commit-reveal) is supported for convenience. The `pending` challenges endpoint exposes submitted answers in the `reveals` field, which could be read by other miners.
+**Mitigations**:
+- **IP rate limiting**: Maximum 3 miners per IP address.
+- **Progressive staking**: Free registration when <1000 miners, 10 CLAW when 1000-5000, 100 CLAW when 5000+.
+- **Cold-start penalty**: New miners receive 50% rewards for first 100 challenges.
+- **Registration index tracking**: Early miners get higher multipliers.
 
-## 3. Signing Boundaries
+**Known gaps**: IP-based limits can be bypassed with proxies/VPNs. True Sybil resistance requires economic staking (mainnet).
 
-### Current (v0.1.0-testnet)
-- **No cryptographic signature verification**: Submissions are identified by miner address string only.
-- Wallet generation uses SHA256 + RIPEMD160 hash simulation (not real secp256k1 key derivation).
-- The mining service trusts that the `miner_address` field in API requests corresponds to the actual wallet holder.
+### 3.3 Collusion
+**Threat**: Multiple miners coordinate identical wrong answers.
 
-### Mainnet Plan
-- Full secp256k1 signature verification on all submissions.
-- Challenge assignments signed by the mining service.
-- On-chain verification of submission signatures via the `x/challenge` Cosmos SDK module.
+**Mitigations**:
+- **Spot checks (10%)**: Use known answers as ground truth. Wrong answers carry heavy penalties.
+- **Reputation system**: Miners below 100 reputation are suspended.
+- **Consecutive failure detection**: 5+ failures → suspension.
+- **Stake slashing**: Wrong answers lead to stake loss (see §5).
 
-## 4. Commit-Reveal Security
+### 3.4 Answer Stealing / Front-Running
+**Threat**: A miner copies another's answer.
 
-### Protocol
-1. **Commit phase**: Miner computes `commit_hash = SHA256(answer + nonce)` and submits it.
-2. **Wait period**: Configurable delay (default: 3 seconds in testnet).
-3. **Reveal phase**: Miner submits the plaintext answer and nonce. Server verifies `SHA256(answer + nonce) == commit_hash`.
+**Mitigations**:
+- **Commit-reveal protocol**: SHA256(answer + nonce) committed before reveal.
+- **Answer not exposed in API**: The `/challenges/pending` endpoint does not include `expected_answer`.
 
-### Anti-Copying Properties
-- Miners cannot derive the answer from the commit hash (SHA256 is one-way).
-- The random nonce prevents dictionary attacks on common answers.
-- Each miner must independently compute their answer before the commit deadline.
+### 3.5 Malicious Miner (Resource Abuse)
+**Threat**: Miner submits garbage/random answers.
 
-### DEV Mode Simplification
-- Direct submission (without commit-reveal) is allowed in DEV mode.
-- Single-miner settlement is allowed (production requires 3 miners).
-- These simplifications are acceptable for testing but reduce security guarantees.
+**Mitigations**:
+- Reputation system with escalating penalties.
+- Spot checks with known answers detect random submissions.
+- Stake slashing removes economic incentive for garbage.
 
-## 5. Reputation and Spot-Check Fairness
+## 4. Staking & Slashing
 
-### Reputation System
-- New miners start at reputation 500 (out of 1000).
-- Correct answers: +5 reputation (normal), +10 (spot check).
-- Wrong answers: -20 reputation (normal), -50 (spot check).
-- Reputation < 100 → miner suspended for 24 hours.
-- 5+ consecutive failures → -500 reputation + immediate suspension.
-- Suspended miners can re-register after 24h cooldown with reputation reset to 200.
+### Progressive Staking
+| Active Miners | Stake Required |
+|--------------|---------------|
+| < 1,000 | 0 CLAW (free) |
+| 1,000 – 5,000 | 10 CLAW |
+| 5,000+ | 100 CLAW |
 
-### Spot Check Design
-- 10% of challenges per epoch are spot checks (challenges with known answers).
-- Spot check challenges are indistinguishable from normal challenges to miners.
-- Wrong answers on spot checks carry heavier penalties to deter random/garbage submissions.
-- The `known_answer` field is used server-side for verification and is not exposed in the API response to miners.
+### Slashing Rules
+| Condition | Penalty |
+|-----------|---------|
+| 3+ consecutive spot-check failures | 10% of staked amount |
+| 5+ consecutive failures (any type) | 50% of staked amount + suspension |
+| Reputation drops below 100 | Suspension (24h cooldown) |
 
-### Fairness Considerations
-- Challenge distribution is open (any active miner can attempt any pending challenge).
-- Reward per challenge is split equally among correct miners.
-- Tier-based access (reputation gates) prevents low-quality miners from attempting high-value challenges.
+### Suspension Recovery
+- After 24h cooldown, miners can re-register.
+- Reputation resets to 200 (not full 500).
+- Slashed stake is NOT returned.
 
-## 6. Known Limitations
+## 5. Reputation System
 
-### Plaintext API
-- All API communication is over HTTP/HTTPS without client authentication (beyond address matching).
-- No mutual TLS or API key authentication for miners.
-- HTTPS is recommended but not enforced. The mining scripts warn on non-localhost HTTP URLs.
+| Event | Reputation Change |
+|-------|------------------|
+| Correct answer (normal) | +5 |
+| Correct answer (spot check) | +10 |
+| Wrong answer (normal) | -20 |
+| Wrong answer (spot check) | -50 |
+| 5+ consecutive failures | -500 |
+| Maximum reputation | 1000 |
+| Starting reputation | 500 |
+| Suspension threshold | < 100 |
 
-### No TLS Certificate Pinning
-- The mining client (`requests` library) uses system CA store for HTTPS verification.
-- No certificate pinning is implemented, making the system vulnerable to MITM attacks with compromised CAs.
+## 6. Miner Isolation
 
-### Single-Server Architecture
-- The mining service runs as a single HTTP server with SQLite storage.
-- No distributed consensus among mining service instances.
-- Single point of failure and single point of trust.
+### Challenge Safety
+- Challenges contain only text prompts. No executable code is ever sent to miners.
+- The mining script (`mine.py`) uses AST-based safe math evaluation — no `eval()` or `exec()`.
+- Local solvers process challenge text with deterministic string/math operations only.
+
+### LLM Privacy
+- In `local_only` mode (default): No challenge data leaves the miner's machine.
+- In `auto`/`llm` modes: Challenge prompt text is sent to external LLM providers.
+- LLM API calls are logged locally in `data/llm_calls.json` for audit.
+
+## 7. Versioning
+
+### Protocol Versioning
+- Server exposes `GET /clawchain/version` with `server_version` and `min_miner_version`.
+- Miner reports `miner_version` during registration.
+- Incompatible miners are rejected at registration time.
+
+### Current Versions
+- Server: 0.2.0
+- Minimum miner: 0.1.0
+- Miner client: 0.2.0
+
+## 8. Network Security
+
+### RPC Communication
+- HTTPS recommended; HTTP warned on non-localhost endpoints.
+- Multi-endpoint fallback supported via `rpc_endpoints` config array.
+- No mutual TLS or API key authentication (testnet limitation).
 
 ### Wallet Security
-- Private keys are stored locally with base64 obfuscation (not encryption) and 600 file permissions.
-- This protects against casual exposure but not against targeted attacks with file system access.
-- Environment variable (`CLAWCHAIN_PRIVATE_KEY`) support allows external secret management.
+- Private keys stored with base64 obfuscation + file permissions 600.
+- Environment variable override (`CLAWCHAIN_PRIVATE_KEY`) for external secret management.
 - **Testnet wallets should never hold significant value.**
 
-### LLM Provider Trust
-- In `auto` and `llm` solver modes, challenge prompt text is sent to external LLM providers (OpenAI, Google, Anthropic).
-- Challenge prompts may contain the full text of the challenge, which could theoretically be logged by the provider.
-- The `local_only` solver mode avoids this by only using local computation.
+## 9. Known Limitations (Testnet)
+
+1. **No cryptographic signature verification** on submissions (address string only).
+2. **Single-server architecture** — single point of trust/failure.
+3. **DEV mode simplifications** — single-miner settlement, direct submit allowed.
+4. **Non-deterministic challenges** still require server trust in single-miner mode.
+5. **IP-based anti-Sybil** is bypassable with proxies.
+
+### Mainnet Roadmap
+- Full secp256k1 signature verification.
+- On-chain challenge commitment and settlement.
+- Multi-validator consensus for non-deterministic challenges.
+- Economic staking with on-chain enforcement.
+- Decentralized challenge generation.
 
 ---
 
-*Last updated: 2026-03-20 (v0.1.0-testnet)*
+*Last updated: 2026-03-20 (v0.2.0-testnet)*

@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS miners (
     status TEXT DEFAULT 'active',
     suspended_at TIMESTAMP,
     faucet_claimed INTEGER DEFAULT 0,
+    staked_amount INTEGER DEFAULT 0,
+    staked_at TIMESTAMP,
+    ip_address TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -36,6 +39,8 @@ CREATE TABLE IF NOT EXISTS challenges (
     status TEXT DEFAULT 'pending',
     is_spot_check INTEGER DEFAULT 0,
     known_answer TEXT,
+    salt TEXT,
+    commitment TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -84,6 +89,23 @@ def init_db(db_path=None):
     db.executescript(SCHEMA)
     db.commit()
     return db
+
+
+def migrate_db(db):
+    """Add columns introduced after v0.1.0 (idempotent)."""
+    migrations = [
+        ("challenges", "salt", "ALTER TABLE challenges ADD COLUMN salt TEXT"),
+        ("challenges", "commitment", "ALTER TABLE challenges ADD COLUMN commitment TEXT"),
+        ("miners", "staked_amount", "ALTER TABLE miners ADD COLUMN staked_amount INTEGER DEFAULT 0"),
+        ("miners", "staked_at", "ALTER TABLE miners ADD COLUMN staked_at TIMESTAMP"),
+        ("miners", "ip_address", "ALTER TABLE miners ADD COLUMN ip_address TEXT"),
+    ]
+    for table, col, sql in migrations:
+        try:
+            db.execute(f"SELECT {col} FROM {table} LIMIT 1")
+        except Exception:
+            db.execute(sql)
+    db.commit()
 
 
 def get_global(db, key, default=None):

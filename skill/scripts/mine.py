@@ -24,10 +24,13 @@ except ImportError:
     print("❌ Required: pip install requests")
     sys.exit(1)
 
+MINER_VERSION = "0.2.0"
+
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 DATA_DIR = SCRIPT_DIR.parent / "data"
 LOG_PATH = DATA_DIR / "mining_log.json"
+LLM_LOG_PATH = DATA_DIR / "llm_calls.json"
 
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -56,6 +59,34 @@ def load_config():
     return config
 
 
+def resolve_rpc_url(config):
+    """Resolve working RPC URL with fallback support.
+
+    Supports:
+      - config["rpc_url"] (single endpoint, backward compat)
+      - config["rpc_endpoints"] (array of endpoints with auto-fallback)
+    """
+    endpoints = config.get("rpc_endpoints", [])
+    if not endpoints:
+        # Backward compat: single rpc_url
+        return config["rpc_url"]
+
+    for ep in endpoints:
+        url = ep if isinstance(ep, str) else ep.get("url", "")
+        if not url:
+            continue
+        try:
+            resp = requests.get(f"{url}/clawchain/stats", timeout=5)
+            if resp.status_code == 200:
+                return url
+        except Exception:
+            continue
+
+    # All endpoints failed, fall back to primary rpc_url
+    print("⚠️ All RPC endpoints unreachable, using primary rpc_url")
+    return config["rpc_url"]
+
+
 def warn_insecure_rpc(url):
     """Warn if RPC URL uses plain HTTP on a non-localhost endpoint."""
     parsed = urlparse(url)
@@ -64,6 +95,57 @@ def warn_insecure_rpc(url):
 
 
 # ─── Chain API ───
+
+def verify_commitment(challenge_id, revealed_answer, salt, commitment):
+    """Verify server commitment: H(challenge_id || expected_answer || salt) == commitment"""
+    if not commitment or not salt:
+        return None  # No commitment to verify
+    payload = f"{challenge_id}{revealed_answer}{salt}"
+    computed = hashlib.sha256(payload.encode()).hexdigest()
+    return computed == commitment
+
+
+def check_server_version(rpc_url):
+    """Check server version compatibility"""
+    try:
+        resp = requests.get(f"{rpc_url}/clawchain/version", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            min_ver = data.get("min_miner_version", "0.0.0")
+            if MINER_VERSION < min_ver:
+                print(f"⚠️ Miner version {MINER_VERSION} is below server minimum {min_ver}. Please upgrade.")
+                return False
+            return True
+    except Exception:
+        pass
+    return True  # Don't block mining if version check fails
+
+
+def log_llm_call(provider, model, prompt_preview, success):
+    """Log LLM API calls for audit"""
+    logs = []
+    if LLM_LOG_PATH.exists():
+        try:
+            with open(LLM_LOG_PATH) as f:
+                logs = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            logs = []
+
+    logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "provider": provider,
+        "model": model,
+        "prompt_preview": prompt_preview[:80],
+        "success": success,
+    })
+
+    # Keep last 500 entries
+    if len(logs) > 500:
+        logs = logs[-500:]
+
+    with open(LLM_LOG_PATH, "w") as f:
+        json.dump(logs, f, indent=2, ensure_ascii=False)
+
 
 def check_miner_registered(rpc_url, address):
     """Check if miner is registered"""
@@ -80,7 +162,7 @@ def auto_register(rpc_url, address, name):
         resp = requests.post(
             f"{rpc_url}/clawchain/miner/register",
             headers={"Content-Type": "application/json"},
-            json={"address": address, "name": name},
+            json={"address": address, "name": name, "miner_version": MINER_VERSION},
             timeout=10
         )
         if resp.status_code == 409:
@@ -437,15 +519,20 @@ def solve_with_llm(prompt, challenge_type, config):
             print("⚠️ No LLM API key found (OPENAI_API_KEY/GEMINI_API_KEY/ANTHROPIC_API_KEY)")
             return None
 
+    result = None
     if provider == "openai":
-        return _call_openai(prompt, system_prompt, model or "gpt-4o-mini")
+        result = _call_openai(prompt, system_prompt, model or "gpt-4o-mini")
     elif provider == "anthropic":
-        return _call_anthropic(prompt, system_prompt, model or "claude-3-5-haiku-latest")
+        result = _call_anthropic(prompt, system_prompt, model or "claude-3-5-haiku-latest")
     elif provider == "gemini":
-        return _call_gemini(prompt, system_prompt, model or "gemini-2.0-flash")
+        result = _call_gemini(prompt, system_prompt, model or "gemini-2.0-flash")
     else:
         print(f"⚠️ Unsupported LLM provider: {provider}")
         return None
+
+    # Log LLM call for audit
+    log_llm_call(provider, model, prompt, result is not None)
+    return result
 
 
 def _call_openai(prompt, system_prompt, model):
@@ -630,7 +717,7 @@ def main():
     args = parser.parse_args()
 
     config = load_config()
-    rpc_url = config["rpc_url"]
+    rpc_url = resolve_rpc_url(config)
     warn_insecure_rpc(rpc_url)
 
     miner_addr = config.get("miner_address", "")
@@ -640,6 +727,12 @@ def main():
 
     if not miner_addr:
         print("❌ Miner address not configured. Run first: python3 scripts/setup.py")
+        sys.exit(1)
+
+    # Version check
+    print(f"🔧 Miner version: {MINER_VERSION}")
+    if not check_server_version(rpc_url):
+        print("❌ Miner version incompatible. Please upgrade.")
         sys.exit(1)
 
     # Check registration
@@ -724,6 +817,22 @@ def main():
                 required = result.get("required_submissions", 3)
                 print(f"   ✅ Submitted ({count}/{required}) Status: {status}")
                 solved += 1
+
+                # Verify commitment if settlement happened
+                verification = result.get("verification")
+                if verification:
+                    mode = verification.get("verification_mode", "unknown")
+                    commitment = verification.get("commitment", "")
+                    revealed = verification.get("revealed_answer", "")
+                    salt = verification.get("salt", "")
+                    if commitment and salt:
+                        valid = verify_commitment(cid, revealed, salt, commitment)
+                        if valid:
+                            print(f"   🔒 Commitment verified ✓ (mode: {mode})")
+                        elif valid is False:
+                            print(f"   ⚠️ COMMITMENT VERIFICATION FAILED! Server may be dishonest.")
+                    else:
+                        print(f"   ℹ️ Verification mode: {mode}")
             else:
                 print("   ❌ Submission failed")
                 failed += 1

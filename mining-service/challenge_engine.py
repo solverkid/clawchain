@@ -6,6 +6,7 @@ ClawChain Mining Service — 挑战生成引擎
 import hashlib
 import json
 import random
+import secrets
 from datetime import datetime
 
 # ─── 挑战类型 & 难度 ───
@@ -85,6 +86,19 @@ CLASSIFICATION_POOL = [
     ("顶级歌手演唱会门票秒光", "娱乐"),
     ("G20峰会在京召开，讨论全球经济", "政治"),
 ]
+
+
+# Challenge types that have a single deterministic correct answer
+DETERMINISTIC_TYPES = {"math", "logic", "hash", "text_transform", "json_extract", "format_convert"}
+
+# Challenge types that require subjective judgment (non-deterministic)
+NON_DETERMINISTIC_TYPES = {"sentiment", "classification", "translation", "text_summary", "entity_extraction"}
+
+
+def compute_commitment(challenge_id: str, expected_answer: str, salt: str) -> str:
+    """Compute SHA256 commitment: H(challenge_id || expected_answer || salt)"""
+    payload = f"{challenge_id}{expected_answer}{salt}"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def calc_num_challenges(active_miners: int) -> int:
@@ -210,8 +224,12 @@ def generate_challenges(epoch: int, active_miners: int, seed: int = None):
         elif is_spot_check and not expected:
             is_spot_check = False
 
+        ch_id = f"ch-{epoch}-{idx}"
+        salt = secrets.token_hex(16)
+        commitment = compute_commitment(ch_id, expected, salt) if expected else ""
+
         ch = {
-            "id": f"ch-{epoch}-{idx}",
+            "id": ch_id,
             "epoch": epoch,
             "type": ctype,
             "tier": tier,
@@ -220,6 +238,8 @@ def generate_challenges(epoch: int, active_miners: int, seed: int = None):
             "status": "pending",
             "is_spot_check": is_spot_check,
             "known_answer": known_answer,
+            "salt": salt,
+            "commitment": commitment,
             "created_at": datetime.utcnow().isoformat(),
         }
         challenges.append(ch)
