@@ -150,6 +150,7 @@ Set one of: `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`
 
 - **Total supply**: 21,000,000 CLAW (hard cap)
 - **Distribution**: 100% mining (zero pre-mine, zero team allocation)
+- **Daily output**: 7,200 CLAW (50 CLAW × 144 epochs/day)
 - **Halving**: Every ~4 years (210,000 epochs)
 - **Fair launch**: Every single CLAW is mined, not printed
 
