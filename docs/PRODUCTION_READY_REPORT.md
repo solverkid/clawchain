@@ -157,9 +157,8 @@ bash scripts/testnet.sh
 
 ### 2. 启动矿工客户端
 ```bash
-cd miner
-go build -o clawminer ./cmd/clawminer
-./clawminer mine --node http://localhost:26657 --address claw1...
+python3 scripts/setup.py   # 首次：生成钱包、注册矿工
+python3 scripts/mine.py    # 开始挖矿
 ```
 
 ### 3. 官网本地预览

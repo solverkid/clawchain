@@ -32,3 +32,4 @@ coverage.txt
 # Logs
 *.log
 data/
+__pycache__/

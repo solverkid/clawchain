@@ -38,12 +38,12 @@
 ## 3. 经济模型
 
 ### 3.1 当前状态
-- **奖励池有限**：创世 mint 了 1,000,000,000 uclaw（1000 CLAW）到 challenge 模块账户
+- **奖励池有限**：当前测试网创世 mint 了 1,000,000,000 uclaw（1,000 CLAW）到 challenge 模块账户（仅供测试，主网按 50 CLAW/epoch 减半曲线释放）
 - **质押未链上执行**：`min_stake` 参数存在但质押通过链下记录，未真正锁定代币
 - **无 Slash 实际执行**：Slash 逻辑写在代码中但不通过 bankKeeper 真正扣款
 
 ### 3.2 主网前必须解决
-- [ ] 奖励池应为 21,000,000 CLAW（100% Fair Launch，全部通过挖矿分发）
+- [ ] 主网奖励通过 50 CLAW/epoch 减半曲线释放（100% Fair Launch，21,000,000 CLAW 全部通过挖矿分发）
 - [ ] 质押需要通过 staking 模块真正锁定代币
 - [ ] Slash 需要通过 bankKeeper.SendCoinsFromModuleToModule 执行
 - [ ] 解质押冷却期（7天）需要通过队列实际管理

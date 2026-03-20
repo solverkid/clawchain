@@ -26,7 +26,16 @@ clawchain/
 
 ## 🚀 Quick Start
 
-### Option 1: Run Testnet + Mine (Full Stack)
+### 快速挖矿（推荐）
+
+```bash
+git clone https://github.com/0xVeryBigOrange/clawchain.git
+cd clawchain
+python3 scripts/setup.py    # 自动生成钱包、注册矿工
+python3 scripts/mine.py     # 开始挖矿
+```
+
+### 开发者完整搭建
 
 ```bash
 # 1. Clone repo
@@ -48,14 +57,10 @@ go build -o build/clawchaind ./cmd/clawchaind
 ./build/clawchaind start
 
 # 6. (In new terminal) Start miner
-cd miner
-go build -o clawminer ./cmd/clawminer
-./clawminer start --config config.toml
+python3 scripts/mine.py
 ```
 
-### Option 2: Component-Specific Setup
-
-Choose your path:
+### Component-Specific Setup
 
 - **[Blockchain Development](./chain/README.md)** - Build and run ClawChain node
 - **[Mining Client](./miner/README.md)** - Setup mining agent
@@ -105,16 +110,17 @@ Choose your path:
 
 ## 📝 Current Status
 
-**Phase 5**: Multi-Miner + Extended Challenges ✅
-- Public challenge generation (every 10 blocks)
-- Multiple challenge types (math, text, logic, JSON, hash)
-- Multi-miner competition support
+**Phase 6**: Token Economy & Fair Launch ✅
+- 100% mining allocation (21,000,000 CLAW, zero pre-mine)
+- 50 CLAW/epoch → 100% to miners
+- Halving every 210,000 epochs (~4 years)
+- Public challenge generation with 7 task types
 - REST API for mining operations
 
-**Next**: Phase 6 - Token Economy
-- On-chain reward distribution
-- Staking mechanism
-- Reputation-based mining
+**Next**: Phase 7 - Enhanced Incentives
+- Early bird multiplier (3x for first 1,000 miners)
+- Daily check-in bonus
+- Task difficulty tiers
 
 ---
 
@@ -126,29 +132,28 @@ See individual component READMEs for development setup.
 
 ## 📄 License
 
-TBD
+Apache 2.0
 
 ---
 
 **Quick Commands Cheatsheet:**
 
 ```bash
-# Chain operations
+# Mining (recommended)
+python3 scripts/setup.py              # Setup wallet & register
+python3 scripts/mine.py               # Start mining
+python3 scripts/status.py             # Check status
+
+# Chain operations (developers)
 ./build/clawchaind init <node-name> --chain-id clawchain-testnet-1
 ./build/clawchaind keys add <key-name>
 ./build/clawchaind start
 
 # Development
 go build -o build/clawchaind ./cmd/clawchaind
-cd miner && go build -o clawminer ./cmd/clawminer
 
 # Query chain
 curl http://localhost:1317/cosmos/base/tendermint/v1beta1/node_info
 curl http://localhost:1317/clawchain/challenges/pending
 curl http://localhost:1317/clawchain/miner/{address}
-
-# Submit challenge answer
-curl -X POST http://localhost:1317/clawchain/challenge/submit \
-  -H "Content-Type: application/json" \
-  -d '{"challenge_id":"ch-10-0","miner_address":"claw1...","answer":"1245"}'
 ```
