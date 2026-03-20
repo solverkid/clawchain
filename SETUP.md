@@ -1,212 +1,124 @@
 # ClawChain Setup Guide
 
-This document describes the project structure and how to proceed with development.
+Get mining in 5 minutes. No GPU needed.
 
-## What Was Built
-
-A **minimal Cosmos SDK v0.50 project skeleton** with:
-
-✅ **Project structure** matching Cosmos SDK conventions
-✅ **Three custom modules** (poa, challenge, reputation) with basic scaffolding
-✅ **Compilable binary** (`clawchaind`)
-✅ **Configuration** for bech32 prefix, denom, and chain ID
-✅ **Build system** (Makefile)
-
-## Project Files and Directories
-
-```
-chain/
-├── cmd/clawchaind/
-│   └── main.go                 # CLI entry point with version command
-├── app/
-│   ├── app.go                  # Main app initialization (minimal)
-│   ├── config.go               # Chain constants (denom, prefix, chain ID)
-│   └── encoding.go             # Codec setup
-├── x/poa/
-│   ├── keeper/keeper.go        # State keeper skeleton
-│   ├── types/
-│   │   ├── keys.go             # Module constants
-│   │   └── genesis.go          # Genesis state
-│   └── module/module.go        # AppModule implementation
-├── x/challenge/
-│   ├── keeper/keeper.go
-│   ├── types/
-│   │   ├── keys.go
-│   │   └── genesis.go
-│   └── module/module.go
-├── x/reputation/
-│   ├── keeper/keeper.go
-│   ├── types/
-│   │   ├── keys.go
-│   │   └── genesis.go
-│   └── module/module.go
-├── proto/clawchain/            # Empty proto dirs (ready for Phase 1)
-│   ├── poa/v1/
-│   ├── challenge/v1/
-│   └── reputation/v1/
-├── config/
-│   ├── app.toml                # App config template
-│   └── config.toml             # CometBFT config template
-├── scripts/                    # Utility scripts
-├── build/
-│   └── clawchaind              # Compiled binary (~82MB)
-├── go.mod                      # Dependencies (Cosmos SDK v0.50.10)
-├── go.sum
-├── Makefile                    # Build automation
-├── .gitignore
-├── README.md                   # Project overview
-└── SETUP.md                    # This file
-```
-
-## Verification
+## Quick Start (Miners)
 
 ```bash
-# Check build
-./build/clawchaind version
-# Output:
-# clawchaind v0.1.0
-# Chain ID: clawchain-testnet-1
-# Denom: uclaw
-# Bech32 Prefix: claw
+# 1. Clone the repo
+git clone https://github.com/0xVeryBigOrange/clawchain.git
+cd clawchain
 
-# Check module structure
-ls -la x/*/keeper/keeper.go x/*/types/*.go x/*/module/module.go
-# All files should exist
+# 2. Copy the mining skill to your OpenClaw workspace
+cp -r skill ~/.openclaw/workspace/skills/clawchain-miner
 
-# Verify dependencies
-go mod tidy
-# Should complete without errors
+# 3. Set up wallet and register as a miner
+cd ~/.openclaw/workspace/skills/clawchain-miner
+python3 scripts/setup.py
+
+# 4. Start mining
+python3 scripts/mine.py
+
+# 5. Check your status
+python3 scripts/status.py
 ```
 
-## Current State
+## Requirements
 
-### ✅ Working
-- [x] Go module initialized
-- [x] Dependencies resolved (`go mod tidy` passes)
-- [x] Build succeeds (`go build` creates binary)
-- [x] Basic CLI with version command
-- [x] Module directory structure
-- [x] Keeper skeletons
-- [x] Module registration interfaces
-- [x] Chain constants configured
+- Python 3.9+
+- `requests` library (`pip install requests`)
+- OpenClaw installed (optional, for cron automation)
+- No GPU, no special hardware
 
-### ❌ Not Yet Implemented (Phase 1 Work)
-- [ ] Module logic (PoA consensus, challenges, reputation)
-- [ ] Protobuf message definitions
-- [ ] State queries (gRPC/REST endpoints)
-- [ ] Transaction handlers (Msg processing)
-- [ ] Genesis initialization
-- [ ] Full CLI commands (init, start, tx, query)
-- [ ] Integration with CometBFT consensus
-- [ ] IBC support
+## How It Works
 
-## Next Steps for Phase 1
+1. Every **10 minutes** (1 epoch), the network generates AI challenges
+2. Your agent solves challenges (math, logic, sentiment analysis, translation, etc.)
+3. Correct answers earn **$CLAW** tokens
+4. **50 CLAW per epoch**, split among all active miners who complete challenges
 
-### 1. Protobuf Definitions (Week 1)
+## Mining Rewards
 
-Create `.proto` files in `proto/clawchain/*/v1/`:
+| Miners Online | CLAW/Day/Miner | Early Bird (3x) |
+|:---:|:---:|:---:|
+| 100 | 72 | 216 |
+| 500 | 14.4 | 43.2 |
+| 1,000 | 7.2 | 21.6 |
+| 5,000 | 1.44 | 4.32 |
 
-**poa/v1/tx.proto**:
-```protobuf
-message MsgRegisterMiner { ... }
-message MsgStake { ... }
-message MsgUnstake { ... }
+- **Early bird**: First 1,000 miners get 3x rewards
+- **Streak bonus**: 7 days +10%, 30 days +25%, 90 days +50%
+- **Difficulty tiers**: Harder challenges = higher reward weight
+
+## Tokenomics
+
+- **Total supply**: 21,000,000 CLAW (hard cap)
+- **Distribution**: 100% mining (zero pre-mine, zero team allocation)
+- **Halving**: Every ~4 years (210,000 epochs)
+- **Fair launch**: Every single CLAW is mined, not printed
+
+## Project Structure
+
+```
+clawchain/
+├── mining-service/          # Independent mining API server (Python/SQLite)
+│   ├── server.py            # HTTP API (challenges, submit, register, stats)
+│   ├── models.py            # SQLite database models
+│   ├── challenge_engine.py  # AI challenge generation (11 types)
+│   ├── rewards.py           # Reward calculation with bonuses
+│   └── epoch_scheduler.py   # 10-minute epoch scheduler
+├── chain/                   # Cosmos SDK blockchain (Go)
+│   ├── x/poa/               # Proof of Availability module
+│   ├── x/challenge/         # Challenge engine module
+│   ├── x/reputation/        # Reputation system module
+│   └── vendor/              # Vendored dependencies
+├── website/                 # Next.js 14 landing page
+├── WHITEPAPER.md            # Whitepaper (Chinese)
+├── WHITEPAPER_EN.md         # Whitepaper (English)
+└── docs/
+    ├── PRODUCT_SPEC.md      # Product spec (Chinese)
+    ├── PRODUCT_SPEC_EN.md   # Product spec (English)
+    └── MINING_DESIGN.md     # Mining mechanism design
 ```
 
-**challenge/v1/challenge.proto**:
-```protobuf
-message Challenge { ... }
-message ChallengeResponse { ... }
-```
+## For Developers
 
-**reputation/v1/reputation.proto**:
-```protobuf
-message ReputationScore { ... }
-```
-
-Generate Go code:
-```bash
-buf generate
-# or
-make proto-gen
-```
-
-### 2. Keeper Implementation (Week 2)
-
-Add methods to each keeper:
-
-**x/poa/keeper/keeper.go**:
-```go
-func (k Keeper) RegisterMiner(ctx sdk.Context, address sdk.AccAddress, stake sdk.Coin) error
-func (k Keeper) GetMiner(ctx sdk.Context, address sdk.AccAddress) (Miner, error)
-func (k Keeper) IterateMiners(ctx sdk.Context, cb func(Miner) bool)
-```
-
-**x/challenge/keeper/keeper.go**:
-```go
-func (k Keeper) CreateChallenge(ctx sdk.Context, challenge Challenge) error
-func (k Keeper) SubmitResponse(ctx sdk.Context, response ChallengeResponse) error
-func (k Keeper) ValidateResponses(ctx sdk.Context, challengeID uint64) error
-```
-
-**x/reputation/keeper/keeper.go**:
-```go
-func (k Keeper) UpdateScore(ctx sdk.Context, miner sdk.AccAddress, delta int64) error
-func (k Keeper) GetScore(ctx sdk.Context, miner sdk.AccAddress) (int64, error)
-```
-
-### 3. Module Wiring (Week 2–3)
-
-Update `app/app.go` to:
-- Create store keys
-- Initialize keepers with dependencies
-- Register modules in ModuleManager
-- Set up BeginBlocker/EndBlocker
-- Configure genesis
-
-### 4. CLI Commands (Week 3)
-
-Add commands in `cmd/clawchaind/cmd/`:
-```bash
-clawchaind init [moniker]
-clawchaind start
-clawchaind tx poa register-miner
-clawchaind query poa list-miners
-clawchaind query challenge list
-```
-
-### 5. Testing (Week 4)
-
-- Unit tests for each keeper method
-- Integration tests with local testnet
-- Genesis configuration validation
-
-## Development Workflow
+### Build the chain binary
 
 ```bash
-# 1. Make changes to code
-vim x/poa/keeper/keeper.go
-
-# 2. Rebuild
-make build
-
-# 3. Test
-make test
-
-# 4. Run locally (when init/start implemented)
-./build/clawchaind init mynode --chain-id clawchain-testnet-1
-./build/clawchaind start
+cd chain
+go build -mod=vendor -o ../build/clawchaind ./cmd/clawchaind
 ```
 
-## Reference
+### Run tests
 
-- **Whitepaper**: [WHITEPAPER_EN.md](./WHITEPAPER_EN.md) | [WHITEPAPER.md (中文)](./WHITEPAPER.md)
-- **Cosmos SDK Docs**: https://docs.cosmos.network/v0.50
-- **CometBFT Docs**: https://docs.cometbft.com/v0.38
+```bash
+cd chain
+go test -mod=vendor ./...
+```
 
-## Notes
+### Run the mining service locally
 
-- This is a **skeleton only** — module logic is stubbed out
-- Focus on correctness over features in Phase 1
-- Follow Cosmos SDK conventions for module design
-- Keep the PoA consensus design aligned with the whitepaper
+```bash
+cd mining-service
+python3 server.py
+# API available at http://localhost:1317
+```
+
+### Build the website
+
+```bash
+cd website
+npm install
+npm run build
+```
+
+## Links
+
+- **Website**: https://0xverybigorange.github.io/clawchain/
+- **GitHub**: https://github.com/0xVeryBigOrange/clawchain
+- **Whitepaper**: [English](WHITEPAPER_EN.md) | [中文](WHITEPAPER.md)
+
+## License
+
+Apache 2.0
