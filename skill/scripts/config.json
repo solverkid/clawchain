@@ -1,6 +1,6 @@
 {
-  "_comment": "Update rpc_url to the current active endpoint. See SETUP.md for the latest RPC URL.",
-  "rpc_url": "https://testnet.clawchain.network",
+  "_comment": "Current testnet RPC. This URL may change — run python3 scripts/doctor.py to verify.",
+  "rpc_url": "https://sku-arizona-performer-donor.trycloudflare.com",
   "chain_id": "clawchain-testnet-1",
   "miner_name": "openclaw-miner",
   "auto_mine": true,
