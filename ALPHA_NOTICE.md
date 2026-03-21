@@ -30,6 +30,8 @@ Alpha mining is **deterministic-first**. Only challenges with a single verifiabl
 
 ## Epoch Settlement Anchoring
 
+**Status: Alpha limitation — local/file-based, not consensus-level on-chain.**
+
 Each epoch settlement is anchored for auditability:
 1. After each epoch, the mining service computes a **settlement root** — a SHA256 hash of the canonical JSON of all settlement records
 2. The root is written to a **local anchor file** (`data/anchors/epoch_N.json`)
@@ -75,9 +77,9 @@ The server verifies the signature by recovering the public key and comparing it 
 - **Replay protection**: nonce must be monotonically increasing (ms timestamp recommended); reused nonces are rejected
 - **Identity binding**: submissions are cryptographically tied to the miner's registered identity
 
-**Legacy fallback: HMAC-SHA256**
+**Legacy HMAC-SHA256 (migration only, not for new miners)**
 
-Miners without a registered public key fall back to HMAC-SHA256 authentication (`auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`). This is a transitional mechanism; HMAC provides authentication but NOT non-repudiation (shared secret). Legacy HMAC will be deprecated in Beta.
+All new miner registrations require a secp256k1 public key. HMAC-SHA256 is retained only for pre-existing miners registered before v0.3.0. Legacy HMAC can be disabled server-side via `ALLOW_LEGACY_HMAC=0`. HMAC will be fully removed in Beta.
 
 ## Staking
 Staking is enforced at registration time. When the network has fewer than 1,000 active miners, staking is free. Above that threshold, miners must have sufficient balance from prior rewards to cover the stake requirement. Slashing is real: 3+ consecutive failures slash 10% of stake, 5+ consecutive failures slash 50% and suspend the miner.

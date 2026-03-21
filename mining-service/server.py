@@ -43,11 +43,15 @@ from epoch_scheduler import start_scheduler, get_current_epoch, run_epoch_tick
 
 # ─── 配置 ───
 
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 MIN_MINER_VERSION = "0.1.0"
 DEFAULT_PORT = 1317
 MAX_MINERS_PER_IP = 3
 DEV_MODE = os.getenv("CLAWCHAIN_DEV_MODE", os.getenv("CLAWCHAIN_DEV", "0")) == "1"
+# Legacy HMAC auth: disabled by default. Only existing miners registered before v0.3.0
+# can still use HMAC. New registrations always require secp256k1 public_key.
+# Set ALLOW_LEGACY_HMAC=1 to accept HMAC submissions from pre-existing miners.
+ALLOW_LEGACY_HMAC = os.getenv("ALLOW_LEGACY_HMAC", "1") == "1"
 REQUIRED_SUBMISSIONS = 1 if DEV_MODE else 3
 MIN_MAJORITY = 1 if DEV_MODE else 2
 FAUCET_AMOUNT = 200_000_000  # 200 CLAW in uclaw
@@ -267,11 +271,19 @@ class MiningHandler(BaseHTTPRequestHandler):
             return
 
         else:
-            # LEGACY FALLBACK: HMAC-based auth (for miners without public_key)
+            # LEGACY FALLBACK: HMAC-based auth (pre-v0.3.0 miners without public_key)
+            if not ALLOW_LEGACY_HMAC:
+                self._error(
+                    "secp256k1 signature required: legacy HMAC auth is disabled. "
+                    "Re-register with a secp256k1 public key.",
+                    403,
+                )
+                return
+
             stored_secret = miner["auth_secret"] if "auth_secret" in miner.keys() else None
             if stored_secret:
                 if not auth_token:
-                    self._error("auth_token required for authenticated miners (upgrade to secp256k1 recommended)", 403)
+                    self._error("auth_token required (legacy HMAC). Upgrade to secp256k1 recommended.", 403)
                     return
                 expected_token = hmac_mod.new(
                     stored_secret.encode(), f"{ch_id}|{answer}".encode(), "sha256"
@@ -279,11 +291,15 @@ class MiningHandler(BaseHTTPRequestHandler):
                 if not hmac_mod.compare_digest(auth_token, expected_token):
                     self._error("invalid auth_token", 403)
                     return
-                logger.info(f"Miner {miner_addr} using legacy HMAC auth (secp256k1 upgrade recommended)")
+                logger.warning(f"Miner {miner_addr} using DEPRECATED legacy HMAC auth (upgrade to secp256k1)")
             elif auth_token:
                 pass
             else:
-                logger.warning(f"Miner {miner_addr} submitted without any auth (legacy client)")
+                self._error(
+                    "no authentication provided: secp256k1 signature or legacy HMAC required",
+                    403,
+                )
+                return
 
         # 检查挑战
         ch = db.execute("SELECT * FROM challenges WHERE id=?", (ch_id,)).fetchone()
@@ -617,7 +633,15 @@ class MiningHandler(BaseHTTPRequestHandler):
                 return
             staked_amount = stake_required
 
-        # Validate public_key format and address binding if provided
+        # public_key is REQUIRED for all new registrations (v0.3.0+)
+        if not public_key:
+            self._error(
+                "public_key is required: all new miners must register a secp256k1 public key. "
+                "See docs/protocol-spec.md for the signing specification.",
+                400,
+            )
+            return
+
         if public_key:
             try:
                 pk_hex = public_key.removeprefix("0x")
@@ -1049,6 +1073,7 @@ def main():
     logger.info(f"Database initialized: {DB_PATH}")
     logger.info(f"DEV mode: {DEV_MODE} (CLAWCHAIN_DEV_MODE={os.getenv('CLAWCHAIN_DEV_MODE', 'unset')})")
     logger.info(f"Faucet: {'ENABLED (dev-only)' if DEV_MODE else 'DISABLED (production)'}")
+    logger.info(f"Auth: secp256k1 required for new miners | Legacy HMAC: {'ALLOWED (migration)' if ALLOW_LEGACY_HMAC else 'DISABLED'}")
     logger.info(f"Required submissions: {REQUIRED_SUBMISSIONS}")
 
     # 启动 epoch 调度器

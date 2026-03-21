@@ -71,7 +71,7 @@ POST /clawchain/challenge/submit
 - `nonce` must be monotonically increasing (ms timestamp recommended); replayed nonces are rejected (HTTP 403)
 - Miners with a registered public key MUST sign; unsigned submissions are rejected
 
-**HMAC Authentication (Legacy Fallback)**: Miners without a registered `public_key` fall back to `auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`. HMAC provides authentication but not non-repudiation. This fallback will be deprecated in Beta.
+**HMAC Authentication (Legacy, migration-only)**: Pre-existing miners (registered before v0.3.0) without a `public_key` may fall back to `auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`. **New registrations require secp256k1.** HMAC can be disabled server-side (`ALLOW_LEGACY_HMAC=0`). Will be fully removed in Beta.
 
 Server compares the submitted answer with `expected_answer`.
 

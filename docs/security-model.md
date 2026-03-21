@@ -209,9 +209,9 @@ As of v0.3.0, miners register a secp256k1 public key and sign every submission:
 
 This provides **non-repudiation** — unlike HMAC, the server cannot forge submissions on behalf of a miner.
 
-### Legacy Fallback: HMAC-SHA256
+### Legacy HMAC-SHA256 (migration-only, not for new miners)
 
-Miners without a registered `public_key` fall back to HMAC-SHA256 (`auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`). HMAC is a symmetric shared secret — it proves the submitter knows the secret but does NOT provide non-repudiation. HMAC fallback will be deprecated in Beta.
+Pre-existing miners (registered before v0.3.0) without a `public_key` may still use `auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`. **All new registrations require secp256k1.** HMAC is a symmetric shared secret — it proves the submitter knows the secret but does NOT provide non-repudiation. Server-side flag `ALLOW_LEGACY_HMAC` controls whether HMAC submissions are accepted (default: enabled for migration; Beta removes entirely).
 
 ## 11. Staking Enforcement
 
