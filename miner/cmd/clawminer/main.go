@@ -46,14 +46,15 @@ AI Agent 通过完成链上微任务（文本摘要、情感分析、数学计�
 	}
 
 	// 全局参数
-	rootCmd.PersistentFlags().StringVar(&cfg.NodeRPC, "node", cfg.NodeRPC, "ClawChain 节点 RPC 地址")
-	rootCmd.PersistentFlags().StringVar(&cfg.ChainID, "chain-id", cfg.ChainID, "链 ID")
-	rootCmd.PersistentFlags().StringVar(&cfg.KeyName, "key", cfg.KeyName, "矿工密钥名")
-	rootCmd.PersistentFlags().StringVar(&cfg.KeyringDir, "keyring-dir", cfg.KeyringDir, "密钥存储目录")
-	rootCmd.PersistentFlags().StringVar(&cfg.LLMEndpoint, "llm-endpoint", cfg.LLMEndpoint, "LLM API 端点")
-	rootCmd.PersistentFlags().StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API 密钥")
-	rootCmd.PersistentFlags().StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM 模型名称")
-	rootCmd.PersistentFlags().StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "日志级别 (debug/info/warn/error)")
+	rootCmd.PersistentFlags().StringVar(&cfg.NodeRPC, "node", cfg.NodeRPC, "ClawChain node RPC address")
+	rootCmd.PersistentFlags().StringVar(&cfg.ChainID, "chain-id", cfg.ChainID, "Chain ID")
+	rootCmd.PersistentFlags().StringVar(&cfg.KeyName, "key", cfg.KeyName, "Miner key name")
+	rootCmd.PersistentFlags().StringVar(&cfg.KeyringDir, "keyring-dir", cfg.KeyringDir, "Keyring directory")
+	rootCmd.PersistentFlags().StringVar(&cfg.ChainBinary, "chain-binary", cfg.ChainBinary, "clawchaind binary path")
+	rootCmd.PersistentFlags().StringVar(&cfg.LLMEndpoint, "llm-endpoint", cfg.LLMEndpoint, "LLM API endpoint")
+	rootCmd.PersistentFlags().StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
+	rootCmd.PersistentFlags().StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	rootCmd.PersistentFlags().StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level (debug/info/warn/error)")
 
 	// 子命令
 	rootCmd.AddCommand(
@@ -106,13 +107,17 @@ func startCmd(cfg *config.Config) *cobra.Command {
 				"llm_model", cfg.LLMModel,
 			)
 
-			// 创建各组件
+			// Create components
 			chainClient := client.NewChainClient(cfg, logger)
 			llmClient := solver.NewLLMClient(cfg.LLMEndpoint, cfg.LLMAPIKey, cfg.LLMModel, logger)
 			slv := solver.NewSolver(llmClient, logger)
 
-			// TODO: 从 keyring 加载矿工地址，当前使用占位地址
-			minerAddr := fmt.Sprintf("claw1miner_%s", cfg.KeyName)
+			// Get miner address from keyring
+			minerAddr, err := chainClient.GetMinerAddress(context.Background())
+			if err != nil {
+				return fmt.Errorf("failed to get miner address from keyring: %w\nMake sure you have a key named '%s' in the keyring at '%s'", err, cfg.KeyName, cfg.KeyringDir)
+			}
+			logger.Info("Miner address loaded", "address", minerAddr)
 
 			loop := mining.NewMiningLoop(cfg, chainClient, slv, minerAddr, logger)
 
@@ -146,9 +151,12 @@ func registerCmd(cfg *config.Config) *cobra.Command {
 			logger := setupLogger(cfg.LogLevel)
 			chainClient := client.NewChainClient(cfg, logger)
 
-			minerAddr := fmt.Sprintf("claw1miner_%s", cfg.KeyName)
+			minerAddr, err := chainClient.GetMinerAddress(context.Background())
+			if err != nil {
+				return fmt.Errorf("get miner address: %w", err)
+			}
 
-			logger.Info("注册矿工",
+			logger.Info("Registering miner",
 				"address", minerAddr,
 				"stake", fmt.Sprintf("%d uclaw", cfg.StakeAmount),
 			)
@@ -197,19 +205,12 @@ func statusCmd(cfg *config.Config) *cobra.Command {
 			fmt.Printf("   最新高度: %s\n", status.SyncInfo.LatestBlockHeight)
 			fmt.Printf("   同步中: %v\n", status.SyncInfo.CatchingUp)
 
-			// 矿工状态
-			minerAddr := fmt.Sprintf("claw1miner_%s", cfg.KeyName)
-			minerInfo, err := chainClient.GetMinerInfo(ctx, minerAddr)
-			if err != nil {
-				fmt.Printf("\n⛏️  矿工状态: 未注册或查询失败 (%v)\n", err)
-				return nil
+			// Miner status
+			minerAddr, _ := chainClient.GetMinerAddress(ctx)
+			if minerAddr == "" {
+				minerAddr = "unknown"
 			}
-
-			fmt.Printf("\n⛏️  矿工状态\n")
-			fmt.Printf("   地址: %s\n", minerInfo.Address)
-			fmt.Printf("   状态: %s\n", minerInfo.Status)
-			fmt.Printf("   质押: %d uclaw\n", minerInfo.Stake)
-			fmt.Printf("   声誉: %d\n", minerInfo.Reputation)
+			fmt.Printf("\n⛏️  Miner: %s\n", minerAddr)
 			return nil
 		},
 	}

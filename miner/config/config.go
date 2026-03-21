@@ -11,10 +11,11 @@ import (
 
 // Config 矿工客户端配置
 type Config struct {
-	NodeRPC    string `json:"node_rpc"`    // CometBFT RPC 地址，如 tcp://localhost:26657
-	ChainID    string `json:"chain_id"`    // 链 ID，如 clawchain-testnet-1
-	KeyName    string `json:"key_name"`    // 矿工密钥名
-	KeyringDir string `json:"keyring_dir"` // 密钥存储目录
+	NodeRPC     string `json:"node_rpc"`      // CometBFT RPC 地址，如 tcp://localhost:26657
+	ChainID     string `json:"chain_id"`      // 链 ID，如 clawchain-testnet-1
+	KeyName     string `json:"key_name"`      // 矿工密钥名
+	KeyringDir  string `json:"keyring_dir"`   // 密钥存储目录
+	ChainBinary string `json:"chain_binary"`  // clawchaind binary path
 
 	LLMEndpoint string `json:"llm_endpoint"` // LLM API 端点，如 http://localhost:8080/v1
 	LLMAPIKey   string `json:"llm_api_key"`  // LLM API 密钥
@@ -31,7 +32,8 @@ func DefaultConfig() *Config {
 		NodeRPC:     "tcp://localhost:26657",
 		ChainID:     "clawchain-testnet-1",
 		KeyName:     "miner1",
-		KeyringDir:  filepath.Join(home, ".clawminer", "keys"),
+		KeyringDir:  filepath.Join(home, ".clawchain-testnet"),
+		ChainBinary: "clawchaind",
 		LLMEndpoint: "http://localhost:8080/v1",
 		LLMAPIKey:   "",
 		LLMModel:    "gpt-4",
