@@ -440,18 +440,20 @@ def solve_format_convert(prompt):
 
 
 def solve_sentiment(prompt):
-    """Local sentiment analysis (keyword matching)"""
-    positive_kw = ["突破", "新高", "增长", "上涨", "利好", "成功", "超预期", "繁荣", "创新", "领先"]
-    negative_kw = ["暴跌", "下跌", "危机", "失败", "亏损", "崩盘", "衰退", "制裁", "裁员", "违约"]
+    """Local sentiment analysis (keyword matching, Alpha closed-set: positive/negative/neutral)"""
+    positive_kw = ["突破", "新高", "增长", "上涨", "利好", "成功", "超预期", "繁荣", "创新", "领先",
+                   "high", "bull", "surge", "gain", "record", "晴朗", "评价", "大增", "突破"]
+    negative_kw = ["暴跌", "下跌", "危机", "失败", "亏损", "崩盘", "衰退", "制裁", "裁员", "违约",
+                   "crash", "bear", "drop", "loss", "漏洞", "泄露", "延期", "压力", "低落"]
     pos = sum(1 for kw in positive_kw if kw in prompt)
     neg = sum(1 for kw in negative_kw if kw in prompt)
     if pos > neg:
-        return "正面"
+        return "positive"
     elif neg > pos:
-        return "负面"
+        return "negative"
     elif pos == 0 and neg == 0:
-        return "中性"
-    return None
+        return "neutral"
+    return "neutral"
 
 
 def solve_classification(prompt):
@@ -489,7 +491,7 @@ def solve_translation(prompt):
 
 SYSTEM_PROMPTS = {
     "text_summary": "You are a text summarization expert. Summarize the given text in no more than 50 characters. Return only the summary.",
-    "sentiment": "Determine the sentiment of the text. Return only one of: 正面, 负面, 中性. No explanation.",
+    "sentiment": "Determine the sentiment of the text. Return only one of: positive, negative, neutral. No explanation.",
     "translation": "Translate the given text accurately. Return only the translation.",
     "classification": "Classify the text into the most appropriate category (科技/金融/体育/娱乐/政治). Return only the category name.",
     "entity_extraction": "Extract key entities (names, organizations) from the text, separated by commas. Return only the entity list.",

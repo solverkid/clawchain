@@ -105,16 +105,23 @@ Not DePIN         → DeAIN (Decentralized AI Agent Infrastructure Network)
 6. No response / wrong response = reputation deduction (no stake slashing)
 ```
 
-**Challenge Types (v1):**
+**Challenge Types:**
 
-| Type | Example | Verification |
-|------|---------|-------------|
-| Text Summary | "Summarize this 200-word article" | 3-node majority consensus |
-| Sentiment Analysis | "Is this tweet positive/negative/neutral" | Majority consensus |
-| Entity Extraction | "Extract names and organizations" | Set intersection > 70% |
-| Format Conversion | "JSON → CSV" | Exact match |
-| Math | "Calculate SHA256('hello')" | Exact match |
-| Logic | "A>B, B>C, what is A vs C" | Exact match |
+| Type | Example | Verification | Alpha Status |
+|------|---------|-------------|-------------|
+| Math | "Calculate 123 + 456" | Exact match | ✅ Active |
+| Logic | "A>B, B>C, what is A vs C" | Exact match | ✅ Active |
+| Hash | "SHA256 of 'hello'" | Exact match | ✅ Active |
+| Text Transform | "Uppercase 'hello world'" | Exact match | ✅ Active |
+| JSON Extract | "Extract field from JSON" | Exact match | ✅ Active |
+| Format Conversion | "JSON → CSV" | Exact match | ✅ Active |
+| Sentiment Analysis | "positive/negative/neutral" | Closed-set exact match | ✅ Active |
+| Classification | "科技/金融/体育/娱乐/政治" | Closed-set exact match | ✅ Active |
+| Text Summary | "Summarize this article" | Majority consensus | ❌ Beta |
+| Translation | "Translate EN→ZH" | Majority consensus | ❌ Beta |
+| Entity Extraction | "Extract names and organizations" | Set intersection > 70% | ❌ Beta |
+
+> **Alpha is deterministic-first**: Only tasks with verifiable correct answers participate in Alpha mining. Free-form generative tasks (translation, summarization) are not part of Alpha reward-critical mining to prevent Sybil attacks.
 
 **Dynamic Difficulty Adjustment:**
 - Base difficulty scales linearly with active node count
@@ -122,7 +129,15 @@ Not DePIN         → DeAIN (Decentralized AI Agent Infrastructure Network)
 - Too easy → increase (prevents scripting)
 - Too hard → decrease (maintains participation rate > 80%)
 
-#### 2.3.3 Token Layer ($CLAW Module)
+#### 2.3.3 Epoch Settlement Anchoring (Alpha)
+
+Each epoch settlement is anchored for auditability:
+- After settlement, compute `settlement_root = SHA256(canonical_json_of_records)`
+- Anchor on-chain via transaction memo, or locally when chain is unavailable
+- Anyone can verify: fetch records → recompute root → compare with anchor
+- **Anchoring improves transparency but does not fully decentralize the system**
+
+#### 2.3.4 Token Layer ($CLAW Module)
 
 See Section 3.
 

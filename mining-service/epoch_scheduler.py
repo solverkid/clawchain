@@ -4,13 +4,17 @@ ClawChain Mining Service — Epoch 调度器
 在 server.py 中作为后台线程运行。
 """
 
+import hashlib
+import json
+import subprocess
 import threading
 import time
 import logging
 from datetime import datetime, date, timedelta
+from pathlib import Path
 
 from models import get_db, get_global, set_global, DB_PATH, migrate_db
-from challenge_engine import generate_challenges
+from challenge_engine import generate_challenges, ALPHA_TASK_POOL
 from rewards import (
     get_epoch_miner_pool,
     get_epoch_validator_pool,
@@ -191,6 +195,125 @@ def settle_epoch(db, epoch: int):
             "UPDATE challenges SET status='complete' WHERE id=?", (ch_id,)
         )
 
+    db.commit()
+
+    # Compute and anchor settlement root
+    try:
+        anchor_epoch_settlement(db, epoch)
+    except Exception as e:
+        logger.error(f"Settlement anchoring failed for epoch {epoch}: {e}", exc_info=True)
+
+
+def compute_settlement_root(db, epoch: int):
+    """Compute deterministic settlement root for an epoch.
+
+    Collects all settlement records, sorts by miner address, serializes
+    to canonical JSON, and returns SHA256 hash + records list.
+    """
+    # Collect per-miner settlement data
+    rows = db.execute("""
+        SELECT s.miner_address, s.challenge_id, s.is_correct, s.reward_amount,
+               c.type as challenge_type
+        FROM submissions s
+        JOIN challenges c ON s.challenge_id = c.id
+        WHERE c.epoch = ? AND s.answer IS NOT NULL
+        ORDER BY s.miner_address, s.challenge_id
+    """, (epoch,)).fetchall()
+
+    if not rows:
+        return None, []
+
+    # Aggregate per miner
+    miner_data = {}
+    for r in rows:
+        addr = r["miner_address"]
+        if addr not in miner_data:
+            miner_data[addr] = {
+                "epoch_id": epoch,
+                "miner": addr,
+                "solved": 0,
+                "failed": 0,
+                "reward_uclaw": 0,
+                "challenge_ids": [],
+            }
+        miner_data[addr]["challenge_ids"].append(r["challenge_id"])
+        if r["is_correct"]:
+            miner_data[addr]["solved"] += 1
+            miner_data[addr]["reward_uclaw"] += (r["reward_amount"] or 0)
+        else:
+            miner_data[addr]["failed"] += 1
+
+    # Sort by miner address for deterministic ordering
+    records = sorted(miner_data.values(), key=lambda x: x["miner"])
+
+    # Canonical JSON serialization
+    canonical = json.dumps(records, sort_keys=True, separators=(",", ":"))
+    settlement_root = hashlib.sha256(canonical.encode()).hexdigest()
+
+    return settlement_root, records
+
+
+def anchor_epoch_settlement(db, epoch: int):
+    """Compute settlement root and anchor it (on-chain or local file)."""
+    result = compute_settlement_root(db, epoch)
+    if result is None or result[0] is None:
+        return  # No submissions in this epoch
+
+    settlement_root, records = result
+    records_json = json.dumps(records, sort_keys=True, separators=(",", ":"))
+
+    # Try on-chain anchoring first
+    anchor_type = "local"
+    tx_hash = None
+
+    try:
+        memo = f"anchor:epoch:{epoch}:{settlement_root}"
+        # Attempt to anchor via clawchaind tx
+        result_proc = subprocess.run(
+            ["clawchaind", "tx", "bank", "send", "validator", "validator",
+             "1uclaw", "--memo", memo, "--yes", "--output", "json",
+             "--node", "tcp://localhost:26657"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result_proc.returncode == 0:
+            try:
+                tx_data = json.loads(result_proc.stdout)
+                tx_hash = tx_data.get("txhash", "")
+                anchor_type = "chain"
+                logger.info(f"Epoch {epoch} anchored on-chain: {settlement_root[:16]}... tx={tx_hash[:16]}...")
+            except (json.JSONDecodeError, KeyError):
+                pass
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
+        logger.debug(f"On-chain anchoring unavailable: {e}")
+
+    if anchor_type == "local":
+        logger.info(f"Epoch {epoch} anchored locally: {settlement_root[:16]}...")
+        # Also write to data/anchors.json for external audit
+        anchors_path = Path(__file__).parent / "data" / "anchors.json"
+        anchors_path.parent.mkdir(exist_ok=True)
+        anchors = []
+        if anchors_path.exists():
+            try:
+                with open(anchors_path) as f:
+                    anchors = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                anchors = []
+        anchors.append({
+            "epoch_id": epoch,
+            "settlement_root": settlement_root,
+            "anchor_type": anchor_type,
+            "tx_hash": tx_hash,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+        with open(anchors_path, "w") as f:
+            json.dump(anchors, f, indent=2)
+
+    # Store in database
+    db.execute(
+        """INSERT OR REPLACE INTO epoch_anchors (epoch_id, settlement_root, anchor_type, tx_hash, records_json)
+        VALUES (?, ?, ?, ?, ?)""",
+        (epoch, settlement_root, anchor_type, tx_hash, records_json),
+    )
     db.commit()
 
 

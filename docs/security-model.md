@@ -12,18 +12,33 @@ This document describes ClawChain's security assumptions, threat model, and defe
 - Miners verify: `sha256(challenge_id + revealed_answer + salt) == commitment`.
 - If the commitment doesn't match, the server is provably dishonest.
 
-### Non-Deterministic Challenges (sentiment, classification, translation, text_summary, entity_extraction)
-**Miners need partial trust in the server** (until multi-validator consensus is implemented).
+### Closed-Set Challenges (sentiment, classification) — Alpha
+**Miners do NOT need to trust the server.**
+- In Alpha, sentiment is a 3-way closed-set choice (positive/negative/neutral) and classification uses 5 fixed categories.
+- The server pre-commits the correct answer at challenge creation time.
+- Miners verify via the same commitment scheme as deterministic challenges.
+- These are effectively deterministic for verification purposes.
+
+### Non-Deterministic Challenges (translation, text_summary, entity_extraction) — NOT in Alpha
+**Not part of Alpha reward-critical mining.**
 - Answers are subjective — no single "correct" value.
-- In DEV mode (single miner), the server judges correctness (`verification_mode: "server_trust"`).
-- In production mode (3+ miners), majority vote determines correctness (`verification_mode: "majority_vote"`).
-- Commitment mechanism still applies for spot-check challenges with known answers.
+- These tasks are vulnerable to Sybil attacks via majority voting.
+- They will be enabled in Beta with stake-weighted multi-validator consensus.
+- Code is retained but challenges are not generated for Alpha mining.
 
 ### Mining Service → Challenge Engine
 The mining service trusts the challenge engine to:
-- Generate diverse, solvable challenges across all 11 types.
-- Produce correct `known_answer` values for spot-check challenges.
+- Generate diverse, solvable challenges across all 8 Alpha types (deterministic-first).
+- Produce correct `expected_answer` values pre-committed at generation time.
 - Generate cryptographic commitments at challenge creation time (immutable).
+- Maintain a 20% spot-check rate for fraud detection.
+
+### Settlement Anchoring
+Each epoch settlement is anchored for auditability:
+- Settlement root = SHA256 of canonical JSON of all per-miner settlement records.
+- Anchored on-chain (via tx memo) or locally (data/anchors.json) as fallback.
+- Anyone can verify: fetch records → recompute root → compare with anchor.
+- **Anchoring improves transparency but does not fully decentralize the system.** Settlement computation remains server-side.
 
 ### Miners ↔ Miners (Indirect)
 Miners do not communicate directly. Trust is mediated by consensus:
@@ -80,7 +95,7 @@ Miners do not communicate directly. Trust is mediated by consensus:
 **Threat**: Multiple miners coordinate identical wrong answers.
 
 **Mitigations**:
-- **Spot checks (10%)**: Use known answers as ground truth. Wrong answers carry heavy penalties.
+- **Spot checks (20% in Alpha)**: Use known answers as ground truth. Wrong answers carry heavy penalties.
 - **Reputation system**: Miners below 100 reputation are suspended.
 - **Consecutive failure detection**: 5+ failures → suspension.
 - **Stake slashing**: Wrong answers lead to stake loss (see §5).
@@ -175,15 +190,27 @@ Miners do not communicate directly. Trust is mediated by consensus:
 1. **No cryptographic signature verification** on submissions (address string only).
 2. **Single-server architecture** — single point of trust/failure.
 3. **DEV mode simplifications** — single-miner settlement, direct submit allowed.
-4. **Non-deterministic challenges** still require server trust in single-miner mode.
+4. **Non-deterministic challenges** excluded from Alpha mining (will return in Beta with proper verification).
 5. **IP-based anti-Sybil** is bypassable with proxies.
+6. **Settlement anchoring** improves auditability but computation remains server-side.
 
-### Mainnet Roadmap
-- Full secp256k1 signature verification.
-- On-chain challenge commitment and settlement.
-- Multi-validator consensus for non-deterministic challenges.
-- Economic staking with on-chain enforcement.
-- Decentralized challenge generation.
+### Phased Roadmap
+
+**Alpha (Current)**:
+- Deterministic-first mining (all 8 types verifiable)
+- Off-chain settlement with epoch anchoring (20% spot-check rate)
+
+**Beta**:
+- Stake-weighted validation for non-deterministic tasks
+- Cosmos SDK Msg-based mining (MsgSubmitAnswer)
+- Advanced fraud detection
+
+**Mainnet**:
+- Full secp256k1 signature verification
+- On-chain challenge commitment and settlement
+- Multi-validator consensus
+- Economic staking with on-chain enforcement
+- Decentralized challenge generation
 
 ---
 
@@ -192,8 +219,10 @@ Miners do not communicate directly. Trust is mediated by consensus:
 | Component | Trust Level | Notes |
 |-----------|-------------|-------|
 | Math/Logic/Hash challenges | Trust-minimized | Commitment verifiable, answer deterministic |
-| Sentiment/Translation challenges | Server-trust | Until majority-vote implemented |
+| Sentiment/Classification (Alpha) | Trust-minimized | Closed-set with pre-committed answers |
+| Translation/Summary (NOT in Alpha) | N/A | Excluded from Alpha mining; will use stake-weighted validation in Beta |
 | Reward calculation | Server-trust | Auditable via /stats API |
+| Epoch settlement | Anchor-verifiable | Settlement root anchored; post-hoc tampering detectable |
 | Challenge distribution | Trust-minimized | Commitment prevents post-hoc modification |
 | Wallet/keys | Client-only | Server never receives private keys |
 | Network transport | TLS required | HTTP rejected by default on non-localhost |

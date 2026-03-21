@@ -24,8 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from models import init_db, get_db, get_global, set_global, DB_PATH, migrate_db
 from challenge_engine import (
     generate_challenges, calc_num_challenges, compute_commitment,
-    DETERMINISTIC_TYPES, NON_DETERMINISTIC_TYPES,
+    DETERMINISTIC_TYPES, NON_DETERMINISTIC_TYPES, ALPHA_TASK_POOL,
 )
+from epoch_scheduler import compute_settlement_root
 from rewards import (
     get_epoch_miner_pool,
     get_epoch_validator_pool,
@@ -73,6 +74,7 @@ class MiningHandler(BaseHTTPRequestHandler):
         "/clawchain/challenges/pending": "handle_get_pending",
         "/clawchain/stats": "handle_get_stats",
         "/clawchain/version": "handle_get_version",
+        "/clawchain/anchors": "handle_get_anchors",
     }
     POST_ROUTES = {
         "/clawchain/challenge/submit": "handle_submit_answer",
@@ -112,6 +114,12 @@ class MiningHandler(BaseHTTPRequestHandler):
         # 静态路由
         if path in self.GET_ROUTES:
             getattr(self, self.GET_ROUTES[path])()
+            return
+
+        # 动态路由: /clawchain/epoch/{N}/settlement
+        m = re.match(r"^/clawchain/epoch/(\d+)/settlement$", path)
+        if m:
+            self.handle_get_epoch_settlement(int(m.group(1)))
             return
 
         # 动态路由: /clawchain/miner/{address}
@@ -687,6 +695,65 @@ class MiningHandler(BaseHTTPRequestHandler):
             "message": f"sent 200 CLAW (200,000,000 uclaw) to {address}",
             "amount": FAUCET_AMOUNT,
         })
+
+    # ═══════════════════════════════════════
+    # GET /clawchain/epoch/{N}/settlement
+    # ═══════════════════════════════════════
+    def handle_get_epoch_settlement(self, epoch_id):
+        db = get_shared_db()
+
+        # Check if anchor exists in DB
+        anchor = db.execute(
+            "SELECT * FROM epoch_anchors WHERE epoch_id=?", (epoch_id,)
+        ).fetchone()
+
+        if anchor:
+            records = json.loads(anchor["records_json"]) if anchor["records_json"] else []
+            self._json_response({
+                "epoch_id": epoch_id,
+                "settlement_root": anchor["settlement_root"],
+                "anchor_type": anchor["anchor_type"],
+                "tx_hash": anchor["tx_hash"],
+                "records": records,
+                "created_at": anchor["created_at"],
+            })
+            return
+
+        # Compute on the fly if not anchored yet
+        result = compute_settlement_root(db, epoch_id)
+        if result is None or result[0] is None:
+            self._error(f"no settlement data for epoch {epoch_id}", 404)
+            return
+
+        settlement_root, records = result
+        self._json_response({
+            "epoch_id": epoch_id,
+            "settlement_root": settlement_root,
+            "anchor_type": "computed",
+            "tx_hash": None,
+            "records": records,
+        })
+
+    # ═══════════════════════════════════════
+    # GET /clawchain/anchors
+    # ═══════════════════════════════════════
+    def handle_get_anchors(self):
+        db = get_shared_db()
+        rows = db.execute(
+            "SELECT epoch_id, settlement_root, anchor_type, tx_hash, created_at FROM epoch_anchors ORDER BY epoch_id DESC"
+        ).fetchall()
+
+        anchors = []
+        for r in rows:
+            anchors.append({
+                "epoch_id": r["epoch_id"],
+                "settlement_root": r["settlement_root"],
+                "anchor_type": r["anchor_type"],
+                "tx_hash": r["tx_hash"],
+                "created_at": r["created_at"],
+            })
+
+        self._json_response({"anchors": anchors, "count": len(anchors)})
 
     # ═══════════════════════════════════════
     # 内部：即时结算

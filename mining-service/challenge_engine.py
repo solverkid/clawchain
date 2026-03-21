@@ -17,21 +17,42 @@ CHALLENGE_TYPES = [
     "text_transform", "json_extract", "hash",
 ]
 
+# Alpha task pool: deterministic-first mining.
+# Only tasks with a single verifiable correct answer (or closed-set options)
+# participate in reward-critical mining during Alpha.
+# Free-form generative tasks (translation, text_summary) are excluded from
+# Alpha mining to prevent Sybil attacks via non-deterministic majority voting.
+ALPHA_TASK_POOL = [
+    "math", "logic", "hash", "text_transform", "json_extract", "format_convert",
+    "sentiment", "classification",
+]
+
+# Sentiment labels — closed set, exact match only
+SENTIMENT_LABELS = ["positive", "negative", "neutral"]
+
+# Classification labels — closed set, exact match only
+CLASSIFICATION_LABELS = ["科技", "金融", "体育", "娱乐", "政治"]
+
 TIER_MAP = {
     "math": 1, "logic": 1, "hash": 1, "text_transform": 1,
     "sentiment": 2, "classification": 2, "format_convert": 2, "json_extract": 2,
     "text_summary": 3, "translation": 3, "entity_extraction": 3,
 }
 
-# 生成时的加权（与 Go 代码一致）
+# 生成时的加权（Alpha: deterministic-first）
 TYPE_WEIGHTS = [
-    ("text_summary", 5),
-    ("sentiment", 5),
-    ("translation", 5),
-    ("classification", 5),
-    ("math", 2),
-    ("logic", 3),
+    ("math", 5),
+    ("logic", 5),
+    ("hash", 4),
+    ("text_transform", 4),
+    ("json_extract", 3),
+    ("format_convert", 3),
+    ("sentiment", 3),
+    ("classification", 3),
 ]
+
+# Spot check rate: 20% in Alpha (raised from 10% for stronger fraud detection)
+ALPHA_SPOT_CHECK_RATE = 5  # 1-in-5 = 20%
 
 # ─── 内容池（从 Go keeper.go 完整翻译）───
 
@@ -44,16 +65,16 @@ TEXT_SUMMARY_POOL = [
 ]
 
 SENTIMENT_POOL = [
-    ("比特币突破历史新高，加密市场迎来牛市", "正面"),
-    ("全球股市暴跌，投资者恐慌性抛售", "负面"),
-    ("今天天气晴朗，适合出门散步", "正面"),
-    ("项目进度延期，团队压力很大", "负面"),
-    ("会议按计划进行，各方达成共识", "中性"),
-    ("产品获得用户高度评价，销量大增", "正面"),
-    ("系统出现严重漏洞，数据泄露风险高", "负面"),
-    ("公司宣布裁员计划，员工士气低落", "负面"),
-    ("新技术发布，行业格局可能改变", "中性"),
-    ("研究取得重大突破，论文发表在顶级期刊", "正面"),
+    ("比特币突破历史新高，加密市场迎来牛市", "positive"),
+    ("全球股市暴跌，投资者恐慌性抛售", "negative"),
+    ("今天天气晴朗，适合出门散步", "positive"),
+    ("项目进度延期，团队压力很大", "negative"),
+    ("会议按计划进行，各方达成共识", "neutral"),
+    ("产品获得用户高度评价，销量大增", "positive"),
+    ("系统出现严重漏洞，数据泄露风险高", "negative"),
+    ("公司宣布裁员计划，员工士气低落", "negative"),
+    ("新技术发布，行业格局可能改变", "neutral"),
+    ("研究取得重大突破，论文发表在顶级期刊", "positive"),
 ]
 
 TRANSLATION_POOL = [
@@ -89,10 +110,13 @@ CLASSIFICATION_POOL = [
 
 
 # Challenge types that have a single deterministic correct answer
-DETERMINISTIC_TYPES = {"math", "logic", "hash", "text_transform", "json_extract", "format_convert"}
+# In Alpha, sentiment and classification are closed-set with pre-committed answers,
+# making them deterministic for verification purposes.
+DETERMINISTIC_TYPES = {"math", "logic", "hash", "text_transform", "json_extract", "format_convert", "sentiment", "classification"}
 
 # Challenge types that require subjective judgment (non-deterministic)
-NON_DETERMINISTIC_TYPES = {"sentiment", "classification", "translation", "text_summary", "entity_extraction"}
+# These are NOT part of Alpha reward-critical mining.
+NON_DETERMINISTIC_TYPES = {"translation", "text_summary", "entity_extraction"}
 
 
 def compute_commitment(challenge_id: str, expected_answer: str, salt: str) -> str:
@@ -133,7 +157,7 @@ def _generate_prompt(ctype: str, rng: random.Random):
 
     elif ctype == "sentiment":
         text, expected = rng.choice(SENTIMENT_POOL)
-        return f"判断以下评论的情感倾向（正面/负面/中性）：{text}", expected
+        return f"Classify the sentiment of the following text as exactly one of: positive, negative, neutral\n\nText: {text}", expected
 
     elif ctype == "translation":
         en, zh = rng.choice(TRANSLATION_POOL)
@@ -141,7 +165,7 @@ def _generate_prompt(ctype: str, rng: random.Random):
 
     elif ctype == "classification":
         text, expected = rng.choice(CLASSIFICATION_POOL)
-        return f"将以下文本分类到最合适的类别（科技/金融/体育/娱乐/政治）：{text}", expected
+        return f"Classify the following text into exactly one category from: 科技, 金融, 体育, 娱乐, 政治\n\nText: {text}", expected
 
     elif ctype == "math":
         a = rng.randint(100, 999)
@@ -209,15 +233,18 @@ def generate_challenges(epoch: int, active_miners: int, seed: int = None):
     used_types = set()
     challenges = []
 
+    # Filter TYPE_WEIGHTS to Alpha task pool only
+    alpha_weights = [(t, w) for t, w in TYPE_WEIGHTS if t in ALPHA_TASK_POOL]
+
     for idx in range(num):
-        ctype = _weighted_choice(rng, TYPE_WEIGHTS, exclude=used_types)
+        ctype = _weighted_choice(rng, alpha_weights, exclude=used_types)
         used_types.add(ctype)
 
         prompt, expected = _generate_prompt(ctype, rng)
         tier = TIER_MAP.get(ctype, 1)
 
-        # 10% spot check
-        is_spot_check = rng.randint(0, 9) == 0
+        # 20% spot check (Alpha hardening)
+        is_spot_check = rng.randint(0, ALPHA_SPOT_CHECK_RATE - 1) == 0
         known_answer = ""
         if is_spot_check and expected:
             known_answer = expected

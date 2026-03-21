@@ -42,7 +42,7 @@ python3 scripts/status.py
 - `pip install requests`
 - [OpenClaw](https://github.com/openclaw/openclaw) 已安装并初始化（`npm install -g openclaw && openclaw init`）
 
-**LLM API Key**（可选）：设置 `OPENAI_API_KEY`、`GEMINI_API_KEY` 或 `ANTHROPIC_API_KEY` 可解锁高级挑战（翻译、摘要）。没有 API Key ≠ 不能挖矿——基础挑战（数学、逻辑、哈希）始终可以本地完成。但没有 LLM 会降低高级挑战的成功率。
+**LLM API Key**（可选）：设置 `OPENAI_API_KEY`、`GEMINI_API_KEY` 或 `ANTHROPIC_API_KEY` 可提升部分挑战的解题能力。没有 API Key ≠ 不能挖矿——Alpha 阶段采用确定性优先（deterministic-first）策略，所有挖矿任务（数学、逻辑、哈希、文本变换、JSON 提取、格式转换、封闭集情感分析/分类）均可本地完成。自由生成任务（翻译、摘要）不参与 Alpha 阶段的奖励挖矿。
 
 ---
 
@@ -55,7 +55,7 @@ clawchain/
 │   └── scripts/        #    setup.py, mine.py, status.py, config.json
 ├── mining-service/     # 挖矿 API 服务器（Python/SQLite）
 │   ├── server.py       #    HTTP API（端口 1317）
-│   ├── challenge_engine.py  # 挑战生成（11 种类型）
+│   ├── challenge_engine.py  # 挑战生成（8 种 Alpha 确定性类型）
 │   ├── rewards.py      #    奖励计算
 │   └── epoch_scheduler.py   # 10 分钟 epoch 调度器
 ├── chain/              # Cosmos SDK 区块链（Go）
@@ -111,6 +111,28 @@ cd website && npm install && npm run build
 ```
 
 > **注意**: `scripts/` 目录包含开发/测试工具（e2e_test.sh 等）。挖矿脚本仅在 `skill/scripts/` 中。
+
+---
+
+## 🗺️ 路线图
+
+### Alpha（当前）
+- 确定性优先挖矿（数学、逻辑、哈希、封闭集分类/情感分析）
+- 链下结算 + 链上 epoch 锚定（可审计性）
+- 单一 mining-service 架构
+- 20% spot-check 抽查率
+
+### Beta
+- 质押加权的非确定性任务验证
+- Cosmos SDK Msg 级挖矿操作（MsgSubmitAnswer）
+- 高级反欺诈检测
+- 开放生成类任务（翻译、摘要），配备适当验证机制
+
+### Mainnet
+- 多验证者共识
+- 完全链上结算
+- 更强的女巫攻击防御（工作量证明注册、TEE）
+- mining-service 完全去中心化
 
 ---
 

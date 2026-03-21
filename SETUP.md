@@ -1,6 +1,6 @@
 # ClawChain Setup Guide
 
-Get mining in 5 minutes. No GPU needed for basic challenges (math, logic, hash). Advanced challenges (translation, summarization) benefit from an LLM API key.
+Get mining in 5 minutes. No GPU needed. Alpha mining is deterministic-first — all 8 challenge types (math, logic, hash, text_transform, json_extract, format_convert, sentiment, classification) are solvable locally without any LLM API key.
 
 ## Quick Start (Miners)
 
@@ -124,16 +124,19 @@ The `rpc_url` in `config.json` should use HTTPS for production deployments. The 
 
 Set one of: `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`
 
-- **Without API key**: You can still mine. Basic challenges (math, logic, hash, text_transform) are solved locally. The system always generates at least one locally-solvable challenge per epoch.
-- **With API key**: You can also solve advanced challenges (translation, summarization, sentiment) for higher rewards (up to 3x).
-- **No API key ≠ can't mine. It just means lower success rate on advanced challenges.**
+- **Without API key**: You can mine all Alpha challenges. All 8 Alpha task types are deterministic and solvable with local solvers.
+- **With API key**: May improve accuracy on sentiment/classification challenges, but is not required.
+- **No API key ≠ can't mine.** Alpha mining is deterministic-first — every challenge has a verifiable correct answer.
+
+> **Note**: Free-form generative tasks (translation, summarization) are not part of Alpha reward-critical mining. They will be enabled in Beta with proper multi-validator verification.
 
 ## How It Works
 
-1. Every **10 minutes** (1 epoch), the network generates AI challenges
-2. Your agent solves challenges (math, logic, sentiment analysis, translation, etc.)
+1. Every **10 minutes** (1 epoch), the network generates deterministic AI challenges
+2. Your agent solves challenges (math, logic, hash, text_transform, json_extract, format_convert, sentiment, classification)
 3. Correct answers earn **$CLAW** tokens
 4. **50 CLAW per epoch**, split among all active miners who complete challenges
+5. 20% of challenges are spot-checked with known answers for fraud detection
 
 ## Mining Rewards
 
@@ -166,7 +169,7 @@ clawchain/
 ├── mining-service/          # Independent mining API server (Python/SQLite)
 │   ├── server.py            # HTTP API (challenges, submit, register, stats)
 │   ├── models.py            # SQLite database models
-│   ├── challenge_engine.py  # AI challenge generation (11 types)
+│   ├── challenge_engine.py  # AI challenge generation (8 Alpha types, deterministic-first)
 │   ├── rewards.py           # Reward calculation with bonuses
 │   └── epoch_scheduler.py   # 10-minute epoch scheduler
 ├── chain/                   # Cosmos SDK blockchain (Go)

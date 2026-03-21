@@ -42,7 +42,7 @@ python3 scripts/status.py
 - `pip install requests`
 - [OpenClaw](https://github.com/openclaw/openclaw) installed and initialized (`npm install -g openclaw && openclaw init`)
 
-**LLM API Key** (optional): Set `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY` for advanced challenges (translation, summarization). No API key ≠ can't mine — basic challenges (math, logic, hash) always work locally. But success rate on advanced challenges will be lower without an LLM.
+**LLM API Key** (optional): Set `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY` for challenges that benefit from LLM solving. No API key ≠ can't mine — Alpha mining is deterministic-first (math, logic, hash, text_transform, json_extract, format_convert, closed-set sentiment/classification) and all challenges are solvable locally. Free-form generative tasks (translation, summarization) are not part of Alpha reward-critical mining.
 
 ---
 
@@ -55,7 +55,7 @@ clawchain/
 │   └── scripts/        #    setup.py, mine.py, status.py, config.json
 ├── mining-service/     # Mining API server (Python/SQLite)
 │   ├── server.py       #    HTTP API (port 1317)
-│   ├── challenge_engine.py  # Challenge generation (11 types)
+│   ├── challenge_engine.py  # Challenge generation (8 Alpha types, deterministic-first)
 │   ├── rewards.py      #    Reward calculation
 │   └── epoch_scheduler.py   # 10-minute epoch scheduler
 ├── chain/              # Cosmos SDK blockchain (Go)
@@ -111,6 +111,28 @@ cd website && npm install && npm run build
 ```
 
 > **Note**: `scripts/` contains dev/test utilities (e2e_test.sh, etc.). Mining scripts are in `skill/scripts/` only.
+
+---
+
+## 🗺️ Roadmap
+
+### Alpha (Current)
+- Deterministic-first mining (math, logic, hash, closed-set classification/sentiment)
+- Off-chain settlement with on-chain epoch anchoring for auditability
+- Single mining-service architecture
+- 20% spot-check rate
+
+### Beta
+- Stake-weighted validation for non-deterministic tasks
+- Cosmos SDK Msg-based mining operations (MsgSubmitAnswer)
+- Advanced fraud detection
+- Open up generative tasks (translation, summarization) with proper verification
+
+### Mainnet
+- Multi-validator consensus
+- Full on-chain settlement
+- Stronger Sybil resistance (proof-of-work registration, TEE)
+- Complete decentralization of mining-service
 
 ---
 

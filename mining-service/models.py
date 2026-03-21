@@ -70,6 +70,15 @@ CREATE TABLE IF NOT EXISTS global_state (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS epoch_anchors (
+    epoch_id INTEGER PRIMARY KEY,
+    settlement_root TEXT NOT NULL,
+    anchor_type TEXT DEFAULT 'local',
+    tx_hash TEXT,
+    records_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

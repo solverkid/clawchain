@@ -5,7 +5,8 @@
 ClawChain is a **Proof of Availability** protocol for AI agents. Miners demonstrate availability and computational capability by solving epoch-based challenges. Rewards are distributed proportionally to miners who submit correct answers within each epoch.
 
 - Epoch-based challenge-response mining
-- Deterministic + non-deterministic challenge types
+- Alpha: deterministic-first challenge types (non-deterministic excluded from reward mining)
+- Epoch settlement anchoring for auditability
 - Commitment scheme for verifiable challenge settlement
 - Progressive staking and reputation-based anti-Sybil
 
@@ -23,8 +24,10 @@ ClawChain is a **Proof of Availability** protocol for AI agents. Miners demonstr
 - Server generates 1–N challenges per epoch: `N = max(1, min(active_miners / 3, 10))`
 - Each challenge has: `id`, `type`, `difficulty`, `prompt`, `expected_answer`
 - **Deterministic types** (single correct answer): `math`, `logic`, `hash`, `text_transform`, `json_extract`, `format_convert`
-- **Non-deterministic types** (subjective answer): `sentiment`, `classification`, `translation`, `text_summary`, `entity_extraction`
-- At least one locally-solvable (deterministic) challenge is generated per epoch
+- **Closed-set types** (finite options, pre-committed answer): `sentiment` (positive/negative/neutral), `classification` (科技/金融/体育/娱乐/政治)
+- **Non-deterministic types** (subjective answer, **not in Alpha mining**): `translation`, `text_summary`, `entity_extraction`
+- **Alpha task pool**: Only deterministic and closed-set types participate in reward-critical mining
+- Free-form generative tasks (translation, summarization) are excluded from Alpha to prevent Sybil attacks via non-deterministic majority voting
 
 ### 3.2 Commitment
 
@@ -140,7 +143,7 @@ If the commitment does not match, the server is provably dishonest.
 - **Initial reputation**: 500 (new miners)
 - **Maximum reputation**: 1000
 - **Suspension threshold**: reputation < 100
-- **Spot check frequency**: 10% of challenges (random selection with known answers)
+- **Spot check frequency**: 20% of challenges in Alpha (raised from 10% for stronger fraud detection)
 - **Recovery**: 24h cooldown, reputation restored to 200
 
 ### Tier Access Requirements
@@ -179,7 +182,33 @@ If the commitment does not match, the server is provably dishonest.
 - **Progressive staking**: Economic cost increases with network size
 - **Future**: Stake-weighted reputation scoring
 
-## 9. API Endpoints
+## 9. Epoch Settlement Anchoring
+
+After each epoch is settled, the mining service computes a deterministic settlement commitment:
+
+1. Collect all settlement records for the epoch (per-miner: solved count, reward amount, challenge IDs)
+2. Sort records by miner address (deterministic ordering)
+3. Serialize to canonical JSON: `json.dumps(records, sort_keys=True, separators=(',',':'))`
+4. Compute `settlement_root = SHA256(canonical_json)`
+
+### Anchoring
+
+- **On-chain** (preferred): `clawchaind tx bank send ... --memo "anchor:epoch:{N}:{settlement_root}"`
+- **Local fallback**: Written to `data/anchors.json` when the chain is not reachable
+
+### Verification
+
+Anyone can verify settlement integrity:
+1. Fetch settlement data: `GET /clawchain/epoch/{N}/settlement`
+2. Re-sort records by miner address
+3. Re-serialize to canonical JSON
+4. Recompute SHA256 and compare with the anchored `settlement_root`
+
+If the root does not match, the server has modified settlement data after anchoring.
+
+**Note**: Anchoring improves transparency but does not fully decentralize the system. Settlement computation remains server-side; anchoring makes post-hoc tampering detectable.
+
+## 10. API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -192,19 +221,22 @@ If the commitment does not match, the server is provably dishonest.
 | `GET` | `/clawchain/version` | Server/protocol version info |
 | `GET` | `/clawchain/miner/{address}` | Miner registration info |
 | `GET` | `/clawchain/miner/{address}/stats` | Miner performance stats |
+| `GET` | `/clawchain/epoch/{N}/settlement` | Epoch settlement records + root |
+| `GET` | `/clawchain/anchors` | All anchored epoch settlements |
 
-## 10. Trust Boundaries
+## 11. Trust Boundaries
 
 | Component | Trust Level | Notes |
 |-----------|-------------|-------|
 | Deterministic challenges | Trust-minimized | Commitment verifiable, answer deterministic |
 | Non-deterministic challenges | Server-trust | Until majority-vote implemented |
-| Reward calculation | Server-trust | Auditable via `/stats` API |
+| Reward calculation | Server-trust | Auditable via `/stats` API, anchored per-epoch |
+| Epoch settlement | Anchor-verifiable | Settlement root anchored on-chain/locally; post-hoc tampering detectable |
 | Challenge distribution | Trust-minimized | Commitment prevents post-hoc modification |
 | Wallet/keys | Client-only | Server never receives private keys |
 | Network transport | TLS required | HTTP rejected by default on non-localhost |
 
-## 11. Known Limitations
+## 12. Known Limitations
 
 1. **Single server** — no P2P network, single point of trust/failure
 2. **Non-deterministic tasks** rely on server trust in single-miner mode
@@ -214,8 +246,21 @@ If the commitment does not match, the server is provably dishonest.
 6. **IP-based anti-Sybil** is bypassable with proxies/VPNs
 7. **DEV mode** allows single-miner settlement (production requires 3)
 
-### Mainnet Roadmap
+### Phased Roadmap
 
+**Alpha (Current)**:
+- Deterministic-first mining (8 task types, all verifiable)
+- Off-chain settlement with on-chain epoch anchoring
+- 20% spot-check rate
+- Single mining-service architecture
+
+**Beta**:
+- Stake-weighted validation for non-deterministic tasks
+- Cosmos SDK Msg-based mining operations (MsgSubmitAnswer)
+- Open up generative tasks with proper verification
+- Advanced fraud detection
+
+**Mainnet**:
 - Full secp256k1 signature verification on submissions
 - On-chain challenge commitment and settlement
 - Multi-validator consensus for non-deterministic challenges
