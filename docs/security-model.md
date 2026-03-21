@@ -36,7 +36,7 @@ The mining service trusts the challenge engine to:
 ### Settlement Anchoring
 Each epoch settlement is anchored for auditability:
 - Settlement root = SHA256 of canonical JSON of all per-miner settlement records.
-- Anchored on-chain (via tx memo) or locally (data/anchors.json) as fallback.
+- Anchored locally (data/anchors/epoch_N.json) with chain liveness verification. **Not on-chain consensus** — local file-based anchoring only in Alpha.
 - Anyone can verify: fetch records → recompute root → compare with anchor.
 - **Anchoring improves transparency but does not fully decentralize the system.** Settlement computation remains server-side.
 
@@ -191,19 +191,27 @@ The faucet endpoint (`POST /clawchain/faucet`) is **disabled in production**. It
 
 In testnet/dev environments, the faucet provides initial token distribution for testing purposes.
 
-## 10. Submission Authentication (HMAC)
+## 10. Submission Authentication
 
-As of v0.2.0, answer submissions are authenticated via HMAC-SHA256:
+### Primary: secp256k1 Signatures (v0.3.0+)
 
-1. **Wallet setup**: `setup.py` generates a 32-byte `auth_secret` stored in `wallet.json`.
-2. **Registration**: The `auth_secret` is sent to the server during miner registration (via HTTPS).
-3. **Submission**: Each answer submission includes `auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`.
-4. **Server verification**: The server recomputes the HMAC using the stored `auth_secret` and rejects mismatches with HTTP 403.
-5. **Backward compatibility**: Legacy miners without `auth_secret` are allowed during Alpha but will be required in Beta.
+As of v0.3.0, miners register a secp256k1 public key and sign every submission:
 
-This prevents miner impersonation — an attacker who knows a miner's address cannot submit answers on their behalf without the `auth_secret`.
+1. **Wallet setup**: The miner generates a secp256k1 keypair. The public key (64-byte uncompressed, hex) is stored in `wallet.json`.
+2. **Registration**: The `public_key` is sent to the server during miner registration (via HTTPS).
+3. **Submission**: Each answer includes `signature` and `nonce`:
+   - `message = SHA256(challenge_id + "|" + answer + "|" + miner_address + "|" + nonce)`
+   - `signature = secp256k1_sign(private_key, message)` — 65-byte recoverable signature (hex)
+   - `nonce` = monotonically increasing integer (ms timestamp recommended)
+4. **Server verification**: The server recovers the public key from the signature + message hash and compares it against the registered `public_key`. Mismatches → HTTP 403.
+5. **Replay protection**: The server tracks `last_nonce` per miner. Submissions with `nonce <= last_nonce` are rejected. Nonces more than 5 minutes in the future are also rejected.
+6. **Identity binding**: Only the holder of the private key can produce valid signatures. The server never sees the private key.
 
-**What this does NOT prevent**: The `auth_secret` is shared between miner and server (symmetric HMAC), so it does not provide non-repudiation. Full secp256k1 signature verification is planned for mainnet.
+This provides **non-repudiation** — unlike HMAC, the server cannot forge submissions on behalf of a miner.
+
+### Legacy Fallback: HMAC-SHA256
+
+Miners without a registered `public_key` fall back to HMAC-SHA256 (`auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`). HMAC is a symmetric shared secret — it proves the submitter knows the secret but does NOT provide non-repudiation. HMAC fallback will be deprecated in Beta.
 
 ## 11. Staking Enforcement
 
@@ -222,7 +230,7 @@ If a miner's available balance (total_rewards - staked_amount) is insufficient, 
 
 ## 12. Known Limitations (Testnet)
 
-1. **HMAC-based authentication** (not full cryptographic signatures) on submissions.
+1. **secp256k1 signature authentication** on submissions (HMAC as legacy fallback).
 2. **Single-server architecture** — single point of trust/failure.
 3. **DEV mode simplifications** — single-miner settlement, direct submit allowed.
 4. **Non-deterministic challenges** excluded from Alpha mining (will return in Beta with proper verification).
@@ -241,7 +249,8 @@ If a miner's available balance (total_rewards - staked_amount) is insufficient, 
 - Advanced fraud detection
 
 **Mainnet**:
-- Full secp256k1 signature verification
+- True on-chain epoch anchoring (consensus-committed)
+- Deprecate HMAC fallback
 - On-chain challenge commitment and settlement
 - Multi-validator consensus
 - Economic staking with on-chain enforcement
@@ -261,7 +270,7 @@ If a miner's available balance (total_rewards - staked_amount) is insufficient, 
 | Challenge distribution | Trust-minimized | Commitment prevents post-hoc modification |
 | Wallet/keys | Client-only | Server never receives private keys |
 | Network transport | TLS required | HTTP rejected by default on non-localhost |
-| Miner identity | HMAC-authenticated | Symmetric HMAC-SHA256; full secp256k1 signatures planned for mainnet |
+| Miner identity | secp256k1-signed | Asymmetric signature with replay protection; HMAC as legacy fallback |
 | Staking enforcement | Server-enforced | Real balance check at registration; slashing deducts actual stake |
 | Faucet | Dev-only | Disabled in production (CLAWCHAIN_DEV_MODE required) |
 

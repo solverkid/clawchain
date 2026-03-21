@@ -118,7 +118,8 @@ cd website && npm install && npm run build
 
 ### Alpha（当前）
 - 确定性优先挖矿（数学、逻辑、哈希、封闭集分类/情感分析）
-- 链下结算 + 链上 epoch 锚定（可审计性）
+- 链下结算 + 本地 epoch 锚定（SHA256 结算根）+ 链节点存活验证（可审计性）
+- 矿工身份：secp256k1 非对称签名（非共享密钥）
 - 单一 mining-service 架构
 - 20% spot-check 抽查率
 

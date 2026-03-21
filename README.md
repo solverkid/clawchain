@@ -118,7 +118,8 @@ cd website && npm install && npm run build
 
 ### Alpha (Current)
 - Deterministic-first mining (math, logic, hash, closed-set classification/sentiment)
-- Off-chain settlement with on-chain epoch anchoring for auditability
+- Off-chain settlement with local epoch anchoring (SHA256 settlement roots) + chain liveness verification for auditability
+- Miner identity via secp256k1 signatures (asymmetric key, not shared secret)
 - Single mining-service architecture
 - 20% spot-check rate
 

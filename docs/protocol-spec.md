@@ -58,11 +58,20 @@ POST /clawchain/challenge/submit
   "challenge_id": "<id>",
   "miner_address": "<claw1...>",
   "answer": "<answer>",
-  "auth_token": "<HMAC-SHA256(auth_secret, challenge_id|answer)>"
+  "signature": "<secp256k1_sign(private_key, SHA256(challenge_id|answer|miner_address|nonce))>",
+  "nonce": 1711234567890,
+  "auth_token": "<HMAC-SHA256(auth_secret, challenge_id|answer)>  // legacy fallback"
 }
 ```
 
-**HMAC Authentication**: Each submission must include an `auth_token` computed as `HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`. The `auth_secret` is a 32-byte hex key generated during wallet setup and registered with the server. Submissions without a valid `auth_token` are rejected (HTTP 403) for authenticated miners. Legacy miners without `auth_secret` are allowed during Alpha transition.
+**secp256k1 Signature Authentication (Primary)**: Miners register a secp256k1 public key during registration. Each submission must include a `signature` and `nonce`:
+- `message = SHA256(challenge_id + "|" + answer + "|" + miner_address + "|" + nonce)`
+- `signature = secp256k1_sign(private_key, message)` — 65-byte recoverable signature
+- Server recovers the public key from the signature and compares against the registered key
+- `nonce` must be monotonically increasing (ms timestamp recommended); replayed nonces are rejected (HTTP 403)
+- Miners with a registered public key MUST sign; unsigned submissions are rejected
+
+**HMAC Authentication (Legacy Fallback)**: Miners without a registered `public_key` fall back to `auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`. HMAC provides authentication but not non-repudiation. This fallback will be deprecated in Beta.
 
 Server compares the submitted answer with `expected_answer`.
 
@@ -236,7 +245,7 @@ If the root does not match, the server has modified settlement data after anchor
 | Deterministic challenges | Trust-minimized | Commitment verifiable, answer deterministic |
 | Non-deterministic challenges | Server-trust | Until majority-vote implemented |
 | Reward calculation | Server-trust | Auditable via `/stats` API, anchored per-epoch |
-| Epoch settlement | Anchor-verifiable | Settlement root anchored on-chain/locally; post-hoc tampering detectable |
+| Epoch settlement | Locally anchored | Settlement root written to local file + chain liveness check; NOT consensus-level on-chain data |
 | Challenge distribution | Trust-minimized | Commitment prevents post-hoc modification |
 | Wallet/keys | Client-only | Server never receives private keys |
 | Network transport | TLS required | HTTP rejected by default on non-localhost |
@@ -245,9 +254,9 @@ If the root does not match, the server has modified settlement data after anchor
 
 1. **Single server** — no P2P network, single point of trust/failure
 2. **Non-deterministic tasks** rely on server trust in single-miner mode
-3. **No on-chain settlement** — off-chain SQLite database (testnet)
+3. **No on-chain settlement** — off-chain SQLite database; anchoring is local file-based, not consensus-committed
 4. **No unstaking cooldown** implemented yet (planned for Beta)
-5. **HMAC-based authentication** on submissions (symmetric key; full secp256k1 planned for mainnet)
+5. **secp256k1 signature authentication** on submissions (asymmetric key; HMAC as legacy fallback)
 6. **IP-based anti-Sybil** is bypassable with proxies/VPNs
 7. **DEV mode** allows single-miner settlement (production requires 3)
 8. **Faucet** disabled in production; dev-only for testnet initial distribution
@@ -256,10 +265,10 @@ If the root does not match, the server has modified settlement data after anchor
 
 **Alpha (Current)**:
 - Deterministic-first mining (8 task types, all verifiable)
-- Off-chain settlement with on-chain epoch anchoring
+- Off-chain settlement with local epoch anchoring + chain liveness verification
 - 20% spot-check rate
 - Single mining-service architecture
-- HMAC-authenticated submissions
+- secp256k1-signed submissions (HMAC as legacy fallback)
 - Real staking enforcement with balance checks
 - Faucet disabled in production (dev-only)
 
@@ -271,7 +280,8 @@ If the root does not match, the server has modified settlement data after anchor
 - Unstaking cooldown period
 
 **Mainnet**:
-- Full secp256k1 signature verification on submissions
+- Full on-chain epoch anchoring (consensus-committed)
+- Deprecate HMAC fallback
 - On-chain challenge commitment and settlement
 - Multi-validator consensus for non-deterministic challenges
 - Economic staking with on-chain enforcement

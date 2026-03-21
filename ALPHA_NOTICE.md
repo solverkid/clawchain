@@ -32,10 +32,16 @@ Alpha mining is **deterministic-first**. Only challenges with a single verifiabl
 
 Each epoch settlement is anchored for auditability:
 1. After each epoch, the mining service computes a **settlement root** — a SHA256 hash of the canonical JSON of all settlement records
-2. The root is anchored on-chain (via `clawchaind tx` memo) when the chain is available, or stored locally when not
-3. Anyone can verify settlement integrity using `scripts/verify_settlement.py`
+2. The root is written to a **local anchor file** (`data/anchors/epoch_N.json`)
+3. The chain node's liveness is checked — if the chain is running, the anchor is tagged `local+chain-live` with the current block height; otherwise it is tagged `local`
+4. Anyone can verify settlement integrity using `scripts/verify_settlement.py`
 
-**Anchoring improves transparency but does not fully decentralize the system.** Settlement computation remains server-side; anchoring makes post-hoc tampering detectable.
+**⚠️ Alpha anchoring is LOCAL, not on-chain consensus.** The settlement root is stored in a local file alongside the mining service, not broadcast as a chain transaction. This means:
+- The mining service operator can theoretically modify anchor files
+- Anchoring does NOT provide the tamper-resistance of true on-chain state
+- It DOES provide an audit trail that makes post-hoc changes detectable if files are externally mirrored
+
+True on-chain anchoring (broadcasting settlement roots as consensus-committed chain transactions) is planned for Beta.
 
 ## What to expect
 - You can install the miner, solve challenges, and earn testnet $CLAW
@@ -54,13 +60,30 @@ Each epoch settlement is anchored for auditability:
 Faucet is disabled in production. During alpha testing, a dev-only faucet exists for initial token distribution on the testnet. This endpoint returns HTTP 403 when `CLAWCHAIN_DEV_MODE` is not set.
 
 ## Submission Authentication
-Answer submissions require HMAC-SHA256 authentication. Miners generate an `auth_secret` during wallet setup, which is registered with the mining service. Each submission includes an `auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`. Legacy miners without `auth_secret` are allowed during the Alpha transition period but will be required in Beta.
+
+**Primary: secp256k1 Signature (v0.3.0+)**
+
+Miners register a secp256k1 public key during registration. Each submission must be signed with the corresponding private key:
+
+```
+message = SHA256(challenge_id + "|" + answer + "|" + miner_address + "|" + nonce)
+signature = secp256k1_sign(private_key, message)
+```
+
+The server verifies the signature by recovering the public key and comparing it against the registered key. This provides:
+- **Non-repudiation**: only the holder of the private key can produce valid submissions
+- **Replay protection**: nonce must be monotonically increasing (ms timestamp recommended); reused nonces are rejected
+- **Identity binding**: submissions are cryptographically tied to the miner's registered identity
+
+**Legacy fallback: HMAC-SHA256**
+
+Miners without a registered public key fall back to HMAC-SHA256 authentication (`auth_token = HMAC-SHA256(auth_secret, challenge_id + "|" + answer)`). This is a transitional mechanism; HMAC provides authentication but NOT non-repudiation (shared secret). Legacy HMAC will be deprecated in Beta.
 
 ## Staking
 Staking is enforced at registration time. When the network has fewer than 1,000 active miners, staking is free. Above that threshold, miners must have sufficient balance from prior rewards to cover the stake requirement. Slashing is real: 3+ consecutive failures slash 10% of stake, 5+ consecutive failures slash 50% and suspend the miner.
 
 ## Chain Node Status
-The Cosmos SDK chain node (`clawchaind`) is operational on testnet and produces blocks. It is used for epoch settlement anchoring (writing settlement roots as tx memos). The chain binary runs on port 26657 (CometBFT) and 1316 (REST API). The mining service operates independently on port 1317.
+The Cosmos SDK chain node (`clawchaind`) is operational on testnet and produces blocks. The chain binary runs on port 26657 (CometBFT). The mining service operates independently on port 1317 and checks the chain node's liveness when writing anchor files. **Note:** The chain node currently runs as a single-validator testnet; settlement data is NOT written as chain transactions in Alpha (see Epoch Settlement Anchoring above).
 
 ## What is NOT production-grade yet
 - Multi-validator consensus
@@ -78,11 +101,13 @@ The Cosmos SDK chain node (`clawchaind`) is operational on testnet and produces 
 
 ### Alpha (Current)
 - Deterministic-first mining (math, logic, hash, closed-set classification/sentiment)
-- Off-chain settlement with on-chain epoch anchoring
+- Off-chain settlement with local epoch anchoring + chain liveness verification
+- secp256k1 miner identity signatures with replay protection
 - Single mining-service architecture
 - 20% spot-check rate
 
 ### Beta
+- True on-chain epoch anchoring (consensus-committed settlement roots)
 - Stake-weighted validation for non-deterministic tasks
 - Cosmos SDK Msg-based mining operations (MsgSubmitAnswer)
 - Advanced fraud detection

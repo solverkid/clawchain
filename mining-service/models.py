@@ -109,6 +109,8 @@ def migrate_db(db):
         ("miners", "staked_at", "ALTER TABLE miners ADD COLUMN staked_at TIMESTAMP"),
         ("miners", "ip_address", "ALTER TABLE miners ADD COLUMN ip_address TEXT"),
         ("miners", "auth_secret", "ALTER TABLE miners ADD COLUMN auth_secret TEXT"),
+        ("miners", "public_key", "ALTER TABLE miners ADD COLUMN public_key TEXT"),
+        ("miners", "last_nonce", "ALTER TABLE miners ADD COLUMN last_nonce INTEGER DEFAULT 0"),
     ]
     for table, col, sql in migrations:
         try:

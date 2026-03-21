@@ -255,7 +255,12 @@ def compute_settlement_root(db, epoch: int):
 
 
 def anchor_epoch_settlement(db, epoch: int):
-    """Compute settlement root and anchor it (on-chain or local file)."""
+    """Compute settlement root and anchor it locally with chain liveness verification.
+
+    Alpha limitation: anchoring is LOCAL (file-based), not on-chain consensus.
+    The chain node is checked for liveness but settlement data is NOT written
+    as a chain transaction. True on-chain anchoring is planned for Beta.
+    """
     result = compute_settlement_root(db, epoch)
     if result is None or result[0] is None:
         return  # No submissions in this epoch
@@ -263,53 +268,48 @@ def anchor_epoch_settlement(db, epoch: int):
     settlement_root, records = result
     records_json = json.dumps(records, sort_keys=True, separators=(",", ":"))
 
-    # Try on-chain anchoring first
+    # Local anchoring with chain liveness check
+    # NOTE: This is LOCAL file-based anchoring, NOT on-chain consensus anchoring.
+    # The settlement root is written to a local file and the chain is checked for
+    # liveness. True on-chain tx anchoring requires fixing the Cosmos SDK CLI
+    # context propagation issue (planned for Beta).
     anchor_type = "local"
     tx_hash = None
+    chain_height = None
 
     try:
-        memo = f"anchor:epoch:{epoch}:{settlement_root}"
-        # Attempt to anchor via CometBFT RPC broadcast
-        # (clawchaind tx CLI has context-init issues in Alpha; use direct RPC instead)
         import urllib.request
         anchor_payload = json.dumps({
-            "type": "clawchain/anchor",
+            "type": "clawchain/local-anchor",
             "epoch": epoch,
             "settlement_root": settlement_root,
             "records_count": len(records),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "note": "local file anchor — not a consensus-level on-chain record",
         }, separators=(",", ":"))
-        # Write anchor to chain's data directory for verifiability
-        chain_home = os.environ.get(
-            "CLAWCHAIN_HOME",
-            str(Path.home() / ".clawchain-testnet"),
-        )
-        chain_anchor_dir = Path(chain_home) / "data" / "anchors"
-        chain_anchor_dir.mkdir(parents=True, exist_ok=True)
-        anchor_file = chain_anchor_dir / f"epoch_{epoch}.json"
+
+        # Write anchor to local data directory
+        anchor_dir = Path(__file__).parent / "data" / "anchors"
+        anchor_dir.mkdir(parents=True, exist_ok=True)
+        anchor_file = anchor_dir / f"epoch_{epoch}.json"
         with open(anchor_file, "w") as f:
             f.write(anchor_payload)
 
-        # Also check if chain is running (just for status reporting)
+        # Check chain liveness (informational only, does NOT make it on-chain)
         try:
             resp = urllib.request.urlopen("http://localhost:26657/status", timeout=3)
             chain_status = json.loads(resp.read())
             chain_height = chain_status["result"]["sync_info"]["latest_block_height"]
-            anchor_type = "chain-verified"
-            tx_hash = f"block:{chain_height}:file:{anchor_file.name}"
-            logger.info(f"Epoch {epoch} anchored (chain running at height {chain_height}): {settlement_root[:16]}...")
+            anchor_type = "local+chain-live"
+            logger.info(
+                f"Epoch {epoch} anchored locally (chain live at height {chain_height}): "
+                f"{settlement_root[:16]}..."
+            )
         except Exception:
-            pass  # Chain not running, fall through to local anchor
-        if result_proc.returncode == 0:
-            try:
-                tx_data = json.loads(result_proc.stdout)
-                tx_hash = tx_data.get("txhash", "")
-                anchor_type = "chain"
-                logger.info(f"Epoch {epoch} anchored on-chain: {settlement_root[:16]}... tx={tx_hash[:16]}...")
-            except (json.JSONDecodeError, KeyError):
-                pass
-    except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
-        logger.debug(f"On-chain anchoring unavailable: {e}")
+            logger.info(f"Epoch {epoch} anchored locally (chain offline): {settlement_root[:16]}...")
+
+    except Exception as e:
+        logger.debug(f"Anchoring error: {e}")
 
     if anchor_type == "local":
         logger.info(f"Epoch {epoch} anchored locally: {settlement_root[:16]}...")

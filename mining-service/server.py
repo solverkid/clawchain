@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import hmac as hmac_mod
 import json
+from crypto_auth import verify_signature, check_nonce, update_nonce
 import logging
 import os
 import re
@@ -211,7 +212,9 @@ class MiningHandler(BaseHTTPRequestHandler):
         ch_id = body.get("challenge_id", "")
         miner_addr = body.get("miner_address", "")
         answer = body.get("answer", "")
-        auth_token = body.get("auth_token", "")
+        signature = body.get("signature", "")
+        nonce = body.get("nonce", 0)
+        auth_token = body.get("auth_token", "")  # legacy HMAC fallback
 
         if not ch_id or not miner_addr or not answer:
             self._error("challenge_id, miner_address, and answer are required", 400)
@@ -228,24 +231,55 @@ class MiningHandler(BaseHTTPRequestHandler):
             self._error("miner not active", 403)
             return
 
-        # HMAC authentication
-        stored_secret = miner["auth_secret"] if "auth_secret" in miner.keys() else None
-        if stored_secret:
-            if not auth_token:
-                self._error("auth_token required for authenticated miners", 403)
+        # ── Authentication: secp256k1 signature (primary) or HMAC (legacy fallback) ──
+        miner_pubkey = miner["public_key"] if "public_key" in miner.keys() else None
+
+        if miner_pubkey and signature:
+            # PRIMARY: secp256k1 signature verification
+            # 1. Check nonce for replay protection
+            try:
+                nonce = int(nonce)
+            except (TypeError, ValueError):
+                self._error("nonce must be an integer (ms timestamp recommended)", 400)
                 return
-            expected_token = hmac_mod.new(
-                stored_secret.encode(), f"{ch_id}|{answer}".encode(), "sha256"
-            ).hexdigest()
-            if not hmac_mod.compare_digest(auth_token, expected_token):
-                self._error("invalid auth_token", 403)
+
+            nonce_ok, nonce_err = check_nonce(db, miner_addr, nonce)
+            if not nonce_ok:
+                self._error(nonce_err, 403)
                 return
-        elif auth_token:
-            # Miner sent auth_token but server has no secret — accept (forward compat)
-            pass
+
+            # 2. Verify signature against registered public key
+            sig_ok, sig_err = verify_signature(ch_id, answer, miner_addr, nonce, signature, miner_pubkey)
+            if not sig_ok:
+                self._error(sig_err, 403)
+                return
+
+            # 3. Update nonce (after successful verification)
+            update_nonce(db, miner_addr, nonce)
+
+        elif miner_pubkey and not signature:
+            # Miner has registered public key but didn't sign — reject
+            self._error("signature required: miner has registered public key, must sign submissions", 403)
+            return
+
         else:
-            # Legacy miner without auth_secret — allow with warning during Alpha transition
-            logger.warning(f"Miner {miner_addr} submitted without HMAC auth (legacy client)")
+            # LEGACY FALLBACK: HMAC-based auth (for miners without public_key)
+            stored_secret = miner["auth_secret"] if "auth_secret" in miner.keys() else None
+            if stored_secret:
+                if not auth_token:
+                    self._error("auth_token required for authenticated miners (upgrade to secp256k1 recommended)", 403)
+                    return
+                expected_token = hmac_mod.new(
+                    stored_secret.encode(), f"{ch_id}|{answer}".encode(), "sha256"
+                ).hexdigest()
+                if not hmac_mod.compare_digest(auth_token, expected_token):
+                    self._error("invalid auth_token", 403)
+                    return
+                logger.info(f"Miner {miner_addr} using legacy HMAC auth (secp256k1 upgrade recommended)")
+            elif auth_token:
+                pass
+            else:
+                logger.warning(f"Miner {miner_addr} submitted without any auth (legacy client)")
 
         # 检查挑战
         ch = db.execute("SELECT * FROM challenges WHERE id=?", (ch_id,)).fetchone()
@@ -478,6 +512,7 @@ class MiningHandler(BaseHTTPRequestHandler):
         name = body.get("name", "")
         miner_version = body.get("miner_version", "")
         auth_secret = body.get("auth_secret", "")
+        public_key = body.get("public_key", "")
 
         if not address:
             self._error("address is required", 400)
@@ -575,11 +610,22 @@ class MiningHandler(BaseHTTPRequestHandler):
                 return
             staked_amount = stake_required
 
+        # Validate public_key format if provided
+        if public_key:
+            try:
+                pk_hex = public_key.removeprefix("0x")
+                if len(bytes.fromhex(pk_hex)) != 64:
+                    self._error("public_key must be 64-byte uncompressed secp256k1 key (hex)", 400)
+                    return
+            except ValueError:
+                self._error("public_key must be valid hex", 400)
+                return
+
         # 插入矿工
         db.execute(
-            """INSERT INTO miners (address, name, registration_index, status, reputation, ip_address, staked_amount, staked_at, auth_secret)
-            VALUES (?, ?, ?, 'active', 500, ?, ?, CURRENT_TIMESTAMP, ?)""",
-            (address, name or "miner", reg_count, client_ip, staked_amount, auth_secret or None),
+            """INSERT INTO miners (address, name, registration_index, status, reputation, ip_address, staked_amount, staked_at, auth_secret, public_key)
+            VALUES (?, ?, ?, 'active', 500, ?, ?, CURRENT_TIMESTAMP, ?, ?)""",
+            (address, name or "miner", reg_count, client_ip, staked_amount, auth_secret or None, public_key or None),
         )
         db.commit()
 
@@ -756,6 +802,7 @@ class MiningHandler(BaseHTTPRequestHandler):
                 "epoch_id": epoch_id,
                 "settlement_root": anchor["settlement_root"],
                 "anchor_type": anchor["anchor_type"],
+                "anchor_note": "local file anchor — not consensus-level on-chain data (Alpha limitation)",
                 "tx_hash": anchor["tx_hash"],
                 "records": records,
                 "created_at": anchor["created_at"],
@@ -1010,7 +1057,9 @@ def main():
         logger.info(f"Generated {len(challenges)} initial challenges for epoch {epoch}")
 
     # 启动 HTTP 服务
-    server = HTTPServer(("0.0.0.0", args.port), MiningHandler)
+    class ReusableHTTPServer(HTTPServer):
+        allow_reuse_address = True
+    server = ReusableHTTPServer(("0.0.0.0", args.port), MiningHandler)
     logger.info(f"Mining service listening on http://0.0.0.0:{args.port}")
     logger.info("API endpoints:")
     logger.info("  GET  /clawchain/challenges/pending")
