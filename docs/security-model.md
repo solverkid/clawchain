@@ -244,14 +244,15 @@ If a miner's available balance (total_rewards - staked_amount) is insufficient, 
 - Off-chain settlement with epoch anchoring (20% spot-check rate)
 
 **Beta**:
+- On-chain epoch anchoring via chain transactions (settlement roots as tx memos)
+- Remove legacy HMAC authentication
 - Stake-weighted validation for non-deterministic tasks
 - Cosmos SDK Msg-based mining (MsgSubmitAnswer)
 - Advanced fraud detection
 
 **Mainnet**:
-- True on-chain epoch anchoring (consensus-committed)
-- Deprecate HMAC fallback
-- On-chain challenge commitment and settlement
+- Full consensus-level on-chain settlement (multi-validator)
+- On-chain challenge commitment and verification
 - Multi-validator consensus
 - Economic staking with on-chain enforcement
 - Decentralized challenge generation

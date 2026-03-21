@@ -126,9 +126,9 @@ If the commitment does not match, the server is provably dishonest.
 
 | Bonus | Condition | Multiplier |
 |-------|-----------|------------|
-| Early bird | Miner index 1–1000 | 3× |
-| Early bird | Miner index 1001–2000 | 2× |
-| Early bird | Miner index 2001–3000 | 1.5× |
+| Early bird | Miner index 1–1,000 | 3× |
+| Early bird | Miner index 1,001–5,000 | 2× |
+| Early bird | Miner index 5,001–10,000 | 1.5× |
 | Streak | 7 consecutive days | +10% |
 | Streak | 30 consecutive days | +25% |
 | Streak | 90 consecutive days | +50% |
@@ -273,6 +273,8 @@ If the root does not match, the server has modified settlement data after anchor
 - Faucet disabled in production (dev-only)
 
 **Beta**:
+- On-chain epoch anchoring via chain transactions (settlement roots as tx memos)
+- Remove legacy HMAC authentication
 - Stake-weighted validation for non-deterministic tasks
 - Cosmos SDK Msg-based mining operations (MsgSubmitAnswer)
 - Open up generative tasks with proper verification
@@ -280,9 +282,8 @@ If the root does not match, the server has modified settlement data after anchor
 - Unstaking cooldown period
 
 **Mainnet**:
-- Full on-chain epoch anchoring (consensus-committed)
-- Deprecate HMAC fallback
-- On-chain challenge commitment and settlement
+- Full consensus-level on-chain settlement (multi-validator)
+- On-chain challenge commitment and verification
 - Multi-validator consensus for non-deterministic challenges
 - Economic staking with on-chain enforcement
 - Decentralized challenge generation

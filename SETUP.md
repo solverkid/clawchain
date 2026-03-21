@@ -122,9 +122,9 @@ Edit `scripts/config.json` to change `solver_mode`:
 
 | Mode | Default? | Behavior |
 |------|:--------:|----------|
-| `local_only` | ✅ | Only use local solvers; skip LLM-required challenges. Most private. |
-| `auto` | | Try local solver first, fall back to LLM for advanced challenges. |
-| `llm` | | Always use LLM provider for all challenges. |
+| `local_only` | ✅ | Only use local solvers. All Alpha challenges are solvable locally. Most private. |
+| `auto` | | Try local solver first, fall back to LLM if available. Not required for Alpha mining. |
+| `llm` | | Always use LLM provider. Not required for Alpha — all 8 task types are deterministic. |
 
 > ⚠️ **Privacy note**: `auto` and `llm` modes send challenge prompt text to third-party LLM APIs (OpenAI, Google, or Anthropic). Only enable these if you understand and accept external data sharing. `local_only` never sends any data externally.
 

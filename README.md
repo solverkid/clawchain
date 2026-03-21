@@ -124,14 +124,16 @@ cd website && npm install && npm run build
 - 20% spot-check rate
 
 ### Beta
+- On-chain epoch anchoring via chain transactions (settlement roots as tx memos)
+- Remove legacy HMAC authentication
 - Stake-weighted validation for non-deterministic tasks
 - Cosmos SDK Msg-based mining operations (MsgSubmitAnswer)
 - Advanced fraud detection
 - Open up generative tasks (translation, summarization) with proper verification
 
 ### Mainnet
-- Multi-validator consensus
-- Full on-chain settlement
+- Full consensus-level on-chain settlement (multi-validator)
+- Decentralized challenge generation and verification
 - Stronger Sybil resistance (proof-of-work registration, TEE)
 - Complete decentralization of mining-service
 

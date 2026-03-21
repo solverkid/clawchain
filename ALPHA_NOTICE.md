@@ -43,7 +43,7 @@ Each epoch settlement is anchored for auditability:
 - Anchoring does NOT provide the tamper-resistance of true on-chain state
 - It DOES provide an audit trail that makes post-hoc changes detectable if files are externally mirrored
 
-True on-chain anchoring (broadcasting settlement roots as consensus-committed chain transactions) is planned for Beta.
+On-chain anchoring (broadcasting settlement roots as chain transactions) is planned for Beta. Full consensus-level multi-validator settlement is planned for Mainnet.
 
 ## What to expect
 - You can install the miner, solve challenges, and earn testnet $CLAW
@@ -109,15 +109,16 @@ The Cosmos SDK chain node (`clawchaind`) is operational on testnet and produces 
 - 20% spot-check rate
 
 ### Beta
-- True on-chain epoch anchoring (consensus-committed settlement roots)
+- On-chain epoch anchoring via chain transactions (settlement roots broadcast as tx memos on single-validator testnet)
 - Stake-weighted validation for non-deterministic tasks
 - Cosmos SDK Msg-based mining operations (MsgSubmitAnswer)
+- Remove legacy HMAC authentication
 - Advanced fraud detection
 - Open up generative tasks with proper verification
 
 ### Mainnet
-- Multi-validator consensus
-- Full on-chain settlement
+- Full consensus-level on-chain settlement (multi-validator)
+- Decentralized challenge generation and verification
 - Stronger Sybil resistance (proof-of-work registration, TEE)
 - Complete decentralization of mining-service
 

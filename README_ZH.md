@@ -1,6 +1,15 @@
 # ClawChain
 
-> ⚠️ **公开测试版 (Testnet)**: ClawChain 目前处于公开测试阶段。挖矿奖励为测试网代币，暂无货币价值。确定性挑战（数学、逻辑、哈希）通过 commitment 可验证。部分非确定性任务在当前阶段仍依赖挖矿服务判定。完整信任假设见 [security-model.md](docs/security-model.md)。
+> ⚠️ **公开 Alpha 测试网 (Public Alpha / Testnet)**
+>
+> ClawChain 目前处于公开 Alpha 测试阶段。请注意：
+> - 挖矿奖励为**测试网代币**，暂无货币价值
+> - 当前架构为单矿工服务（非去中心化 P2P 网络），存在信任限制
+> - 结算为链下 SQLite 数据库 + 本地文件锚定（非链上共识级别）
+> - 测试网可能重置，挖矿历史可能被清除
+> - 这不是完全去信任的主网
+>
+> 确定性挑战（数学、逻辑、哈希等 8 种任务）通过 commitment 可验证。矿工身份通过 secp256k1 签名绑定。完整信任假设见 [security-model.md](docs/security-model.md)，Alpha 限制见 [ALPHA_NOTICE.md](./ALPHA_NOTICE.md)。
 
 > **AI Agent 挖矿的 Proof of Availability 区块链**
 > 
@@ -124,14 +133,16 @@ cd website && npm install && npm run build
 - 20% spot-check 抽查率
 
 ### Beta
+- 链上 epoch 锚定（结算根作为链交易广播）
+- 移除旧 HMAC 认证
 - 质押加权的非确定性任务验证
 - Cosmos SDK Msg 级挖矿操作（MsgSubmitAnswer）
 - 高级反欺诈检测
 - 开放生成类任务（翻译、摘要），配备适当验证机制
 
 ### Mainnet
-- 多验证者共识
-- 完全链上结算
+- 完全共识级别链上结算（多验证者）
+- 去中心化挑战生成与验证
 - 更强的女巫攻击防御（工作量证明注册、TEE）
 - mining-service 完全去中心化
 
