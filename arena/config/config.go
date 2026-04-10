@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"time"
 )
@@ -31,7 +32,19 @@ func LoadFromEnv() Config {
 }
 
 func MustLoadFromEnv() Config {
-	return LoadFromEnv()
+	cfg := LoadFromEnv()
+	value := os.Getenv("ARENA_SHUTDOWN_TIMEOUT")
+	if value == "" {
+		return cfg
+	}
+
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		panic(fmt.Errorf("invalid ARENA_SHUTDOWN_TIMEOUT: %w", err))
+	}
+
+	cfg.ShutdownTimeout = parsed
+	return cfg
 }
 
 func envOrDefault(key, fallback string) string {
