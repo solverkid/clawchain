@@ -1,0 +1,20 @@
+services:
+  arena-postgres:
+    image: postgres:16-alpine
+    container_name: clawchain-arena-postgres
+    environment:
+      POSTGRES_DB: arena
+      POSTGRES_USER: arena
+      POSTGRES_PASSWORD: arena
+    ports:
+      - "55432:5432"
+    volumes:
+      - arena-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arena -d arena"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  arena-postgres-data:
