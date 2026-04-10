@@ -26,10 +26,34 @@ func (s *Server) handleTournamentReadRoutes(w http.ResponseWriter, r *http.Reque
 	tournamentID := parts[2]
 	switch {
 	case r.Method == http.MethodGet && len(parts) == 4 && parts[3] == "standing":
+		if s.deps.Arena != nil {
+			if view, ok := s.deps.Arena.Standing(r.Context(), tournamentID); ok {
+				writeJSON(w, http.StatusOK, view)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		writeJSON(w, http.StatusOK, s.deps.StandingView[tournamentID])
 	case r.Method == http.MethodGet && len(parts) == 5 && parts[3] == "live-table":
+		if s.deps.Arena != nil {
+			if view, ok := s.deps.Arena.LiveTable(r.Context(), tournamentID, parts[4]); ok {
+				writeJSON(w, http.StatusOK, view)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		writeJSON(w, http.StatusOK, s.deps.LiveTableView[tournamentID][parts[4]])
 	case r.Method == http.MethodGet && len(parts) == 5 && parts[3] == "seat-assignment":
+		if s.deps.Arena != nil {
+			if assignment, ok := s.deps.Arena.SeatAssignment(r.Context(), tournamentID, parts[4]); ok {
+				writeJSON(w, http.StatusOK, assignment)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		writeJSON(w, http.StatusOK, s.deps.SeatAssignments[tournamentID][parts[4]])
 	default:
 		http.NotFound(w, r)
