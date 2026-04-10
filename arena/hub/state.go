@@ -8,15 +8,35 @@ import (
 )
 
 type State struct {
-	WaveID            string
-	WaveState         model.WaveState
-	StartedAt         time.Time
-	Entrants          []model.Entrant
-	Tournaments       []TournamentPlan
-	republishUsed     bool
-	pendingRepublish  bool
-	snapshotStreamSeq int64
+	TournamentID        string
+	WaveID              string
+	WaveState           model.WaveState
+	StartedAt           time.Time
+	Entrants            []model.Entrant
+	Tournaments         []TournamentPlan
+	PlayersRemaining    int
+	LiveTables          []LiveTable
+	ClosedTables        map[string]bool
+	terminateAfterRound bool
+	terminateAfterHand  bool
+	republishUsed       bool
+	pendingRepublish    bool
+	snapshotStreamSeq   int64
 }
+
+type LiveTable struct {
+	TableID     string
+	PlayerCount int
+}
+
+type TransitionDecision string
+
+const (
+	TransitionNone       TransitionDecision = "none"
+	TransitionRebalance  TransitionDecision = "rebalance"
+	TransitionBreakTable TransitionDecision = "break_table"
+	TransitionFinalTable TransitionDecision = "final_table"
+)
 
 func (s State) result() PackResult {
 	tournaments := make([]TournamentPlan, 0, len(s.Tournaments))

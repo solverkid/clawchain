@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/clawchain/clawchain/arena/model"
@@ -63,6 +64,63 @@ func NewService(state State, store persistence) *Service {
 
 func (s *Service) Result() PackResult {
 	return s.state.result()
+}
+
+func (s *Service) MarkHandClosed(tableID string) {
+	if s.state.ClosedTables == nil {
+		s.state.ClosedTables = make(map[string]bool)
+	}
+	s.state.ClosedTables[tableID] = true
+}
+
+func (s *Service) CanAdvanceRound() bool {
+	if len(s.state.LiveTables) == 0 {
+		return false
+	}
+	if len(s.state.ClosedTables) < len(s.state.LiveTables) {
+		return false
+	}
+
+	for _, table := range s.state.LiveTables {
+		if !s.state.ClosedTables[table.TableID] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (s *Service) NextBarrierDecision() TransitionDecision {
+	tableCount := len(s.state.LiveTables)
+	if tableCount == 0 {
+		return TransitionNone
+	}
+	if s.state.PlayersRemaining <= seatsPerTable && tableCount > 1 {
+		return TransitionFinalTable
+	}
+
+	targetTables := targetTableCount(s.state.PlayersRemaining)
+	switch {
+	case targetTables < tableCount:
+		return TransitionBreakTable
+	case needsRebalance(s.state.LiveTables):
+		return TransitionRebalance
+	default:
+		return TransitionNone
+	}
+}
+
+func (s *Service) ArmTimeCap() {
+	s.state.terminateAfterRound = true
+	s.state.terminateAfterHand = false
+}
+
+func (s *Service) TerminateAfterCurrentRound() bool {
+	return s.state.terminateAfterRound
+}
+
+func (s *Service) TerminateAfterCurrentHand() bool {
+	return s.state.terminateAfterHand
 }
 
 func (s *Service) LockAndPack(ctx context.Context) (PackResult, error) {
@@ -326,4 +384,43 @@ func (s *Service) lookupAssignment(entrantID string) (SeatAssignment, string) {
 		}
 	}
 	return SeatAssignment{}, ""
+}
+
+func targetTableCount(playersRemaining int) int {
+	switch {
+	case playersRemaining <= seatsPerTable:
+		return 1
+	case playersRemaining >= 9 && playersRemaining <= 13:
+		return 2
+	default:
+		for n := 2; n <= int(math.Max(2, float64(playersRemaining))); n++ {
+			if 7*n <= playersRemaining && playersRemaining <= 9*n {
+				return n
+			}
+		}
+		return 2
+	}
+}
+
+func needsRebalance(tables []LiveTable) bool {
+	if len(tables) < 2 {
+		return false
+	}
+
+	minPlayers := tables[0].PlayerCount
+	maxPlayers := tables[0].PlayerCount
+	for _, table := range tables[1:] {
+		if table.PlayerCount < minPlayers {
+			minPlayers = table.PlayerCount
+		}
+		if table.PlayerCount > maxPlayers {
+			maxPlayers = table.PlayerCount
+		}
+	}
+
+	return maxPlayers-minPlayers > 1
+}
+
+func tableID(tournamentID string, tableNo int) string {
+	return model.TableID(tournamentID, tableNo)
 }
