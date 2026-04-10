@@ -1,7 +1,9 @@
-.PHONY: build build-arena install clean test test-arena lint proto-gen run-arena arena-db-up arena-db-down
+.PHONY: build build-arena install clean test test-arena lint proto-gen run-arena arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
+ARENA_DATABASE_URL ?= postgres://arena:arena@127.0.0.1:55432/arena?sslmode=disable
+ARENA_TEST_DATABASE_URL ?= $(ARENA_DATABASE_URL)
 
 LDFLAGS := -X github.com/cosmos/cosmos-sdk/version.Name=clawchain \
            -X github.com/cosmos/cosmos-sdk/version.AppName=clawchaind \
@@ -39,7 +41,7 @@ test:
 
 test-arena:
 	@echo "Running arena tests..."
-	@go test -v ./arena/...
+	@ARENA_TEST_DATABASE_URL='$(ARENA_TEST_DATABASE_URL)' go test -v ./arena/...
 
 # Run linter
 lint:
@@ -58,11 +60,16 @@ proto-gen:
 
 run-arena:
 	@echo "Starting arenad..."
-	@go run ./cmd/arenad
+	@ARENA_DATABASE_URL='$(ARENA_DATABASE_URL)' go run ./cmd/arenad
 
 arena-db-up:
 	@echo "Starting local arena Postgres..."
+	@if lsof -iTCP:55432 -sTCP:LISTEN >/dev/null 2>&1; then \
+		echo "Port 55432 is already in use. Stop the conflicting Postgres container or free the port before running make arena-db-up."; \
+		exit 1; \
+	fi
 	@docker compose -f deploy/docker-compose.arena.yml up -d
+	@echo "Arena DB URL: $(ARENA_DATABASE_URL)"
 
 arena-db-down:
 	@echo "Stopping local arena Postgres..."
@@ -86,8 +93,8 @@ help:
 	@echo "  lint       - Run linter"
 	@echo "  tidy       - Tidy go.mod dependencies"
 	@echo "  proto-gen  - Generate protobuf code"
-	@echo "  run-arena  - Run arenad from source"
-	@echo "  arena-db-up   - Start local Arena Postgres"
+	@echo "  run-arena  - Run arenad from source using ARENA_DATABASE_URL"
+	@echo "  arena-db-up   - Start local Arena Postgres on 127.0.0.1:55432"
 	@echo "  arena-db-down - Stop local Arena Postgres"
 	@echo "  version    - Build and show version"
 	@echo "  help       - Show this help message"

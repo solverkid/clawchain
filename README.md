@@ -112,6 +112,35 @@ cd website && npm install && npm run build
 
 > **Note**: `scripts/` contains dev/test utilities (e2e_test.sh, etc.). Mining scripts are in `skill/scripts/` only.
 
+### Arena Runtime (Go)
+
+The Arena runtime is implemented in Go under `cmd/arenad` and `arena/*`.
+
+```bash
+# 1. Start the local Arena Postgres
+make arena-db-up
+
+# 2. Run the Arena test suite
+ARENA_TEST_DATABASE_URL=postgres://arena:arena@127.0.0.1:55432/arena?sslmode=disable make test-arena
+
+# 3. Build the Arena worker
+make build-arena
+
+# 4. Run the Arena worker
+ARENA_DATABASE_URL=postgres://arena:arena@127.0.0.1:55432/arena?sslmode=disable make run-arena
+```
+
+Arena-specific Make targets:
+- `make arena-db-up`
+- `make arena-db-down`
+- `make test-arena`
+- `make build-arena`
+- `make run-arena`
+
+Arena ownership note:
+- The Go Arena worker writes the current shared compatibility rows directly into `miners` and `arena_result_entries`, so existing miner-status surfaces continue to work without moving multiplier logic back into Python.
+- `deploy/docker-compose.arena.yml` expects host port `55432`; if another local Postgres already binds that port, free it before running `make arena-db-up`.
+
 ---
 
 ## 🗺️ Roadmap

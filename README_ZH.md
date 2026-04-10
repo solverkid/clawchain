@@ -121,6 +121,35 @@ cd website && npm install && npm run build
 
 > **注意**: `scripts/` 目录包含开发/测试工具（e2e_test.sh 等）。挖矿脚本仅在 `skill/scripts/` 中。
 
+### Arena Runtime（Go）
+
+Arena runtime 位于 `cmd/arenad` 和 `arena/*`，由 Go worker 承载。
+
+```bash
+# 1. 启动本地 Arena Postgres
+make arena-db-up
+
+# 2. 运行 Arena 测试
+ARENA_TEST_DATABASE_URL=postgres://arena:arena@127.0.0.1:55432/arena?sslmode=disable make test-arena
+
+# 3. 构建 Arena worker
+make build-arena
+
+# 4. 启动 Arena worker
+ARENA_DATABASE_URL=postgres://arena:arena@127.0.0.1:55432/arena?sslmode=disable make run-arena
+```
+
+Arena 相关 Make 命令：
+- `make arena-db-up`
+- `make arena-db-down`
+- `make test-arena`
+- `make build-arena`
+- `make run-arena`
+
+Arena ownership 说明：
+- Go Arena worker 会直接写当前共享兼容表 `miners` 和 `arena_result_entries`，所以现有 miner-status 路径不需要把 multiplier 逻辑再放回 Python。
+- `deploy/docker-compose.arena.yml` 默认占用宿主机 `55432` 端口；如果本地已有其他 Postgres 占用这个端口，需要先释放再执行 `make arena-db-up`。
+
 ---
 
 ## 🗺️ 路线图
