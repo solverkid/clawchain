@@ -105,7 +105,7 @@ func resetPublicSchema(t *testing.T, db *sql.DB) {
 
 	for _, stmt := range []string{
 		"DROP SCHEMA IF EXISTS public CASCADE",
-		"CREATE SCHEMA public",
+		"CREATE SCHEMA IF NOT EXISTS public",
 		"GRANT ALL ON SCHEMA public TO public",
 	} {
 		_, err := db.Exec(stmt)
