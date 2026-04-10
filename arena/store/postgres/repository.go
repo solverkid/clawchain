@@ -2258,6 +2258,80 @@ func (r *Repository) AppendRatingInputs(ctx context.Context, inputs []model.Rati
 	return nil
 }
 
+func (r *Repository) AppendCollusionMetrics(ctx context.Context, metrics []model.CollusionMetric) error {
+	const query = `
+		INSERT INTO arena_collusion_metric (
+			metric_id,
+			tournament_id,
+			miner_address,
+			metric_name,
+			metric_value,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+		)
+		ON CONFLICT (metric_id) DO UPDATE SET
+			metric_value = EXCLUDED.metric_value,
+			payload = EXCLUDED.payload,
+			state_hash = EXCLUDED.state_hash,
+			payload_hash = EXCLUDED.payload_hash,
+			artifact_ref = EXCLUDED.artifact_ref,
+			created_at = EXCLUDED.created_at
+	`
+
+	for _, metric := range metrics {
+		_, err := r.db.ExecContext(
+			ctx,
+			query,
+			metric.ID,
+			metric.TournamentID,
+			metric.MinerAddress,
+			metric.MetricName,
+			metric.MetricValue,
+			normalizeJSON(metric.Payload),
+			defaultSchemaVersion(metric.SchemaVersion),
+			defaultString(metric.PolicyBundleVersion, "v1"),
+			defaultString(metric.StateHash, metric.ID),
+			defaultString(metric.PayloadHash, metric.ID),
+			metric.ArtifactRef,
+			defaultTime(metric.CreatedAt),
+		)
+		if err != nil {
+			return fmt.Errorf("append arena_collusion_metric %s: %w", metric.ID, err)
+		}
+	}
+
+	return nil
+}
+
+func (r *Repository) AssertSharedHarnessTables(ctx context.Context) error {
+	for _, table := range []string{"miners", "arena_result_entries"} {
+		var exists bool
+		err := r.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM information_schema.tables
+				WHERE table_schema = 'public'
+				  AND table_name = $1
+			)
+		`, table).Scan(&exists)
+		if err != nil {
+			return fmt.Errorf("check %s table: %w", table, err)
+		}
+		if !exists {
+			return fmt.Errorf("%s table missing", table)
+		}
+	}
+
+	return nil
+}
+
 func (r *Repository) UpsertRatingState(ctx context.Context, state model.RatingState) error {
 	const query = `
 		INSERT INTO rating_state_current (

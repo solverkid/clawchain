@@ -65,12 +65,14 @@ type ProjectorStore interface {
 
 type RatingStore interface {
 	AppendRatingInputs(ctx context.Context, inputs []model.RatingInput) error
+	AppendCollusionMetrics(ctx context.Context, metrics []model.CollusionMetric) error
 	UpsertRatingState(ctx context.Context, state model.RatingState) error
 	SaveRatingSnapshot(ctx context.Context, snapshot model.RatingSnapshot) error
 	SavePublicLadderSnapshot(ctx context.Context, snapshot model.PublicLadderSnapshot) error
 	SaveMultiplierSnapshot(ctx context.Context, snapshot model.MultiplierSnapshot) error
 	UpsertMinerCompatibility(ctx context.Context, miner model.MinerCompatibility) error
 	UpsertArenaResultEntry(ctx context.Context, entry model.ArenaResultEntry) error
+	AssertSharedHarnessTables(ctx context.Context) error
 }
 
 type Repository interface {
