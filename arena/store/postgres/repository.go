@@ -2332,6 +2332,559 @@ func (r *Repository) AssertSharedHarnessTables(ctx context.Context) error {
 	return nil
 }
 
+func (r *Repository) ListWaves(ctx context.Context) ([]model.Wave, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			wave_id,
+			rated_or_practice,
+			wave_state,
+			registration_open_at,
+			registration_close_at,
+			scheduled_start_at,
+			target_shard_size,
+			soft_min_entrants,
+			soft_max_entrants,
+			hard_max_entrants,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_wave
+		ORDER BY created_at
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_wave: %w", err)
+	}
+	defer rows.Close()
+
+	waves := make([]model.Wave, 0)
+	for rows.Next() {
+		var wave model.Wave
+		var mode string
+		var state string
+		if err := rows.Scan(
+			&wave.ID,
+			&mode,
+			&state,
+			&wave.RegistrationOpenAt,
+			&wave.RegistrationCloseAt,
+			&wave.ScheduledStartAt,
+			&wave.TargetShardSize,
+			&wave.SoftMinEntrants,
+			&wave.SoftMaxEntrants,
+			&wave.HardMaxEntrants,
+			&wave.Payload,
+			&wave.SchemaVersion,
+			&wave.PolicyBundleVersion,
+			&wave.StateHash,
+			&wave.PayloadHash,
+			&wave.ArtifactRef,
+			&wave.CreatedAt,
+			&wave.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_wave: %w", err)
+		}
+		wave.Mode = model.ArenaMode(mode)
+		wave.State = model.WaveState(state)
+		waves = append(waves, wave)
+	}
+
+	return waves, rows.Err()
+}
+
+func (r *Repository) ListTournamentsByWave(ctx context.Context, waveID string) ([]model.Tournament, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			tournament_id,
+			wave_id,
+			rated_or_practice,
+			tournament_state,
+			exhibition,
+			no_multiplier,
+			cancelled,
+			voided,
+			human_only,
+			integrity_hold,
+			seating_republish_count,
+			current_round_no,
+			current_level_no,
+			players_registered,
+			players_confirmed,
+			players_remaining,
+			active_table_count,
+			final_table_table_id,
+			rng_root_seed,
+			time_cap_at,
+			completed_at,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_tournament
+		WHERE wave_id = $1
+		ORDER BY created_at
+	`, waveID)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_tournament by wave %s: %w", waveID, err)
+	}
+	defer rows.Close()
+
+	tournaments := make([]model.Tournament, 0)
+	for rows.Next() {
+		var tournament model.Tournament
+		var mode string
+		var state string
+		var timeCapAt sql.NullTime
+		var completedAt sql.NullTime
+		if err := rows.Scan(
+			&tournament.ID,
+			&tournament.WaveID,
+			&mode,
+			&state,
+			&tournament.Exhibition,
+			&tournament.NoMultiplier,
+			&tournament.Cancelled,
+			&tournament.Voided,
+			&tournament.HumanOnly,
+			&tournament.IntegrityHold,
+			&tournament.SeatingRepublishCount,
+			&tournament.CurrentRoundNo,
+			&tournament.CurrentLevelNo,
+			&tournament.PlayersRegistered,
+			&tournament.PlayersConfirmed,
+			&tournament.PlayersRemaining,
+			&tournament.ActiveTableCount,
+			&tournament.FinalTableTableID,
+			&tournament.RNGRootSeed,
+			&timeCapAt,
+			&completedAt,
+			&tournament.Payload,
+			&tournament.SchemaVersion,
+			&tournament.PolicyBundleVersion,
+			&tournament.StateHash,
+			&tournament.PayloadHash,
+			&tournament.ArtifactRef,
+			&tournament.CreatedAt,
+			&tournament.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_tournament: %w", err)
+		}
+		tournament.Mode = model.ArenaMode(mode)
+		tournament.State = model.TournamentState(state)
+		if timeCapAt.Valid {
+			value := timeCapAt.Time.UTC()
+			tournament.TimeCapAt = &value
+		}
+		if completedAt.Valid {
+			value := completedAt.Time.UTC()
+			tournament.CompletedAt = &value
+		}
+		tournaments = append(tournaments, tournament)
+	}
+
+	return tournaments, rows.Err()
+}
+
+func (r *Repository) ListEntrantsByWave(ctx context.Context, waveID string) ([]model.Entrant, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			entrant_id,
+			wave_id,
+			tournament_id,
+			miner_id,
+			economic_unit_id,
+			seat_alias,
+			registration_state,
+			table_id,
+			seat_id,
+			finish_rank,
+			stage_reached,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_entrant
+		WHERE wave_id = $1
+		ORDER BY created_at
+	`, waveID)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_entrant by wave %s: %w", waveID, err)
+	}
+	defer rows.Close()
+
+	entrants := make([]model.Entrant, 0)
+	for rows.Next() {
+		var entrant model.Entrant
+		var registrationState string
+		var tournamentID sql.NullString
+		var tableID sql.NullString
+		var seatID sql.NullString
+		if err := rows.Scan(
+			&entrant.ID,
+			&entrant.WaveID,
+			&tournamentID,
+			&entrant.MinerID,
+			&entrant.EconomicUnitID,
+			&entrant.SeatAlias,
+			&registrationState,
+			&tableID,
+			&seatID,
+			&entrant.FinishRank,
+			&entrant.StageReached,
+			&entrant.Payload,
+			&entrant.SchemaVersion,
+			&entrant.PolicyBundleVersion,
+			&entrant.StateHash,
+			&entrant.PayloadHash,
+			&entrant.ArtifactRef,
+			&entrant.CreatedAt,
+			&entrant.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_entrant: %w", err)
+		}
+		entrant.TournamentID = tournamentID.String
+		entrant.TableID = tableID.String
+		entrant.SeatID = seatID.String
+		entrant.RegistrationState = model.RegistrationState(registrationState)
+		entrants = append(entrants, entrant)
+	}
+
+	return entrants, rows.Err()
+}
+
+func (r *Repository) ListActionDeadlinesByTournament(ctx context.Context, tournamentID string) ([]model.ActionDeadline, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			deadline_id,
+			tournament_id,
+			table_id,
+			hand_id,
+			phase_id,
+			seat_id,
+			deadline_at,
+			status,
+			opened_by_event_id,
+			resolved_by_event_id,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_action_deadline
+		WHERE tournament_id = $1
+		ORDER BY deadline_at, created_at
+	`, tournamentID)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_action_deadline by tournament %s: %w", tournamentID, err)
+	}
+	defer rows.Close()
+
+	deadlines := make([]model.ActionDeadline, 0)
+	for rows.Next() {
+		var deadline model.ActionDeadline
+		if err := rows.Scan(
+			&deadline.DeadlineID,
+			&deadline.TournamentID,
+			&deadline.TableID,
+			&deadline.HandID,
+			&deadline.PhaseID,
+			&deadline.SeatID,
+			&deadline.DeadlineAt,
+			&deadline.Status,
+			&deadline.OpenedByEventID,
+			&deadline.ResolvedByEventID,
+			&deadline.Payload,
+			&deadline.SchemaVersion,
+			&deadline.PolicyBundleVersion,
+			&deadline.StateHash,
+			&deadline.PayloadHash,
+			&deadline.ArtifactRef,
+			&deadline.CreatedAt,
+			&deadline.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_action_deadline: %w", err)
+		}
+		deadlines = append(deadlines, deadline)
+	}
+
+	return deadlines, rows.Err()
+}
+
+func (r *Repository) ListExpiredActionDeadlines(ctx context.Context, asOf time.Time) ([]model.ActionDeadline, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			deadline_id,
+			tournament_id,
+			table_id,
+			hand_id,
+			phase_id,
+			seat_id,
+			deadline_at,
+			status,
+			opened_by_event_id,
+			resolved_by_event_id,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_action_deadline
+		WHERE status = 'open'
+		  AND deadline_at <= $1
+		ORDER BY deadline_at, created_at
+	`, asOf.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("list expired arena_action_deadline: %w", err)
+	}
+	defer rows.Close()
+
+	deadlines := make([]model.ActionDeadline, 0)
+	for rows.Next() {
+		var deadline model.ActionDeadline
+		if err := rows.Scan(
+			&deadline.DeadlineID,
+			&deadline.TournamentID,
+			&deadline.TableID,
+			&deadline.HandID,
+			&deadline.PhaseID,
+			&deadline.SeatID,
+			&deadline.DeadlineAt,
+			&deadline.Status,
+			&deadline.OpenedByEventID,
+			&deadline.ResolvedByEventID,
+			&deadline.Payload,
+			&deadline.SchemaVersion,
+			&deadline.PolicyBundleVersion,
+			&deadline.StateHash,
+			&deadline.PayloadHash,
+			&deadline.ArtifactRef,
+			&deadline.CreatedAt,
+			&deadline.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan expired arena_action_deadline: %w", err)
+		}
+		deadlines = append(deadlines, deadline)
+	}
+
+	return deadlines, rows.Err()
+}
+
+func (r *Repository) LoadLatestTableSnapshots(ctx context.Context, tournamentID string) ([]model.TableSnapshot, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (table_id)
+			snapshot_id,
+			tournament_id,
+			table_id,
+			stream_key,
+			stream_seq,
+			state_seq,
+			rng_root_seed,
+			seed_table_id,
+			seed_hand_no,
+			seed_seat_no,
+			seed_stream_name,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at
+		FROM arena_table_snapshot
+		WHERE tournament_id = $1
+		ORDER BY table_id, stream_seq DESC
+	`, tournamentID)
+	if err != nil {
+		return nil, fmt.Errorf("load latest arena_table_snapshot for %s: %w", tournamentID, err)
+	}
+	defer rows.Close()
+
+	snapshots := make([]model.TableSnapshot, 0)
+	for rows.Next() {
+		var snapshot model.TableSnapshot
+		if err := rows.Scan(
+			&snapshot.ID,
+			&snapshot.TournamentID,
+			&snapshot.TableID,
+			&snapshot.StreamKey,
+			&snapshot.StreamSeq,
+			&snapshot.StateSeq,
+			&snapshot.RNGRootSeed,
+			&snapshot.SeedDerivation.TableID,
+			&snapshot.SeedDerivation.HandNumber,
+			&snapshot.SeedDerivation.SeatNumber,
+			&snapshot.SeedDerivation.StreamName,
+			&snapshot.Payload,
+			&snapshot.SchemaVersion,
+			&snapshot.PolicyBundleVersion,
+			&snapshot.StateHash,
+			&snapshot.PayloadHash,
+			&snapshot.ArtifactRef,
+			&snapshot.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_table_snapshot: %w", err)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+
+	return snapshots, rows.Err()
+}
+
+func (r *Repository) LoadLatestTournamentSnapshot(ctx context.Context, tournamentID string) (model.TournamentSnapshot, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT
+			snapshot_id,
+			tournament_id,
+			stream_key,
+			stream_seq,
+			state_seq,
+			rng_root_seed,
+			seed_table_id,
+			seed_hand_no,
+			seed_seat_no,
+			seed_stream_name,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at
+		FROM arena_tournament_snapshot
+		WHERE tournament_id = $1
+		ORDER BY stream_seq DESC
+		LIMIT 1
+	`, tournamentID)
+
+	var snapshot model.TournamentSnapshot
+	if err := row.Scan(
+		&snapshot.ID,
+		&snapshot.TournamentID,
+		&snapshot.StreamKey,
+		&snapshot.StreamSeq,
+		&snapshot.StateSeq,
+		&snapshot.RNGRootSeed,
+		&snapshot.SeedDerivation.TableID,
+		&snapshot.SeedDerivation.HandNumber,
+		&snapshot.SeedDerivation.SeatNumber,
+		&snapshot.SeedDerivation.StreamName,
+		&snapshot.Payload,
+		&snapshot.SchemaVersion,
+		&snapshot.PolicyBundleVersion,
+		&snapshot.StateHash,
+		&snapshot.PayloadHash,
+		&snapshot.ArtifactRef,
+		&snapshot.CreatedAt,
+	); err != nil {
+		return model.TournamentSnapshot{}, fmt.Errorf("load latest arena_tournament_snapshot for %s: %w", tournamentID, err)
+	}
+
+	return snapshot, nil
+}
+
+func (r *Repository) ListRatingInputs(ctx context.Context, tournamentID string) ([]model.RatingInput, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			input_id,
+			tournament_id,
+			entrant_id,
+			miner_address,
+			rated_or_practice,
+			human_only,
+			finish_rank,
+			finish_percentile,
+			hands_played,
+			meaningful_decisions,
+			auto_actions,
+			timeout_actions,
+			invalid_actions,
+			stage_reached,
+			stack_path_summary,
+			score_components,
+			penalties,
+			tournament_score,
+			confidence_weight,
+			field_strength_adjustment,
+			bot_adjustment,
+			time_cap_adjustment,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at
+		FROM arena_rating_input
+		WHERE tournament_id = $1
+		ORDER BY miner_address, created_at
+	`, tournamentID)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_rating_input for %s: %w", tournamentID, err)
+	}
+	defer rows.Close()
+
+	inputs := make([]model.RatingInput, 0)
+	for rows.Next() {
+		var input model.RatingInput
+		var mode string
+		if err := rows.Scan(
+			&input.ID,
+			&input.TournamentID,
+			&input.EntrantID,
+			&input.MinerAddress,
+			&mode,
+			&input.HumanOnly,
+			&input.FinishRank,
+			&input.FinishPercentile,
+			&input.HandsPlayed,
+			&input.MeaningfulDecisions,
+			&input.AutoActions,
+			&input.TimeoutActions,
+			&input.InvalidActions,
+			&input.StageReached,
+			&input.StackPathSummary,
+			&input.ScoreComponents,
+			&input.Penalties,
+			&input.TournamentScore,
+			&input.ConfidenceWeight,
+			&input.FieldStrengthAdjustment,
+			&input.BotAdjustment,
+			&input.TimeCapAdjustment,
+			&input.Payload,
+			&input.SchemaVersion,
+			&input.PolicyBundleVersion,
+			&input.StateHash,
+			&input.PayloadHash,
+			&input.ArtifactRef,
+			&input.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_rating_input: %w", err)
+		}
+		input.Mode = model.ArenaMode(mode)
+		inputs = append(inputs, input)
+	}
+
+	return inputs, rows.Err()
+}
+
 func (r *Repository) UpsertRatingState(ctx context.Context, state model.RatingState) error {
 	const query = `
 		INSERT INTO rating_state_current (

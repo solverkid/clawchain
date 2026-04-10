@@ -125,6 +125,97 @@ func TestRunServesHealthUntilContextCancel(t *testing.T) {
 	require.NoError(t, <-runDone)
 }
 
+func TestRestartRecoversPublishedTournamentAndProcessesExpiredDeadline(t *testing.T) {
+	db := openArenaAppTestDB(t)
+	resetArenaAppSchema(t, db)
+	require.NoError(t, db.Close())
+
+	first, err := app.New(config.Config{
+		DatabaseURL:     arenaAppTestDatabaseURL(),
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+
+	tournamentID := seedPublishedTournament(t, first.Handler(), "wave_restart_1", 56)
+	db = openArenaAppTestDB(t)
+	_, err = db.Exec(`UPDATE arena_action_deadline SET deadline_at = NOW() - INTERVAL '1 second' WHERE tournament_id = $1`, tournamentID)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	require.NoError(t, first.Close(context.Background()))
+
+	restarted, err := app.New(config.Config{
+		DatabaseURL:     arenaAppTestDatabaseURL(),
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, restarted.Close(context.Background()))
+	}()
+
+	seatResp := httptest.NewRecorder()
+	seatReq := httptest.NewRequest(http.MethodGet, "/v1/tournaments/"+tournamentID+"/seat-assignment/miner_01", nil)
+	restarted.Handler().ServeHTTP(seatResp, seatReq)
+	require.Equal(t, http.StatusOK, seatResp.Code)
+
+	require.NoError(t, restarted.ProcessExpiredDeadlines(context.Background()))
+
+	verifyDB := openArenaAppTestDB(t)
+	defer func() {
+		require.NoError(t, verifyDB.Close())
+	}()
+	require.Greater(t, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_action WHERE tournament_id = $1", tournamentID), 0)
+}
+
+func TestAdminControlTimeCapForceRemoveAndVoid(t *testing.T) {
+	db := openArenaAppTestDB(t)
+	resetArenaAppSchema(t, db)
+	require.NoError(t, db.Close())
+
+	application, err := app.New(config.Config{
+		DatabaseURL:     arenaAppTestDatabaseURL(),
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, application.Close(context.Background()))
+	}()
+
+	handler := application.Handler()
+	tournamentID := seedPublishedTournament(t, handler, "wave_admin_control_1", 56)
+
+	forceRemoveResp := httptest.NewRecorder()
+	forceRemoveReq := httptest.NewRequest(http.MethodPost, "/v1/admin/arena/waves/wave_admin_control_1/force-remove", strings.NewReader(`{"miner_id":"miner_56"}`))
+	handler.ServeHTTP(forceRemoveResp, forceRemoveReq)
+	require.Equal(t, http.StatusOK, forceRemoveResp.Code)
+	require.Contains(t, forceRemoveResp.Body.String(), `"republished":true`)
+
+	removedSeatResp := httptest.NewRecorder()
+	removedSeatReq := httptest.NewRequest(http.MethodGet, "/v1/tournaments/"+tournamentID+"/seat-assignment/miner_56", nil)
+	handler.ServeHTTP(removedSeatResp, removedSeatReq)
+	require.Equal(t, http.StatusNotFound, removedSeatResp.Code)
+
+	timeCapResp := httptest.NewRecorder()
+	timeCapReq := httptest.NewRequest(http.MethodPost, "/v1/admin/arena/tournaments/"+tournamentID+"/time-cap", nil)
+	handler.ServeHTTP(timeCapResp, timeCapReq)
+	require.Equal(t, http.StatusOK, timeCapResp.Code)
+	require.Contains(t, timeCapResp.Body.String(), `"terminate_after_current_round":true`)
+
+	voidResp := httptest.NewRecorder()
+	voidReq := httptest.NewRequest(http.MethodPost, "/v1/admin/arena/tournaments/"+tournamentID+"/void", strings.NewReader(`{"reason":"manual_ops"}`))
+	handler.ServeHTTP(voidResp, voidReq)
+	require.Equal(t, http.StatusOK, voidResp.Code)
+
+	verifyDB := openArenaAppTestDB(t)
+	defer func() {
+		require.NoError(t, verifyDB.Close())
+	}()
+	require.Equal(t, 1, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_tournament WHERE tournament_id = $1 AND voided = TRUE AND no_multiplier = TRUE AND tournament_state = 'voided'", tournamentID))
+	require.Equal(t, 1, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_entrant WHERE wave_id = $1 AND miner_id = 'miner_56' AND registration_state = 'removed_before_start'", "wave_admin_control_1"))
+}
+
 func arenaAppTestDatabaseURL() string {
 	if value := os.Getenv("ARENA_TEST_DATABASE_URL"); value != "" {
 		return value
@@ -161,4 +252,42 @@ func countArenaAppRows(t *testing.T, db *sql.DB, query string, args ...any) int 
 	var count int
 	require.NoError(t, db.QueryRow(query, args...).Scan(&count))
 	return count
+}
+
+func seedPublishedTournament(t *testing.T, handler http.Handler, waveID string, entrants int) string {
+	t.Helper()
+
+	createWaveResp := httptest.NewRecorder()
+	createWaveReq := httptest.NewRequest(http.MethodPost, "/v1/admin/arena/waves", strings.NewReader(fmt.Sprintf(`{
+		"wave_id":"%s",
+		"mode":"rated",
+		"registration_open_at":"2026-04-10T19:00:00Z",
+		"registration_close_at":"2026-04-10T19:30:00Z",
+		"scheduled_start_at":"2026-04-10T20:00:00Z"
+	}`, waveID)))
+	handler.ServeHTTP(createWaveResp, createWaveReq)
+	require.Equal(t, http.StatusCreated, createWaveResp.Code)
+
+	for i := 1; i <= entrants; i++ {
+		resp := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/arena/waves/"+waveID+"/register", strings.NewReader(fmt.Sprintf(`{"miner_id":"miner_%02d"}`, i)))
+		handler.ServeHTTP(resp, req)
+		require.Equal(t, http.StatusOK, resp.Code)
+	}
+
+	lockResp := httptest.NewRecorder()
+	lockReq := httptest.NewRequest(http.MethodPost, "/v1/admin/arena/waves/"+waveID+"/lock", nil)
+	handler.ServeHTTP(lockResp, lockReq)
+	require.Equal(t, http.StatusOK, lockResp.Code)
+
+	var lockBody map[string]any
+	require.NoError(t, json.Unmarshal(lockResp.Body.Bytes(), &lockBody))
+	tournamentID := lockBody["tournament_id"].(string)
+
+	publishResp := httptest.NewRecorder()
+	publishReq := httptest.NewRequest(http.MethodPost, "/v1/admin/arena/waves/"+waveID+"/publish-seats", nil)
+	handler.ServeHTTP(publishResp, publishReq)
+	require.Equal(t, http.StatusOK, publishResp.Code)
+
+	return tournamentID
 }

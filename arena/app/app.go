@@ -21,6 +21,7 @@ type App struct {
 	cfg           config.Config
 	db            *sql.DB
 	server        *httpapi.Server
+	runtime       *runtimeService
 	httpServer    *http.Server
 	boundHTTPAddr string
 
@@ -54,6 +55,10 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	runtimeService := newRuntimeService(repo, time.Now().UTC)
+	if err := runtimeService.bootstrapFromStore(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	server := httpapi.NewServer(httpapi.Dependencies{
 		Arena:    runtimeService,
 		Gateway:  gateway.New(gateway.Config{}),
@@ -61,10 +66,11 @@ func New(cfg config.Config) (*App, error) {
 	})
 
 	return &App{
-		cfg:    cfg,
-		db:     db,
-		server: server,
-		closed: make(chan struct{}),
+		cfg:     cfg,
+		db:      db,
+		server:  server,
+		runtime: runtimeService,
+		closed:  make(chan struct{}),
 	}, nil
 }
 
@@ -84,6 +90,10 @@ func (a *App) HTTPAddr() string {
 func (a *App) Run(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context is required")
+	}
+
+	if a.runtime != nil {
+		go a.runtime.runDeadlineScanner(ctx, 250*time.Millisecond)
 	}
 
 	listener, err := net.Listen("tcp", a.cfg.HTTPAddr)
@@ -124,6 +134,16 @@ func (a *App) Run(ctx context.Context) error {
 	case <-a.closed:
 		return <-serveErr
 	}
+}
+
+func (a *App) ProcessExpiredDeadlines(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	if a.runtime == nil {
+		return errors.New("runtime is not configured")
+	}
+	return a.runtime.ProcessExpiredDeadlines(ctx)
 }
 
 func (a *App) Close(ctx context.Context) error {

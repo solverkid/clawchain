@@ -12,31 +12,71 @@ type Store struct {
 	Deadlines []model.ActionDeadline
 }
 
+type deadlineLoader interface {
+	LoadLatestTableSnapshots(ctx context.Context, tournamentID string) ([]model.TableSnapshot, error)
+	ListActionDeadlinesByTournament(ctx context.Context, tournamentID string) ([]model.ActionDeadline, error)
+}
+
+type staticLoader struct {
+	store Store
+}
+
+func (l staticLoader) LoadLatestTableSnapshots(_ context.Context, tournamentID string) ([]model.TableSnapshot, error) {
+	snapshot, ok := l.store.Snapshots[tournamentID]
+	if !ok {
+		return nil, nil
+	}
+	return []model.TableSnapshot{snapshot}, nil
+}
+
+func (l staticLoader) ListActionDeadlinesByTournament(_ context.Context, tournamentID string) ([]model.ActionDeadline, error) {
+	deadlines := make([]model.ActionDeadline, 0, len(l.store.Deadlines))
+	for _, deadline := range l.store.Deadlines {
+		if deadline.TournamentID != tournamentID {
+			continue
+		}
+		deadlines = append(deadlines, deadline)
+	}
+	return deadlines, nil
+}
+
 type Service struct {
-	store             Store
+	loader            deadlineLoader
 	now               func() time.Time
 	syntheticTimeouts map[string]struct{}
 }
 
 func NewService(store Store, now func() time.Time) *Service {
+	return NewRepositoryService(staticLoader{store: store}, now)
+}
+
+func NewRepositoryService(loader deadlineLoader, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now().UTC
 	}
 
 	return &Service{
-		store:             store,
+		loader:            loader,
 		now:               now,
 		syntheticTimeouts: make(map[string]struct{}),
 	}
 }
 
-func (s *Service) RecoverTournament(_ context.Context, tournamentID string) error {
-	_, _ = s.store.Snapshots[tournamentID]
+func (s *Service) RecoverTournament(ctx context.Context, tournamentID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	for _, deadline := range s.store.Deadlines {
-		if deadline.TournamentID != tournamentID {
-			continue
-		}
+	if _, err := s.loader.LoadLatestTableSnapshots(ctx, tournamentID); err != nil {
+		return err
+	}
+
+	deadlines, err := s.loader.ListActionDeadlinesByTournament(ctx, tournamentID)
+	if err != nil {
+		return err
+	}
+
+	for _, deadline := range deadlines {
 		if deadline.Status != "open" {
 			continue
 		}

@@ -75,6 +75,12 @@ func NewActor(initial ActorState, clock Clock, store actorStore) *Actor {
 	}
 }
 
+func NewRecoveredActor(initial ActorState, streamSeq int64, clock Clock, store actorStore) *Actor {
+	actor := NewActor(initial, clock, store)
+	actor.streamSeq = streamSeq
+	return actor
+}
+
 func (a *Actor) State() ActorState {
 	a.mu.Lock()
 	defer a.mu.Unlock()

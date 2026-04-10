@@ -47,6 +47,9 @@ type ArenaService interface {
 	UnregisterMiner(ctx context.Context, waveID, minerID string) error
 	LockWave(ctx context.Context, waveID string) (WaveMutationResponse, error)
 	PublishSeats(ctx context.Context, waveID string) (WaveMutationResponse, error)
+	ForceRemoveBeforeStart(ctx context.Context, waveID, minerID string) (map[string]any, error)
+	ArmTimeCap(ctx context.Context, tournamentID string) (map[string]any, error)
+	VoidTournament(ctx context.Context, tournamentID, reason string) (map[string]any, error)
 	Standing(ctx context.Context, tournamentID string) (map[string]any, bool)
 	LiveTable(ctx context.Context, tournamentID, tableID string) (map[string]any, bool)
 	SeatAssignment(ctx context.Context, tournamentID, minerID string) (SeatAssignment, bool)
