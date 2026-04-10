@@ -13,7 +13,7 @@ import (
 
 var (
 	errActorContextRequired = errors.New("context is required")
-	errStateSeqMismatch     = errors.New("state_seq_mismatch")
+	ErrStateSeqMismatch     = errors.New("state_seq_mismatch")
 )
 
 type Clock interface {
@@ -96,7 +96,7 @@ func (a *Actor) Handle(ctx context.Context, envelope CommandEnvelope) (Result, e
 		return result, nil
 	}
 	if envelope.ExpectedStateSeq != a.state.StateSeq {
-		return Result{}, errStateSeqMismatch
+		return Result{}, ErrStateSeqMismatch
 	}
 
 	nextTable, events, err := Apply(a.state.Table, envelope.Command)
