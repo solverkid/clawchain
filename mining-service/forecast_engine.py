@@ -1840,16 +1840,24 @@ class ForecastMiningService:
             multiplier_before = float(miner.get("poker_mtt_multiplier", 1.0))
             multiplier_after = multiplier_before
             rolling_score = None
+            economic_unit_id = result.get("economic_unit_id") or miner.get("economic_unit_id") or miner_address
+            evidence_state = str(result.get("evidence_state") or "pending")
+            no_multiplier_reason = result.get("no_multiplier_reason")
+            if no_multiplier_reason is None and not eligible_for_multiplier:
+                no_multiplier_reason = "not_rated_or_not_human"
 
             entry = await self.repo.save_poker_mtt_result(
                 {
                     "id": f"poker_mtt:{tournament_id}:{miner_address}",
                     "tournament_id": tournament_id,
                     "miner_address": miner_address,
+                    "economic_unit_id": economic_unit_id,
                     "rated_or_practice": rated_or_practice,
                     "human_only": human_only,
                     "field_size": field_size,
                     "final_rank": final_rank,
+                    "entry_number": result.get("entry_number"),
+                    "reentry_count": int(result.get("reentry_count") or 1),
                     "finish_percentile": finish_percentile,
                     "tournament_result_score": tournament_result_score,
                     "hidden_eval_score": hidden_eval_score,
@@ -1861,7 +1869,16 @@ class ForecastMiningService:
                     "multiplier_after": multiplier_after,
                     "evaluation_state": str(result.get("evaluation_state") or "provisional"),
                     "evaluation_version": policy_bundle_version,
+                    "final_ranking_id": result.get("final_ranking_id"),
+                    "standing_snapshot_id": result.get("standing_snapshot_id"),
+                    "standing_snapshot_hash": result.get("standing_snapshot_hash"),
                     "evidence_root": result.get("evidence_root"),
+                    "evidence_state": evidence_state,
+                    "locked_at": result.get("locked_at"),
+                    "anchor_state": str(result.get("anchor_state") or "unanchored"),
+                    "anchor_payload_hash": result.get("anchor_payload_hash"),
+                    "risk_flags": list(result.get("risk_flags") or []),
+                    "no_multiplier_reason": no_multiplier_reason,
                     "created_at": isoformat_z(completed_at),
                     "updated_at": isoformat_z(completed_at),
                 }

@@ -19,6 +19,7 @@ from models import (
     risk_review_cases,
     arena_result_entries,
     poker_mtt_tournaments,
+    poker_mtt_final_rankings,
     poker_mtt_result_entries,
 )
 
@@ -110,11 +111,21 @@ def _poker_mtt_tournament_values(tournament: dict) -> dict:
     return values
 
 
-def _poker_mtt_result_values(poker_mtt_result: dict) -> dict:
-    values = deepcopy(poker_mtt_result)
+def _poker_mtt_final_ranking_values(final_ranking: dict) -> dict:
+    values = deepcopy(final_ranking)
     for field in ("created_at", "updated_at"):
         if field in values and values[field] is not None:
             values[field] = _maybe_dt(values[field])
+    return values
+
+
+def _poker_mtt_result_values(poker_mtt_result: dict) -> dict:
+    values = deepcopy(poker_mtt_result)
+    for field in ("locked_at", "created_at", "updated_at"):
+        if field in values and values[field] is not None:
+            values[field] = _maybe_dt(values[field])
+    if values.get("risk_flags") is None:
+        values["risk_flags"] = []
     return values
 
 
@@ -220,11 +231,21 @@ def _poker_mtt_tournament_row_to_dict(row) -> dict | None:
     return data
 
 
-def _poker_mtt_result_row_to_dict(row) -> dict | None:
+def _poker_mtt_final_ranking_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
     for field in ("created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_result_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("locked_at", "created_at", "updated_at"):
         if field in data and isinstance(data[field], datetime):
             data[field] = data[field].isoformat().replace("+00:00", "Z")
     return data
@@ -329,6 +350,30 @@ class PostgresRepository:
             await conn.execute(text("ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS trace_id VARCHAR NULL"))
             await conn.execute(text("ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS override_log_id VARCHAR NULL"))
             await conn.execute(text("ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS economic_unit_id VARCHAR NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS entry_number INTEGER NULL"))
+            await conn.execute(
+                text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS reentry_count INTEGER NOT NULL DEFAULT 1")
+            )
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS final_ranking_id VARCHAR NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS standing_snapshot_id VARCHAR NULL"))
+            await conn.execute(
+                text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS standing_snapshot_hash VARCHAR NULL")
+            )
+            await conn.execute(
+                text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS evidence_state VARCHAR NOT NULL DEFAULT 'pending'")
+            )
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL"))
+            await conn.execute(
+                text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS anchor_state VARCHAR NOT NULL DEFAULT 'unanchored'")
+            )
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS anchor_payload_hash VARCHAR NULL"))
+            await conn.execute(
+                text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS risk_flags JSONB NOT NULL DEFAULT '[]'::jsonb")
+            )
+            await conn.execute(
+                text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS no_multiplier_reason VARCHAR NULL")
+            )
 
     async def register_miner(self, miner: dict) -> dict:
         values = _miner_values(miner)
@@ -718,6 +763,60 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             row = await conn.execute(select(poker_mtt_tournaments).where(poker_mtt_tournaments.c.id == tournament_id))
             return _poker_mtt_tournament_row_to_dict(row.first())
+
+    async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
+        values = _poker_mtt_final_ranking_values(final_ranking)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(
+                select(poker_mtt_final_rankings.c.id).where(poker_mtt_final_rankings.c.id == final_ranking["id"])
+            )
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_final_rankings)
+                    .where(poker_mtt_final_rankings.c.id == final_ranking["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_final_rankings).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(
+                select(poker_mtt_final_rankings).where(poker_mtt_final_rankings.c.id == final_ranking["id"])
+            )
+            return _poker_mtt_final_ranking_row_to_dict(row.first()) or values
+
+    async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None:
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_final_rankings).where(poker_mtt_final_rankings.c.id == final_ranking_id))
+            return _poker_mtt_final_ranking_row_to_dict(row.first())
+
+    async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]:
+        query = (
+            select(poker_mtt_final_rankings)
+            .where(poker_mtt_final_rankings.c.tournament_id == tournament_id)
+            .order_by(
+                poker_mtt_final_rankings.c.rank.asc().nulls_last(),
+                poker_mtt_final_rankings.c.id.asc(),
+            )
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_final_ranking_row_to_dict(row) for row in rows.fetchall()]
+
+    async def list_poker_mtt_final_rankings_for_window(self, window_start_at: str, window_end_at: str) -> list[dict]:
+        window_start = _maybe_dt(window_start_at)
+        window_end = _maybe_dt(window_end_at)
+        query = (
+            select(poker_mtt_final_rankings)
+            .where(poker_mtt_final_rankings.c.created_at >= window_start)
+            .where(poker_mtt_final_rankings.c.created_at < window_end)
+            .order_by(
+                poker_mtt_final_rankings.c.created_at.asc(),
+                poker_mtt_final_rankings.c.id.asc(),
+            )
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_final_ranking_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_poker_mtt_result(self, poker_mtt_result: dict) -> dict:
         values = _poker_mtt_result_values(poker_mtt_result)

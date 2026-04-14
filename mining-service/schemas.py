@@ -54,7 +54,19 @@ class PokerMTTResultItem(BaseModel):
     hidden_eval_score: float = Field(default=0.0, ge=-1.0, le=1.0)
     consistency_input_score: float = Field(default=0.0, ge=-1.0, le=1.0)
     evaluation_state: str = "provisional"
+    economic_unit_id: str | None = None
+    entry_number: int | None = Field(default=None, ge=0)
+    reentry_count: int = Field(default=1, ge=1)
+    final_ranking_id: str | None = None
+    standing_snapshot_id: str | None = None
+    standing_snapshot_hash: str | None = None
     evidence_root: str | None = None
+    evidence_state: str = "pending"
+    locked_at: datetime | None = None
+    anchor_state: str = "unanchored"
+    anchor_payload_hash: str | None = None
+    risk_flags: list[str] = Field(default_factory=list)
+    no_multiplier_reason: str | None = None
 
 
 class ApplyPokerMTTResultsRequest(BaseModel):
@@ -64,6 +76,52 @@ class ApplyPokerMTTResultsRequest(BaseModel):
     field_size: int = Field(ge=2)
     policy_bundle_version: str = "poker_mtt_v1"
     results: list[PokerMTTResultItem]
+
+
+class PokerMTTFinalRankingRow(BaseModel):
+    id: str
+    tournament_id: str
+    source_mtt_id: str
+    source_user_id: str | None = None
+    miner_address: str | None = None
+    economic_unit_id: str | None = None
+    member_id: str
+    entry_number: int = Field(ge=0)
+    reentry_count: int = Field(default=1, ge=1)
+    rank: int | None = Field(default=None, ge=1)
+    rank_state: str
+    chip: float = 0.0
+    chip_delta: float = 0.0
+    died_time: str | None = None
+    waiting_or_no_show: bool = False
+    bounty: float = 0.0
+    defeat_num: int = Field(default=0, ge=0)
+    field_size_policy: str
+    standing_snapshot_id: str
+    standing_snapshot_hash: str
+    evidence_root: str | None = None
+    evidence_state: str = "pending"
+    policy_bundle_version: str
+    snapshot_found: bool = True
+    status: str
+    player_name: str | None = None
+    room_id: str | None = None
+    start_chip: float = 0.0
+    stand_up_status: str | None = None
+    source_rank: str | None = None
+    source_rank_numeric: bool = False
+    zset_score: float | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ApplyPokerMTTFinalRankingProjectionRequest(BaseModel):
+    tournament_id: str
+    rated_or_practice: str
+    human_only: bool = True
+    field_size: int = Field(ge=2)
+    policy_bundle_version: str = "poker_mtt_v1"
+    rows: list[PokerMTTFinalRankingRow]
 
 
 class BuildPokerMTTRewardWindowRequest(BaseModel):

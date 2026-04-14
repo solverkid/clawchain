@@ -52,6 +52,10 @@ class MiningRepository(Protocol):
     ) -> list[dict]: ...
     async def save_poker_mtt_tournament(self, tournament: dict) -> dict: ...
     async def get_poker_mtt_tournament(self, tournament_id: str) -> dict | None: ...
+    async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict: ...
+    async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None: ...
+    async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]: ...
+    async def list_poker_mtt_final_rankings_for_window(self, window_start_at: str, window_end_at: str) -> list[dict]: ...
     async def save_poker_mtt_result(self, poker_mtt_result: dict) -> dict: ...
     async def list_poker_mtt_results(self) -> list[dict]: ...
     async def list_poker_mtt_results_for_miner(
@@ -76,6 +80,7 @@ class FakeRepository:
         self._risk_cases: dict[str, dict] = {}
         self._arena_results: dict[str, dict] = {}
         self._poker_mtt_tournaments: dict[str, dict] = {}
+        self._poker_mtt_final_rankings: dict[str, dict] = {}
         self._poker_mtt_results: dict[str, dict] = {}
         self._request_index: dict[str, dict] = {}
 
@@ -351,6 +356,40 @@ class FakeRepository:
     async def get_poker_mtt_tournament(self, tournament_id: str) -> dict | None:
         tournament = self._poker_mtt_tournaments.get(tournament_id)
         return deepcopy(tournament) if tournament else None
+
+    async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
+        current = deepcopy(self._poker_mtt_final_rankings.get(final_ranking["id"], {}))
+        current.update(deepcopy(final_ranking))
+        self._poker_mtt_final_rankings[final_ranking["id"]] = current
+        return deepcopy(current)
+
+    async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None:
+        final_ranking = self._poker_mtt_final_rankings.get(final_ranking_id)
+        return deepcopy(final_ranking) if final_ranking else None
+
+    async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]:
+        items = [
+            deepcopy(row)
+            for row in self._poker_mtt_final_rankings.values()
+            if row.get("tournament_id") == tournament_id
+        ]
+        items.sort(
+            key=lambda item: (
+                item.get("rank") is None,
+                item.get("rank") if item.get("rank") is not None else 10**12,
+                item.get("id") or "",
+            )
+        )
+        return items
+
+    async def list_poker_mtt_final_rankings_for_window(self, window_start_at: str, window_end_at: str) -> list[dict]:
+        items = [
+            deepcopy(row)
+            for row in self._poker_mtt_final_rankings.values()
+            if window_start_at <= (row.get("created_at") or "") < window_end_at
+        ]
+        items.sort(key=lambda item: (item.get("created_at") or "", item.get("id") or ""))
+        return items
 
     async def save_poker_mtt_result(self, poker_mtt_result: dict) -> dict:
         current = deepcopy(self._poker_mtt_results.get(poker_mtt_result["id"], {}))
