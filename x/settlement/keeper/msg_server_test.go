@@ -75,3 +75,23 @@ func TestAnchorSettlementBatchIsIdempotentWhenAlreadyAnchored(t *testing.T) {
 	require.Equal(t, "anchor_status", string(events[1].Attributes[4].Key))
 	require.Equal(t, "already_anchored", string(events[1].Attributes[4].Value))
 }
+
+func TestAnchorSettlementBatchRejectsDuplicateWithDifferentRoot(t *testing.T) {
+	msgServer, k, ctx := setupSettlementMsgServer(t)
+	msg := testAnchorMsg()
+
+	_, err := msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), msg)
+	require.NoError(t, err)
+
+	conflicting := *msg
+	conflicting.CanonicalRoot = "sha256:canonical-mutated"
+	conflicting.AnchorPayloadHash = "sha256:payload-mutated"
+	_, err = msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), &conflicting)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "settlement anchor conflict")
+
+	anchor, found := k.GetSettlementAnchor(ctx, msg.SettlementBatchId)
+	require.True(t, found)
+	require.Equal(t, msg.CanonicalRoot, anchor.CanonicalRoot)
+	require.Equal(t, msg.AnchorPayloadHash, anchor.AnchorPayloadHash)
+}

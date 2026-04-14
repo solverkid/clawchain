@@ -27,7 +27,13 @@ func (s msgServer) AnchorSettlementBatch(
 	if err := msg.ValidateBasic(); err != nil {
 		return nil, err
 	}
-	if s.Keeper.HasSettlementAnchor(ctx, msg.SettlementBatchId) {
+	if existingAnchor, found := s.Keeper.GetSettlementAnchor(ctx, msg.SettlementBatchId); found {
+		if existingAnchor.CanonicalRoot != msg.CanonicalRoot || existingAnchor.AnchorPayloadHash != msg.AnchorPayloadHash {
+			return nil, types.ErrSettlementBatchAnchored.Wrapf(
+				"settlement anchor conflict: settlement_batch_id %s",
+				msg.SettlementBatchId,
+			)
+		}
 		ctx.EventManager().EmitEvent(sdk.NewEvent(
 			"settlement_anchor_recorded",
 			sdk.NewAttribute("settlement_batch_id", msg.SettlementBatchId),

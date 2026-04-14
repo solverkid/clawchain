@@ -1199,6 +1199,50 @@ def poker_mtt_reward_ready_refs(
     }
 
 
+async def build_poker_mtt_anchor_fixture(
+    *,
+    repo: FakeRepository,
+    service: forecast_engine.ForecastMiningService,
+    tournament_id: str,
+    miner_addresses: list[str],
+) -> dict:
+    for index, miner_address in enumerate(miner_addresses, start=1):
+        await service.register_miner(
+            address=miner_address,
+            name=miner_address,
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+    await service.apply_poker_mtt_results(
+        tournament_id=tournament_id,
+        rated_or_practice="rated",
+        human_only=True,
+        field_size=30,
+        policy_bundle_version="poker_mtt_v1",
+        results=[
+            {
+                "miner_id": miner_address,
+                "final_rank": index,
+                "tournament_result_score": 1.0 if index == 1 else 0.5,
+                "hidden_eval_score": 0.0,
+                "consistency_input_score": 0.0,
+                "evaluation_state": "final",
+                **poker_mtt_reward_ready_refs(tournament_id, miner_address),
+            }
+            for index, miner_address in enumerate(miner_addresses, start=1)
+        ],
+        completed_at=datetime(2026, 4, 10, 15, 0, 0, tzinfo=timezone.utc),
+    )
+    return await service.build_poker_mtt_reward_window(
+        lane="poker_mtt_daily",
+        window_start_at=datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc),
+        window_end_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+        reward_pool_amount=100,
+        include_provisional=False,
+        now=datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc),
+    )
+
+
 def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
     async def scenario():
         repo = FakeRepository()
@@ -1771,6 +1815,131 @@ def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
             },
         ]
         assert anchored["canonical_root"].startswith("sha256:")
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_retry_anchor_settlement_batch_rejects_incomplete_poker_mtt_projection_metadata():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        reward_window = await build_poker_mtt_anchor_fixture(
+            repo=repo,
+            service=service,
+            tournament_id="poker-mtt-incomplete-anchor-1",
+            miner_addresses=["claw1pokerincompleteanchor"],
+        )
+        projection_artifact = next(
+            artifact
+            for artifact in await repo.list_artifacts_for_entity("reward_window", reward_window["id"])
+            if artifact["kind"] == "poker_mtt_reward_window_projection"
+        )
+        incomplete_payload = dict(projection_artifact["payload_json"])
+        incomplete_payload.pop("evidence_root", None)
+        await repo.save_artifact(
+            {
+                **projection_artifact,
+                "payload_json": incomplete_payload,
+                "payload_hash": "sha256:incomplete",
+            }
+        )
+
+        batch = await repo.get_settlement_batch(reward_window["settlement_batch_id"])
+        try:
+            await service.retry_anchor_settlement_batch(
+                batch["id"],
+                now=datetime(2026, 4, 11, 0, 6, 0, tzinfo=timezone.utc),
+            )
+        except ValueError as exc:
+            assert str(exc) == "poker mtt reward window projection metadata incomplete"
+        else:
+            raise AssertionError("poker anchor should reject incomplete projection metadata")
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_retry_anchor_settlement_batch_includes_poker_mtt_projection_roots_and_is_stable():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        reward_window = await build_poker_mtt_anchor_fixture(
+            repo=repo,
+            service=service,
+            tournament_id="poker-mtt-anchor-metadata-1",
+            miner_addresses=["claw1pokermetadataone", "claw1pokermetadatatwo"],
+        )
+        batch = await repo.get_settlement_batch(reward_window["settlement_batch_id"])
+
+        first_retry = await service.retry_anchor_settlement_batch(
+            batch["id"],
+            now=datetime(2026, 4, 11, 0, 6, 0, tzinfo=timezone.utc),
+        )
+        second_retry = await service.retry_anchor_settlement_batch(
+            batch["id"],
+            now=datetime(2026, 4, 11, 0, 7, 0, tzinfo=timezone.utc),
+        )
+        projection_roots = first_retry["anchor_payload_json"]["poker_projection_roots"]
+
+        assert first_retry["canonical_root"] == second_retry["canonical_root"]
+        assert first_retry["anchor_payload_hash"] == second_retry["anchor_payload_hash"]
+        assert first_retry["anchor_payload_json"]["poker_projection_roots_root"].startswith("sha256:")
+        assert len(projection_roots) == 1
+        assert projection_roots[0]["reward_window_id"] == reward_window["id"]
+        assert projection_roots[0]["policy_bundle_version"] == "poker_mtt_daily_policy_v1"
+        assert projection_roots[0]["final_ranking_root"].startswith("sha256:")
+        assert projection_roots[0]["evidence_root"].startswith("sha256:")
+        assert projection_roots[0]["multiplier_snapshot_root"].startswith("sha256:")
+        assert projection_roots[0]["projection_root"].startswith("sha256:")
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_retry_anchor_settlement_batch_rejects_poker_mtt_root_mismatch_after_ready():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        reward_window = await build_poker_mtt_anchor_fixture(
+            repo=repo,
+            service=service,
+            tournament_id="poker-mtt-anchor-conflict-1",
+            miner_addresses=["claw1pokeranchorconflict"],
+        )
+        batch = await repo.get_settlement_batch(reward_window["settlement_batch_id"])
+        await service.retry_anchor_settlement_batch(
+            batch["id"],
+            now=datetime(2026, 4, 11, 0, 6, 0, tzinfo=timezone.utc),
+        )
+        projection_artifact = next(
+            artifact
+            for artifact in await repo.list_artifacts_for_entity("reward_window", reward_window["id"])
+            if artifact["kind"] == "poker_mtt_reward_window_projection"
+        )
+        await repo.save_artifact(
+            {
+                **projection_artifact,
+                "payload_json": {
+                    **projection_artifact["payload_json"],
+                    "evidence_root": "sha256:evidence:mutated",
+                },
+                "payload_hash": "sha256:mutated",
+            }
+        )
+
+        try:
+            await service.retry_anchor_settlement_batch(
+                batch["id"],
+                now=datetime(2026, 4, 11, 0, 7, 0, tzinfo=timezone.utc),
+            )
+        except ValueError as exc:
+            assert str(exc) == "settlement batch canonical root conflict"
+        else:
+            raise AssertionError("poker anchor should reject root mismatch under the same settlement batch id")
 
     import asyncio
 

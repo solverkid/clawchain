@@ -17,6 +17,13 @@ FAST_ASSETS = ("BTCUSDT", "ETHUSDT")
 DAILY_ASSETS = ("BTC", "ETH")
 POLICY_BUNDLE_VERSION = "pb_2026_04_09_a"
 ANCHOR_PAYLOAD_SCHEMA_VERSION = "clawchain.anchor_payload.v1"
+POKER_MTT_PROJECTION_ROOT_FIELDS = (
+    "policy_bundle_version",
+    "final_ranking_root",
+    "evidence_root",
+    "multiplier_snapshot_root",
+    "projection_root",
+)
 
 
 @dataclass(slots=True)
@@ -436,6 +443,19 @@ def _materialize_reward_window(reward_window: dict) -> tuple[dict, dict]:
 
 def _poker_mtt_reward_window_id(lane: str, window_start: datetime, window_end: datetime) -> str:
     return f"rw_{lane}_{window_start.strftime('%Y%m%d%H%M%S')}_{window_end.strftime('%Y%m%d%H%M%S')}"
+
+
+def _poker_mtt_projection_roots(payload: dict, *, reward_window_id: str) -> dict:
+    if any(not payload.get(field) for field in POKER_MTT_PROJECTION_ROOT_FIELDS):
+        raise ValueError("poker mtt reward window projection metadata incomplete")
+    return {
+        "reward_window_id": reward_window_id,
+        "policy_bundle_version": payload["policy_bundle_version"],
+        "final_ranking_root": payload["final_ranking_root"],
+        "evidence_root": payload["evidence_root"],
+        "multiplier_snapshot_root": payload["multiplier_snapshot_root"],
+        "projection_root": payload["projection_root"],
+    }
 
 
 def _default_poker_mtt_policy_bundle_version(settings: ForecastSettings, lane: str) -> str:
@@ -1160,6 +1180,7 @@ class ForecastMiningService:
         reward_window_ids = list(batch.get("reward_window_ids", []))
         task_run_ids: list[str] = []
         miner_totals: dict[str, dict] = {}
+        poker_projection_roots: list[dict] = []
         for reward_window_id in reward_window_ids:
             reward_window = await self.repo.get_reward_window(reward_window_id)
             if reward_window:
@@ -1176,7 +1197,11 @@ class ForecastMiningService:
                     )
                     if not projection_artifact:
                         raise ValueError("poker mtt reward window projection not found")
-                    for reward_row in projection_artifact.get("payload_json", {}).get("miner_reward_rows", []):
+                    projection_payload = projection_artifact.get("payload_json") or {}
+                    poker_projection_roots.append(
+                        _poker_mtt_projection_roots(projection_payload, reward_window_id=reward_window_id)
+                    )
+                    for reward_row in projection_payload.get("miner_reward_rows", []):
                         current_total = miner_totals.setdefault(
                             reward_row["miner_address"],
                             {
@@ -1225,6 +1250,9 @@ class ForecastMiningService:
             "miner_count": batch.get("miner_count", 0),
             "total_reward_amount": batch.get("total_reward_amount", 0),
         }
+        if poker_projection_roots:
+            poker_projection_roots = sorted(poker_projection_roots, key=lambda item: item["reward_window_id"])
+            canonical_root_input["poker_projection_roots_root"] = _hash_sequence(poker_projection_roots)
         canonical_root = _hash_payload(canonical_root_input)
         anchor_payload_json = {
             **canonical_root_input,
@@ -1233,7 +1261,17 @@ class ForecastMiningService:
             "miner_reward_rows": miner_reward_rows,
             "canonical_root": canonical_root,
         }
+        if poker_projection_roots:
+            anchor_payload_json["poker_projection_roots"] = poker_projection_roots
         anchor_payload_hash = _hash_payload(anchor_payload_json)
+        existing_canonical_root = batch.get("canonical_root")
+        existing_anchor_payload_hash = batch.get("anchor_payload_hash")
+        if existing_canonical_root:
+            if existing_canonical_root != canonical_root or existing_anchor_payload_hash != anchor_payload_hash:
+                raise ValueError("settlement batch canonical root conflict")
+            if batch.get("state") in {"anchor_ready", "anchor_submitted", "anchored"}:
+                await self._upsert_settlement_anchor_artifact(batch, current)
+                return batch
         saved = await self.repo.save_settlement_batch(
             {
                 **batch,
@@ -2272,6 +2310,42 @@ class ForecastMiningService:
             }
             for economic_unit_id in economic_unit_ids
         ]
+        final_ranking_refs = sorted(
+            (
+                {
+                    "poker_mtt_result_id": result["id"],
+                    "final_ranking_id": result.get("final_ranking_id"),
+                    "standing_snapshot_id": result.get("standing_snapshot_id"),
+                    "standing_snapshot_hash": result.get("standing_snapshot_hash"),
+                }
+                for result in selected_results
+            ),
+            key=lambda item: item["poker_mtt_result_id"],
+        )
+        evidence_refs = sorted(
+            (
+                {
+                    "poker_mtt_result_id": result["id"],
+                    "evidence_root": result.get("evidence_root"),
+                    "evidence_state": result.get("evidence_state"),
+                }
+                for result in selected_results
+            ),
+            key=lambda item: item["poker_mtt_result_id"],
+        )
+        multiplier_snapshot_rows = sorted(
+            (
+                {
+                    "poker_mtt_result_id": result["id"],
+                    "miner_address": result["miner_address"],
+                    "multiplier_before": result.get("multiplier_before", 1.0),
+                    "multiplier_after": result.get("multiplier_after", 1.0),
+                    "eligible_for_multiplier": result.get("eligible_for_multiplier") is True,
+                }
+                for result in selected_results
+            ),
+            key=lambda item: item["poker_mtt_result_id"],
+        )
 
         saved = await self.repo.save_reward_window(
             _materialize_reward_window(
@@ -2295,23 +2369,28 @@ class ForecastMiningService:
             )[0]
         )
         await self._upsert_reward_window_artifact(saved, current)
+        projection_payload = {
+            "reward_window_id": saved["id"],
+            "lane": lane,
+            "window_start_at": saved["window_start_at"],
+            "window_end_at": saved["window_end_at"],
+            "reward_pool_amount": reward_pool_amount,
+            "policy_bundle_version": resolved_policy_bundle_version,
+            "include_provisional": include_provisional,
+            "tournament_ids": tournament_ids,
+            "poker_mtt_result_ids": sorted(result["id"] for result in selected_results),
+            "miner_reward_rows": miner_reward_rows,
+            "budget_disposition": budget_disposition,
+            "final_ranking_root": _hash_sequence(final_ranking_refs),
+            "evidence_root": _hash_sequence(evidence_refs),
+            "multiplier_snapshot_root": _hash_sequence(multiplier_snapshot_rows),
+            **(projection_metadata or {}),
+        }
+        projection_payload["projection_root"] = _hash_payload(projection_payload)
         await self._upsert_poker_mtt_reward_window_projection_artifact(
             reward_window=saved,
             now=current,
-            payload={
-                "reward_window_id": saved["id"],
-                "lane": lane,
-                "window_start_at": saved["window_start_at"],
-                "window_end_at": saved["window_end_at"],
-                "reward_pool_amount": reward_pool_amount,
-                "policy_bundle_version": resolved_policy_bundle_version,
-                "include_provisional": include_provisional,
-                "tournament_ids": tournament_ids,
-                "poker_mtt_result_ids": sorted(result["id"] for result in selected_results),
-                "miner_reward_rows": miner_reward_rows,
-                "budget_disposition": budget_disposition,
-                **(projection_metadata or {}),
-            },
+            payload=projection_payload,
         )
         if has_positive_weight:
             await self._build_settlement_batches(current)
