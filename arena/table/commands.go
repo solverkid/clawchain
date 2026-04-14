@@ -4,7 +4,12 @@ type Command interface {
 	isCommand()
 }
 
-type StartHand struct{}
+type StartHand struct {
+	SmallBlind int64
+	BigBlind   int64
+	Ante       int64
+	MinRaiseTo int64
+}
 
 func (StartHand) isCommand() {}
 

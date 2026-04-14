@@ -13,6 +13,7 @@ import (
 	"github.com/clawchain/clawchain/arena/config"
 	"github.com/clawchain/clawchain/arena/gateway"
 	"github.com/clawchain/clawchain/arena/httpapi"
+	"github.com/clawchain/clawchain/arena/rating"
 	"github.com/clawchain/clawchain/arena/session"
 	"github.com/clawchain/clawchain/arena/store/postgres"
 )
@@ -30,6 +31,13 @@ type App struct {
 	closed    chan struct{}
 }
 
+const (
+	defaultArenaDBMaxOpenConns    = 64
+	defaultArenaDBMaxIdleConns    = 32
+	defaultArenaDBConnMaxLifetime = 30 * time.Minute
+	defaultArenaDBConnMaxIdleTime = 5 * time.Minute
+)
+
 func New(cfg config.Config) (*App, error) {
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return nil, errors.New("database url is required")
@@ -39,6 +47,10 @@ func New(cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(defaultArenaDBMaxOpenConns)
+	db.SetMaxIdleConns(defaultArenaDBMaxIdleConns)
+	db.SetConnMaxLifetime(defaultArenaDBConnMaxLifetime)
+	db.SetConnMaxIdleTime(defaultArenaDBConnMaxIdleTime)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -54,14 +66,24 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	runtimeService := newRuntimeService(repo, time.Now().UTC)
+	now := func() time.Time {
+		return time.Now().UTC()
+	}
+	actionGateway := gateway.New(gateway.Config{Ledger: repo})
+	ratingWriter := rating.NewWriter(repo, now)
+	if err := ratingWriter.Bootstrap(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	runtimeService := newRuntimeService(repo, now, actionGateway, ratingWriter)
 	if err := runtimeService.bootstrapFromStore(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	actionGateway.SetObserver(runtimeService)
 	server := httpapi.NewServer(httpapi.Dependencies{
 		Arena:    runtimeService,
-		Gateway:  gateway.New(gateway.Config{}),
+		Gateway:  actionGateway,
 		Sessions: session.NewManager(),
 	})
 

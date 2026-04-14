@@ -17,6 +17,7 @@ const (
 	ActionCall       ActionType = "call"
 	ActionFold       ActionType = "fold"
 	ActionRaise      ActionType = "raise"
+	ActionAllIn      ActionType = "all_in"
 	ActionAutoCheck  ActionType = "auto_check"
 	ActionAutoFold   ActionType = "auto_fold"
 )

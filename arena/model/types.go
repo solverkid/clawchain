@@ -548,6 +548,17 @@ type RatingState struct {
 	UpdatedAt time.Time
 }
 
+type RatingRuntimeState struct {
+	MinerAddress            string
+	Mu                      float64
+	Sigma                   float64
+	ArenaReliability        float64
+	PublicELO               int
+	PublicRank              int
+	Multiplier              float64
+	EligibleTournamentCount int
+}
+
 type RatingSnapshot struct {
 	ID               string
 	MinerAddress     string

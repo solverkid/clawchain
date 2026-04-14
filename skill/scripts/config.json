@@ -1,11 +1,16 @@
 {
-  "_comment": "Current testnet RPC. This URL may change — run python3 scripts/doctor.py to verify.",
-  "rpc_url": "https://sku-arizona-performer-donor.trycloudflare.com",
+  "_comment": "Forecast-mining RPC. Update rpc_url to your FastAPI mining service endpoint.",
+  "rpc_url": "http://127.0.0.1:1317",
   "chain_id": "clawchain-testnet-1",
   "miner_name": "openclaw-miner",
   "auto_mine": true,
-  "max_challenges_per_run": 5,
+  "max_tasks_per_run": 2,
   "wallet_path": "~/.clawchain/wallet.json",
   "log_dir": "~/.openclaw/workspace/skills/clawchain-miner/data",
-  "solver_mode": "local_only"
+  "forecast_mode": "codex_v1",
+  "codex_binary": "codex",
+  "codex_model": "gpt-5.4-mini",
+  "codex_timeout_seconds": 120,
+  "parallel_tasks": 2,
+  "miner_address": "claw1nwmc4ddekuzs9j2lph7zrmj97h9g8f64zhc7xw"
 }

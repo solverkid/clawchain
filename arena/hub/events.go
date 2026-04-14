@@ -21,3 +21,8 @@ type SeatAssignment struct {
 	TableNo   int
 	SeatNo    int
 }
+
+type TransitionPlan struct {
+	Decision        TransitionDecision
+	SeatAssignments []SeatAssignment
+}

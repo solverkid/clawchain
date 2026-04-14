@@ -88,12 +88,12 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}))
 	require.NoError(t, repo.UpsertPrestartCheck(ctx, model.PrestartCheck{
-		ID:           "pre:1",
-		WaveID:       waveID,
-		EntrantID:    "ent:1",
-		CheckType:    "identity",
-		CheckStatus:  "passed",
-		CheckedAt:    now,
+		ID:          "pre:1",
+		WaveID:      waveID,
+		EntrantID:   "ent:1",
+		CheckType:   "identity",
+		CheckStatus: "passed",
+		CheckedAt:   now,
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
 			StateHash:           "pre-state-hash",
@@ -115,11 +115,11 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}))
 	require.NoError(t, repo.UpsertShardAssignment(ctx, model.ShardAssignment{
-		ID:           "shard:1",
-		WaveID:       waveID,
-		TournamentID: tournamentID,
-		EntrantID:    "ent:1",
-		ShardNo:      1,
+		ID:            "shard:1",
+		WaveID:        waveID,
+		TournamentID:  tournamentID,
+		EntrantID:     "ent:1",
+		ShardNo:       1,
 		SeatDrawToken: "draw-1",
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
@@ -158,16 +158,16 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}))
 	require.NoError(t, repo.UpsertHand(ctx, model.Hand{
-		ID:                handID,
-		TableID:           tableID,
-		TournamentID:      tournamentID,
-		RoundNo:           1,
-		LevelNo:           1,
-		State:             model.HandStateSignalOpen,
-		HandStartedAt:     now,
-		ButtonSeatNo:      1,
-		ActiveSeatCount:   1,
-		RNGRootSeed:       "rng-root-seed",
+		ID:              handID,
+		TableID:         tableID,
+		TournamentID:    tournamentID,
+		RoundNo:         1,
+		LevelNo:         1,
+		State:           model.HandStateSignalOpen,
+		HandStartedAt:   now,
+		ButtonSeatNo:    1,
+		ActiveSeatCount: 1,
+		RNGRootSeed:     "rng-root-seed",
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
 			StateHash:           "hand-state-hash",
@@ -176,12 +176,12 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}))
 	require.NoError(t, repo.UpsertPhase(ctx, model.Phase{
-		ID:        phaseID,
-		HandID:    handID,
-		TableID:   tableID,
-		State:     model.PhaseStateOpen,
-		Type:      model.PhaseTypeSignal,
-		OpenedAt:  now,
+		ID:         phaseID,
+		HandID:     handID,
+		TableID:    tableID,
+		State:      model.PhaseStateOpen,
+		Type:       model.PhaseTypeSignal,
+		OpenedAt:   now,
 		DeadlineAt: ptrTime(now.Add(15 * time.Second)),
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
@@ -191,15 +191,15 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}))
 	require.NoError(t, repo.UpsertSeat(ctx, model.Seat{
-		ID:                     "seat:1",
-		TableID:                tableID,
-		TournamentID:           tournamentID,
-		EntrantID:              "ent:1",
-		SeatNo:                 1,
-		SeatAlias:              "alias-1",
-		MinerID:                "miner-1",
-		State:                  model.SeatStateActive,
-		Stack:                  1000,
+		ID:                      "seat:1",
+		TableID:                 tableID,
+		TournamentID:            tournamentID,
+		EntrantID:               "ent:1",
+		SeatNo:                  1,
+		SeatAlias:               "alias-1",
+		MinerID:                 "miner-1",
+		State:                   model.SeatStateActive,
+		Stack:                   1000,
 		TournamentSeatDrawToken: "draw-1",
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
@@ -241,20 +241,20 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}}))
 	require.NoError(t, repo.AppendActionRecords(ctx, []model.ActionRecord{{
-		RequestID:          "req:1",
-		TournamentID:       tournamentID,
-		TableID:            tableID,
-		HandID:             handID,
-		PhaseID:            phaseID,
-		SeatID:             "seat:1",
-		SeatAlias:          "alias-1",
-		ActionType:         "check",
-		ActionSeq:          1,
-		ExpectedStateSeq:   1,
-		AcceptedStateSeq:   1,
-		ValidationStatus:   "accepted",
-		ResultEventID:      model.EventID(tableID, 1),
-		ReceivedAt:         now,
+		RequestID:        "req:1",
+		TournamentID:     tournamentID,
+		TableID:          tableID,
+		HandID:           handID,
+		PhaseID:          phaseID,
+		SeatID:           "seat:1",
+		SeatAlias:        "alias-1",
+		ActionType:       "check",
+		ActionSeq:        1,
+		ExpectedStateSeq: 1,
+		AcceptedStateSeq: 1,
+		ValidationStatus: "accepted",
+		ResultEventID:    model.EventID(tableID, 1),
+		ReceivedAt:       now,
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
 			StateHash:           "action-state-hash",
@@ -312,15 +312,15 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}))
 	require.NoError(t, repo.AppendReseatEvents(ctx, []model.ReseatEvent{{
-		ID:               "reseat:1",
-		TournamentID:     tournamentID,
-		FromTableID:      tableID,
-		ToTableID:        tableID,
-		SeatID:           "seat:1",
-		EntrantID:        "ent:1",
-		RoundNo:          1,
+		ID:                "reseat:1",
+		TournamentID:      tournamentID,
+		FromTableID:       tableID,
+		ToTableID:         tableID,
+		SeatID:            "seat:1",
+		EntrantID:         "ent:1",
+		RoundNo:           1,
 		CausedByBarrierID: barrierID,
-		OccurredAt:       now,
+		OccurredAt:        now,
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
 			StateHash:           "reseat-state-hash",
@@ -329,15 +329,15 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 		Payload: payload,
 	}}))
 	require.NoError(t, repo.AppendEliminationEvents(ctx, []model.EliminationEvent{{
-		ID:               "elim:1",
-		TournamentID:     tournamentID,
-		TableID:          tableID,
-		HandID:           handID,
-		SeatID:           "seat:1",
-		EntrantID:        "ent:1",
-		FinishRank:       64,
-		StageReached:     "signal_open",
-		OccurredAt:       now,
+		ID:           "elim:1",
+		TournamentID: tournamentID,
+		TableID:      tableID,
+		HandID:       handID,
+		SeatID:       "seat:1",
+		EntrantID:    "ent:1",
+		FinishRank:   64,
+		StageReached: "signal_open",
+		OccurredAt:   now,
 		TruthMetadata: model.TruthMetadata{
 			PolicyBundleVersion: "policy-v1",
 			StateHash:           "elim-state-hash",
@@ -366,6 +366,90 @@ func TestRepositoryPersistsAuthoritativeRuntimeRows(t *testing.T) {
 	} {
 		require.Equalf(t, expected, rowCount(t, db, table), table)
 	}
+}
+
+func TestSubmissionLedgerRejectsPayloadConflict(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	first := model.SubmissionLedger{
+		RequestID:        "req:conflict",
+		TournamentID:     "tour:1",
+		TableID:          "tbl:1",
+		ExpectedStateSeq: 7,
+		ValidationStatus: "received",
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "submission-state-1",
+			PayloadHash:         "payload-hash-1",
+		},
+		Payload: json.RawMessage(`{"action_type":"check"}`),
+	}
+	require.NoError(t, repo.AppendSubmissionLedgerEntries(ctx, []model.SubmissionLedger{first}))
+
+	err = repo.AppendSubmissionLedgerEntries(ctx, []model.SubmissionLedger{{
+		RequestID:        first.RequestID,
+		TournamentID:     first.TournamentID,
+		TableID:          first.TableID,
+		ExpectedStateSeq: 8,
+		ValidationStatus: "received",
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "submission-state-2",
+			PayloadHash:         "payload-hash-2",
+		},
+		Payload: json.RawMessage(`{"action_type":"raise","amount":100}`),
+	}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "request_id payload conflict")
+
+	entry, err := repo.LoadSubmissionLedgerEntry(ctx, first.RequestID)
+	require.NoError(t, err)
+	require.Equal(t, "payload-hash-1", entry.PayloadHash)
+	require.Equal(t, first.ExpectedStateSeq, entry.ExpectedStateSeq)
+}
+
+func TestRepositoryLoadsActionRecordByRequestID(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	now := time.Date(2026, time.April, 10, 10, 0, 0, 0, time.UTC)
+
+	require.NoError(t, repo.AppendActionRecords(ctx, []model.ActionRecord{{
+		RequestID:        "req:action",
+		TournamentID:     "tour:1",
+		TableID:          "tbl:1",
+		HandID:           "hand:1",
+		PhaseID:          "phase:1",
+		SeatID:           "seat:tbl:1:07",
+		ActionType:       "check",
+		ActionSeq:        1,
+		ExpectedStateSeq: 7,
+		AcceptedStateSeq: 8,
+		ValidationStatus: "accepted",
+		ResultEventID:    "event:1",
+		ReceivedAt:       now,
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "action-state",
+			PayloadHash:         "action-payload",
+		},
+		Payload: json.RawMessage(`{"kind":"actor_action"}`),
+	}}))
+
+	action, err := repo.LoadActionRecord(ctx, "req:action")
+	require.NoError(t, err)
+	require.Equal(t, "event:1", action.ResultEventID)
+	require.Equal(t, int64(8), action.AcceptedStateSeq)
+	require.Equal(t, "check", action.ActionType)
 }
 
 func rowCount(t *testing.T, db *sql.DB, table string) int {

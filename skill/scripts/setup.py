@@ -169,6 +169,14 @@ def register_miner(rpc_url, address, name, auth_secret=None, public_key=None):
     except Exception as e:
         return {"success": False, "message": str(e)}
 
+
+def derive_public_key(private_key_hex):
+    """Derive 64-byte uncompressed secp256k1 public key hex from private key hex."""
+    from eth_keys import keys as eth_keys
+
+    private_key = bytes.fromhex(private_key_hex)
+    return eth_keys.PrivateKey(private_key).public_key.to_bytes().hex()
+
 def main():
     parser = argparse.ArgumentParser(description="ClawChain Wallet Initialization & Miner Registration")
     parser.add_argument("--name", default="openclaw-miner", help="Miner name (default: openclaw-miner)")
@@ -255,7 +263,13 @@ def main():
                     existing["auth_secret"] = existing_auth
                     save_wallet(existing, wallet_path, insecure=args.insecure)
                     print("   🔑 Generated auth_secret for existing wallet (upgrade)")
-                result = register_miner(rpc_url, address, miner_name, auth_secret=existing_auth)
+                result = register_miner(
+                    rpc_url,
+                    address,
+                    miner_name,
+                    auth_secret=existing_auth,
+                    public_key=derive_public_key(existing["private_key"]),
+                )
                 print(f"   {'✅' if result.get('success') else '⚠️'} {result.get('message', '')}")
                 config["miner_address"] = address
                 config["miner_name"] = miner_name
@@ -271,7 +285,13 @@ def main():
                 existing["auth_secret"] = existing_auth
                 save_wallet(existing, wallet_path, insecure=args.insecure)
             print(f"Using existing wallet: {address}")
-            result = register_miner(rpc_url, address, miner_name, auth_secret=existing_auth)
+            result = register_miner(
+                rpc_url,
+                address,
+                miner_name,
+                auth_secret=existing_auth,
+                public_key=derive_public_key(existing["private_key"]),
+            )
             print(f"{'✅' if result.get('success') else '⚠️'} {result.get('message', '')}")
             config["miner_address"] = address
             config["miner_name"] = miner_name
@@ -308,31 +328,40 @@ def main():
 
     # Register miner
     print(f"\n📝 Registering miner on chain...")
-    result = register_miner(rpc_url, wallet["address"], miner_name, auth_secret=wallet.get("auth_secret"))
+    result = register_miner(
+        rpc_url,
+        wallet["address"],
+        miner_name,
+        auth_secret=wallet.get("auth_secret"),
+        public_key=wallet.get("public_key"),
+    )
     print(f"   {'✅' if result.get('success') else '⚠️'} {result.get('message', '')}")
 
-    # Solver mode selection
+    # Forecast mode selection
     if not args.non_interactive:
-        print("\n🤖 Solver Mode Selection:")
-        print("   1. local_only — Solve challenges locally only (most secure, no external API calls)")
-        print("   2. auto — Try local first, fall back to LLM (sends challenge text to LLM provider)")
-        print("   3. llm — Always use LLM (requires API key)")
-        mode_choice = input("Choose solver mode [1/2/3] (default: 1): ").strip()
-        solver_mode = {"2": "auto", "3": "llm"}.get(mode_choice, "local_only")
+        print("\n📈 Forecast Mode Selection:")
+        print("   1. heuristic_v1 — Use built-in heuristic forecast model")
+        print("   2. codex_v1     — Use Codex CLI for live probability forecasts")
+        mode_choice = input("Choose forecast mode [1] (default: 1): ").strip()
+        forecast_mode = "codex_v1" if mode_choice == "2" else "heuristic_v1"
     else:
-        solver_mode = config.get("solver_mode", "local_only")
+        forecast_mode = config.get("forecast_mode", "heuristic_v1")
 
     # Update config.json
     config["miner_address"] = wallet["address"]
     config["miner_name"] = miner_name
-    config["solver_mode"] = solver_mode
+    config["forecast_mode"] = forecast_mode
+    config["codex_binary"] = config.get("codex_binary", "codex")
+    config["codex_model"] = config.get("codex_model", "gpt-5.4-mini")
+    config["codex_timeout_seconds"] = config.get("codex_timeout_seconds", 120)
+    config["parallel_tasks"] = config.get("parallel_tasks", 2 if config.get("forecast_mode") == "codex_v1" else 1)
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)
 
     print(f"\n✅ Initialization complete!")
     print(f"   Wallet address: {wallet['address']}")
-    print(f"   Solver mode: {solver_mode}")
-    print(f"   Next step: python3 scripts/mine.py to start mining")
+    print(f"   Forecast mode: {forecast_mode}")
+    print(f"   Next step: python3 skill/scripts/mine.py --once to run a forecast mining cycle")
 
 if __name__ == "__main__":
     main()

@@ -24,7 +24,7 @@ func (s *Server) handleTournamentSessionRoutes(w http.ResponseWriter, r *http.Re
 		return true
 	}
 
-	s.deps.Sessions.Attach(payload.MinerID, payload.SessionID)
+	s.deps.Sessions.Attach(tournamentID, payload.MinerID, payload.SessionID)
 	if s.deps.Arena != nil {
 		if assignment, ok := s.deps.Arena.Reconnect(r.Context(), tournamentID, payload.MinerID, payload.SessionID); ok {
 			writeJSON(w, http.StatusOK, assignment)

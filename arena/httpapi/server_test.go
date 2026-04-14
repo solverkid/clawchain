@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -70,6 +71,123 @@ func TestStandingAndLiveTableEndpointsExposeFrozenShape(t *testing.T) {
 	require.Contains(t, resp.Body.String(), `"acting_seat_no"`)
 }
 
+func TestActionRouteRejectsStaleSessionAfterReconnect(t *testing.T) {
+	gw := &recordingGateway{response: gateway.SubmitResponse{ResultEventID: "evt-1", StateSeq: 9}}
+	sessions := session.NewManager()
+	sessions.Attach("tour_1", "miner_1", "session-b")
+	srv := NewServer(Dependencies{
+		Gateway:  gw,
+		Sessions: sessions,
+		SeatAssignments: map[string]map[string]SeatAssignment{
+			"tour_1": {
+				"miner_1": {
+					TableID:   "tbl:tour_1:02",
+					SeatNo:    7,
+					StateSeq:  8,
+					ReadOnly:  false,
+					SessionID: "session-b",
+				},
+			},
+		},
+	})
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/tournaments/tour_1/actions", bytes.NewBufferString(`{
+		"request_id":"req-1",
+		"table_id":"tbl:tour_1:02",
+		"miner_id":"miner_1",
+		"seat_no":7,
+		"action_type":"check",
+		"expected_state_seq":8,
+		"signature":"sig:miner_1",
+		"session_id":"session-a"
+	}`))
+	srv.Handler().ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	require.Contains(t, resp.Body.String(), "session_mismatch")
+	require.Equal(t, 0, gw.calls)
+}
+
+func TestActionRouteRejectsStaleTableAssignmentAfterMove(t *testing.T) {
+	gw := &recordingGateway{response: gateway.SubmitResponse{ResultEventID: "evt-1", StateSeq: 9}}
+	sessions := session.NewManager()
+	sessions.Attach("tour_1", "miner_1", "session-b")
+	srv := NewServer(Dependencies{
+		Gateway:  gw,
+		Sessions: sessions,
+		SeatAssignments: map[string]map[string]SeatAssignment{
+			"tour_1": {
+				"miner_1": {
+					TableID:   "tbl:tour_1:02",
+					SeatNo:    7,
+					StateSeq:  8,
+					ReadOnly:  false,
+					SessionID: "session-b",
+				},
+			},
+		},
+	})
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/tournaments/tour_1/actions", bytes.NewBufferString(`{
+		"request_id":"req-1",
+		"table_id":"tbl:tour_1:01",
+		"miner_id":"miner_1",
+		"seat_no":7,
+		"action_type":"check",
+		"expected_state_seq":8,
+		"signature":"sig:miner_1",
+		"session_id":"session-b"
+	}`))
+	srv.Handler().ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	require.Contains(t, resp.Body.String(), "stale_table_assignment")
+	require.Equal(t, 0, gw.calls)
+}
+
+func TestActionRouteHydratesLatestSeatAuthorityForCurrentSession(t *testing.T) {
+	gw := &recordingGateway{response: gateway.SubmitResponse{ResultEventID: "evt-1", StateSeq: 9}}
+	sessions := session.NewManager()
+	sessions.Attach("tour_1", "miner_1", "session-b")
+	srv := NewServer(Dependencies{
+		Gateway:  gw,
+		Sessions: sessions,
+		SeatAssignments: map[string]map[string]SeatAssignment{
+			"tour_1": {
+				"miner_1": {
+					TableID:   "tbl:tour_1:02",
+					SeatNo:    7,
+					StateSeq:  8,
+					ReadOnly:  false,
+					SessionID: "session-b",
+				},
+			},
+		},
+	})
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/tournaments/tour_1/actions", bytes.NewBufferString(`{
+		"request_id":"req-1",
+		"table_id":"tbl:tour_1:02",
+		"miner_id":"miner_1",
+		"seat_no":7,
+		"action_type":"check",
+		"expected_state_seq":8,
+		"signature":"sig:miner_1",
+		"session_id":"session-b"
+	}`))
+	srv.Handler().ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	require.Equal(t, 1, gw.calls)
+	require.Equal(t, "tour_1", gw.request.TournamentID)
+	require.Equal(t, "tbl:tour_1:02", gw.request.TableID)
+	require.Equal(t, 7, gw.request.SeatNo)
+	require.Equal(t, "session-b", gw.request.SessionID)
+}
+
 func newHTTPServerForTest(t *testing.T) *Server {
 	t.Helper()
 
@@ -104,4 +222,17 @@ func newHTTPServerForTest(t *testing.T) *Server {
 			},
 		},
 	})
+}
+
+type recordingGateway struct {
+	request  gateway.SubmitRequest
+	response gateway.SubmitResponse
+	err      error
+	calls    int
+}
+
+func (g *recordingGateway) Submit(_ context.Context, req gateway.SubmitRequest) (gateway.SubmitResponse, error) {
+	g.calls++
+	g.request = req
+	return g.response, g.err
 }

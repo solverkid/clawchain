@@ -1,0 +1,9 @@
+fastapi==0.121.3
+uvicorn==0.38.0
+sqlalchemy==2.0.48
+asyncpg==0.31.0
+httpx==0.28.1
+requests==2.32.5
+eth-keys==0.7.0
+cryptography==46.0.5
+pydantic==2.12.4

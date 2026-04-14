@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package clawchain.settlement.v1;
+
+import "gogoproto/gogo.proto";
+import "cosmos_proto/cosmos.proto";
+import "cosmos/msg/v1/msg.proto";
+
+option go_package = "github.com/clawchain/clawchain/x/settlement/types;types";
+
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc AnchorSettlementBatch(MsgAnchorSettlementBatch) returns (MsgAnchorSettlementBatchResponse);
+}
+
+message MsgAnchorSettlementBatch {
+  option (cosmos.msg.v1.signer) = "submitter";
+  option (gogoproto.equal) = false;
+  option (gogoproto.goproto_getters) = false;
+
+  string submitter = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string settlement_batch_id = 2;
+  string anchor_job_id = 3;
+  string lane = 4;
+  string schema_version = 5;
+  string policy_bundle_version = 6;
+  string canonical_root = 7;
+  string anchor_payload_hash = 8;
+  string reward_window_ids_root = 9;
+  string task_run_ids_root = 10;
+  string miner_reward_rows_root = 11;
+  string window_end_at = 12;
+  uint64 total_reward_amount = 13;
+}
+
+message MsgAnchorSettlementBatchResponse {
+  string settlement_batch_id = 1;
+}

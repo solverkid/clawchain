@@ -15,10 +15,10 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
-WORKSPACE_DIR = Path("~/.openclaw/workspace").expanduser()
+DATA_DIR = SCRIPT_DIR.parent / "data"
 REPO_DIR = SCRIPT_DIR.parent.parent  # clawchain repo root
 
-MINER_VERSION = "0.2.0"
+MINER_VERSION = "0.4.0"
 
 # Import wallet crypto
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -35,6 +35,35 @@ def check(label, ok, detail=""):
 def info(label, detail=""):
     suffix = f" — {detail}" if detail else ""
     print(f"  ℹ️  {label}{suffix}")
+
+
+def get_chain_preflight(rpc_url):
+    import requests as req
+
+    resp = req.get(f"{rpc_url}/admin/chain/preflight", timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def summarize_anchor_readiness(preflight):
+    warnings = [str(item) for item in (preflight.get("warnings") or []) if item]
+    if preflight.get("ready"):
+        return {
+            "ok": True,
+            "status": "ready",
+            "detail": "typed and fallback anchor path ready",
+        }
+    if preflight.get("rpc", {}).get("reachable"):
+        return {
+            "ok": False,
+            "status": "degraded",
+            "detail": "; ".join(warnings) or "service reachable but anchor path is not ready",
+        }
+    return {
+        "ok": False,
+        "status": "unreachable",
+        "detail": "; ".join(warnings) or "anchor path unavailable",
+    }
 
 
 def main():
@@ -57,9 +86,15 @@ def main():
         detail = "pip install requests"
     all_ok &= check("requests library installed", ok, detail)
 
-    # 3. OpenClaw workspace
-    ok = WORKSPACE_DIR.exists() and WORKSPACE_DIR.is_dir()
-    all_ok &= check("OpenClaw workspace exists", ok, str(WORKSPACE_DIR))
+    # 3. local miner data directory
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        ok = DATA_DIR.exists() and DATA_DIR.is_dir()
+        detail = str(DATA_DIR)
+    except Exception as e:
+        ok = False
+        detail = str(e)
+    all_ok &= check("Miner data directory ready", ok, detail)
 
     # 4. config.json valid
     config = None
@@ -115,36 +150,7 @@ def main():
         print("  ⚠️  `cryptography` library not installed — wallet encryption unavailable")
         print("     Install: pip install cryptography")
 
-    # 6. Solver mode check
-    solver_mode = config.get("solver_mode", "auto") if config else "auto"
-    if solver_mode == "local_only":
-        check("Solver mode", True, f"{solver_mode} (most secure, no external API calls)")
-    elif solver_mode == "auto":
-        print(f"  ⚠️  Solver mode — {solver_mode} (local first, LLM fallback — challenge text sent to LLM provider)")
-    elif solver_mode == "llm":
-        print(f"  ⚠️  Solver mode — {solver_mode} (all challenges sent to external LLM)")
-    else:
-        info("Solver mode", f"{solver_mode} (unknown)")
-
-    # 7. LLM API key (optional)
-    has_llm = bool(
-        os.getenv("OPENAI_API_KEY")
-        or os.getenv("GEMINI_API_KEY")
-        or os.getenv("ANTHROPIC_API_KEY")
-    )
-    providers = []
-    if os.getenv("OPENAI_API_KEY"):
-        providers.append("OpenAI")
-    if os.getenv("GEMINI_API_KEY"):
-        providers.append("Gemini")
-    if os.getenv("ANTHROPIC_API_KEY"):
-        providers.append("Anthropic")
-    detail = ", ".join(providers) if providers else "none set (optional, local-only mining still works)"
-    icon = "✅" if has_llm else "⚠️"
-    suffix = f" — {detail}"
-    print(f"  {icon} LLM API key set (optional){suffix}")
-
-    # 7b. RPC endpoint sanity check
+    # 6. RPC endpoint sanity check
     rpc_url = config.get("rpc_url", "") if config else ""
     if not rpc_url and config:
         rpc_url = config.get("node_url", "")  # legacy fallback
@@ -153,12 +159,12 @@ def main():
         is_tunnel = "trycloudflare" in rpc_url or "ngrok" in rpc_url
         if is_localhost:
             print("  ⚠️  RPC endpoint points to localhost — this won't work for public testnet")
-            print("     Check SETUP.md or https://github.com/0xVeryBigOrange/clawchain for the current endpoint")
+            print("     Check SETUP.md or your current deployed mining-service endpoint")
         elif is_tunnel:
             print("  ⚠️  RPC endpoint points to a temporary tunnel URL — it may expire")
-            print("     Check SETUP.md or https://github.com/0xVeryBigOrange/clawchain for the current endpoint")
+            print("     Check SETUP.md or your current deployed mining-service endpoint")
 
-    # 8. RPC endpoint reachable
+    # 7. RPC endpoint reachable
     if rpc_url:
         try:
             import requests as req
@@ -172,6 +178,21 @@ def main():
         ok = False
         detail = "no rpc_url in config"
     all_ok &= check("RPC endpoint reachable", ok, detail)
+
+    # 8. anchor readiness
+    if rpc_url:
+        try:
+            readiness = summarize_anchor_readiness(get_chain_preflight(rpc_url))
+            if readiness["status"] == "ready":
+                all_ok &= check("Anchor readiness", True, readiness["detail"])
+            elif readiness["status"] == "degraded":
+                print(f"  ⚠️  Anchor readiness — degraded ({readiness['detail']})")
+            else:
+                print(f"  ⚠️  Anchor readiness — unavailable ({readiness['detail']})")
+        except Exception as e:
+            print(f"  ⚠️  Anchor readiness — unavailable ({e})")
+    else:
+        info("Anchor readiness", "no RPC to check")
 
     # 9. Miner registered
     miner_addr = config.get("miner_address", "") if config else ""
@@ -190,7 +211,7 @@ def main():
     else:
         ok = False
         detail = "cannot check (no RPC)"
-    all_ok &= check("Miner registered on chain", ok, detail)
+    all_ok &= check("Miner registered in forecast service", ok, detail)
 
     # 10. Miner version check
     if rpc_url:
@@ -214,25 +235,24 @@ def main():
         detail = "no RPC to check"
     all_ok &= check("Miner version compatible", ok, detail)
 
-    # 11. Commitment verification test
+    # 11. forecast settlement visibility
     if rpc_url:
         try:
             import requests as req
-            # Try to find a completed challenge with commitment data
             resp = req.get(f"{rpc_url}/clawchain/stats", timeout=5)
             if resp.status_code == 200:
                 stats = resp.json()
-                completed = stats.get("completed_challenges", 0)
-                if completed > 0:
-                    info("Commitment system", f"{completed} challenges settled (commitment verification available)")
+                settled_fast = stats.get("settled_fast_tasks", 0)
+                if settled_fast > 0:
+                    info("Forecast settlement", f"{settled_fast} fast tasks settled")
                 else:
-                    info("Commitment system", "no settled challenges yet to verify")
+                    info("Forecast settlement", "no settled fast tasks yet")
             else:
-                info("Commitment system", "cannot query stats")
+                info("Forecast settlement", "cannot query stats")
         except Exception:
-            info("Commitment system", "check unavailable")
+            info("Forecast settlement", "check unavailable")
     else:
-        info("Commitment system", "no RPC to check")
+        info("Forecast settlement", "no RPC to check")
 
     # 12. RPC fallback endpoints
     endpoints = config.get("rpc_endpoints", []) if config else []

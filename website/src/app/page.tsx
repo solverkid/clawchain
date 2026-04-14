@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 
 const translations = {
@@ -216,6 +217,24 @@ export default function Home() {
             >
               {t.ctaWhitepaper}
             </a>
+            <Link
+              href="/dashboard"
+              className="px-8 py-4 border border-white/20 text-white hover:bg-white/5 text-lg font-semibold rounded-lg transition-all animate-fade-in"
+            >
+              Alpha Dashboard
+            </Link>
+            <Link
+              href="/network"
+              className="px-8 py-4 border border-white/20 text-white hover:bg-white/5 text-lg font-semibold rounded-lg transition-all animate-fade-in"
+            >
+              Network View
+            </Link>
+            <Link
+              href="/risk"
+              className="px-8 py-4 border border-white/20 text-white hover:bg-white/5 text-lg font-semibold rounded-lg transition-all animate-fade-in"
+            >
+              Risk Queue
+            </Link>
           </div>
         </div>
         <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 animate-bounce">

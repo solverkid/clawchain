@@ -1,4 +1,4 @@
-.PHONY: build build-arena install clean test test-arena lint proto-gen run-arena arena-db-up arena-db-down tidy version help
+.PHONY: build build-arena build-arena-swarm install clean test test-arena lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
@@ -23,6 +23,12 @@ build-arena:
 	@mkdir -p build
 	@go build -o build/arenad ./cmd/arenad
 	@echo "Built: build/arenad"
+
+build-arena-swarm:
+	@echo "Building arena-swarm..."
+	@mkdir -p build
+	@go build -o build/arena-swarm ./cmd/arena-swarm
+	@echo "Built: build/arena-swarm"
 
 # Install the binary to $GOPATH/bin
 install:
@@ -62,6 +68,10 @@ run-arena:
 	@echo "Starting arenad..."
 	@ARENA_DATABASE_URL='$(ARENA_DATABASE_URL)' go run ./cmd/arenad
 
+run-arena-swarm:
+	@echo "Starting arena-swarm..."
+	@go run ./cmd/arena-swarm
+
 arena-db-up:
 	@echo "Starting local arena Postgres..."
 	@if lsof -iTCP:55432 -sTCP:LISTEN >/dev/null 2>&1; then \
@@ -86,6 +96,7 @@ help:
 	@echo "Available targets:"
 	@echo "  build      - Build the clawchaind binary"
 	@echo "  build-arena - Build the arenad binary"
+	@echo "  build-arena-swarm - Build the arena-swarm binary"
 	@echo "  install    - Install binary to GOPATH/bin"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  test       - Run all tests"
@@ -94,6 +105,7 @@ help:
 	@echo "  tidy       - Tidy go.mod dependencies"
 	@echo "  proto-gen  - Generate protobuf code"
 	@echo "  run-arena  - Run arenad from source using ARENA_DATABASE_URL"
+	@echo "  run-arena-swarm - Run arena-swarm from source"
 	@echo "  arena-db-up   - Start local Arena Postgres on 127.0.0.1:55432"
 	@echo "  arena-db-down - Stop local Arena Postgres"
 	@echo "  version    - Build and show version"

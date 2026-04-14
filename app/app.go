@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"io"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	dbm "github.com/cosmos/cosmos-db"
 	"cosmossdk.io/log"
 	storetypes "cosmossdk.io/store/types"
+	abci "github.com/cometbft/cometbft/abci/types"
+	dbm "github.com/cosmos/cosmos-db"
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	"github.com/cosmos/cosmos-sdk/client"
@@ -41,15 +41,18 @@ import (
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
-	poakeeper "github.com/clawchain/clawchain/x/poa/keeper"
-	poamodule "github.com/clawchain/clawchain/x/poa/module"
-	poatypes "github.com/clawchain/clawchain/x/poa/types"
 	challengekeeper "github.com/clawchain/clawchain/x/challenge/keeper"
 	challengemodule "github.com/clawchain/clawchain/x/challenge/module"
 	challengetypes "github.com/clawchain/clawchain/x/challenge/types"
+	poakeeper "github.com/clawchain/clawchain/x/poa/keeper"
+	poamodule "github.com/clawchain/clawchain/x/poa/module"
+	poatypes "github.com/clawchain/clawchain/x/poa/types"
 	reputationkeeper "github.com/clawchain/clawchain/x/reputation/keeper"
 	reputationmodule "github.com/clawchain/clawchain/x/reputation/module"
 	reputationtypes "github.com/clawchain/clawchain/x/reputation/types"
+	settlementkeeper "github.com/clawchain/clawchain/x/settlement/keeper"
+	settlementmodule "github.com/clawchain/clawchain/x/settlement/module"
+	settlementtypes "github.com/clawchain/clawchain/x/settlement/types"
 )
 
 var (
@@ -68,6 +71,7 @@ var (
 		poamodule.AppModuleBasic{},
 		challengemodule.AppModuleBasic{},
 		reputationmodule.AppModuleBasic{},
+		settlementmodule.AppModuleBasic{},
 	)
 
 	// module account permissions
@@ -107,6 +111,7 @@ type ClawChainApp struct {
 	PoAKeeper        poakeeper.Keeper
 	ChallengeKeeper  challengekeeper.Keeper
 	ReputationKeeper reputationkeeper.Keeper
+	SettlementKeeper settlementkeeper.Keeper
 
 	// module manager
 	ModuleManager *module.Manager
@@ -143,6 +148,7 @@ func NewClawChainApp(
 		poatypes.StoreKey,
 		challengetypes.StoreKey,
 		reputationtypes.StoreKey,
+		settlementtypes.StoreKey,
 	)
 	tkeys := storetypes.NewTransientStoreKeys()
 	memKeys := storetypes.NewMemoryStoreKeys()
@@ -234,6 +240,11 @@ func NewClawChainApp(
 		keys[reputationtypes.StoreKey],
 	)
 
+	app.SettlementKeeper = settlementkeeper.NewKeeper(
+		appCodec,
+		keys[settlementtypes.StoreKey],
+	)
+
 	// set BaseApp CMS
 	app.MountKVStores(keys)
 	app.MountTransientStores(tkeys)
@@ -256,6 +267,7 @@ func NewClawChainApp(
 		poamodule.NewAppModule(app.PoAKeeper),
 		challengemodule.NewAppModule(app.ChallengeKeeper),
 		reputationmodule.NewAppModule(app.ReputationKeeper),
+		settlementmodule.NewAppModule(app.SettlementKeeper),
 	)
 
 	// set order for init genesis — staking before genutil (genutil processes gentxs)
@@ -270,6 +282,7 @@ func NewClawChainApp(
 		poatypes.ModuleName,
 		challengetypes.ModuleName,
 		reputationtypes.ModuleName,
+		settlementtypes.ModuleName,
 	)
 
 	// set order for begin/end block
@@ -369,7 +382,7 @@ func (app *ClawChainApp) RegisterAPIRoutes(apiSvr *api.Server, apiConfig serverc
 			return app.CommitMultiStore()
 		},
 	)
-	
+
 	// 注册自定义 REST 路由
 	mux := apiSvr.Router
 	restHandler.RegisterRoutes(mux)

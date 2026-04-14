@@ -66,6 +66,31 @@ func TestSingleTournamentMultiplierMoveIsCappedAtOneBasisStep(t *testing.T) {
 	require.LessOrEqual(t, math.Abs(after-before), 0.01)
 }
 
+func TestBootstrapRestoresMultiplierAndEligibleTournamentCount(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.runtimeStates = []model.RatingRuntimeState{{
+		MinerAddress:            "miner-1",
+		Mu:                      28.0,
+		Sigma:                   7.0,
+		ArenaReliability:        1.2,
+		PublicELO:               1260,
+		PublicRank:              4,
+		Multiplier:              1.23,
+		EligibleTournamentCount: 16,
+	}}
+
+	writer := NewWriter(repo, func() time.Time {
+		return time.Date(2026, time.April, 10, 18, 0, 0, 0, time.UTC)
+	})
+
+	require.NoError(t, writer.Bootstrap(context.Background()))
+	require.Equal(t, 1.23, writer.CurrentMultiplier("miner-1"))
+
+	out := writer.ApplyCompletedTournament(fixtureRatedCompletion("miner-1", 0.90))
+	require.Equal(t, 1.24, out.Items[0].MultiplierAfter)
+	require.InDelta(t, 28.0+((0.90-0.5)*4), out.Items[0].MuAfter, 0.001)
+}
+
 func newRatingWriterForTest(t *testing.T) *Writer {
 	t.Helper()
 
@@ -157,7 +182,9 @@ func fixtureRatedCompletion(minerAddress string, score float64) Completion {
 	}
 }
 
-type memoryRepository struct{}
+type memoryRepository struct {
+	runtimeStates []model.RatingRuntimeState
+}
 
 func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{}
@@ -197,4 +224,8 @@ func (r *memoryRepository) UpsertArenaResultEntry(context.Context, model.ArenaRe
 
 func (r *memoryRepository) AssertSharedHarnessTables(context.Context) error {
 	return nil
+}
+
+func (r *memoryRepository) LoadPersistedMinerStates(context.Context) ([]model.RatingRuntimeState, error) {
+	return append([]model.RatingRuntimeState(nil), r.runtimeStates...), nil
 }

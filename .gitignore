@@ -33,3 +33,4 @@ coverage.txt
 *.log
 data/
 __pycache__/
+.gitnexus

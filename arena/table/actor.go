@@ -90,6 +90,12 @@ func (a *Actor) State() ActorState {
 	return state
 }
 
+func (a *Actor) StreamSeq() int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.streamSeq
+}
+
 func (a *Actor) Handle(ctx context.Context, envelope CommandEnvelope) (Result, error) {
 	if ctx == nil {
 		return Result{}, errActorContextRequired
@@ -110,20 +116,28 @@ func (a *Actor) Handle(ctx context.Context, envelope CommandEnvelope) (Result, e
 		return Result{}, err
 	}
 
-	a.streamSeq++
+	baseStreamSeq := a.streamSeq + 1
+	finalStreamSeq := a.streamSeq
+	if len(events) > 0 {
+		finalStreamSeq = baseStreamSeq + int64(len(events)) - 1
+	}
 	nextSeq := a.state.StateSeq + 1
-	eventID := model.EventID(a.streamKey(), a.streamSeq)
+	eventID := model.EventID(a.streamKey(), baseStreamSeq)
 
 	if err := a.persistAction(ctx, envelope, eventID, nextSeq); err != nil {
 		return Result{}, err
 	}
-	if err := a.persistEvents(ctx, eventID, nextSeq, events); err != nil {
+	if err := a.persistEvents(ctx, eventID, nextSeq, baseStreamSeq, events); err != nil {
 		return Result{}, err
 	}
-	if err := a.persistDerivedState(ctx, envelope.Command, nextTable, nextSeq, eventID); err != nil {
+	if err := a.persistDerivedState(ctx, envelope.Command, nextTable, nextSeq, eventID, finalStreamSeq); err != nil {
 		return Result{}, err
 	}
 
+	a.streamSeq = baseStreamSeq
+	if len(events) > 1 {
+		a.streamSeq += int64(len(events) - 1)
+	}
 	a.state.Table = nextTable
 	a.state.StateSeq = nextSeq
 	result := Result{
@@ -146,13 +160,19 @@ func (a *Actor) OpenPhase(ctx context.Context, phase PhaseDefinition) error {
 	a.streamSeq++
 	nextSeq := a.state.StateSeq + 1
 	now := a.clock.Now().UTC()
+	phaseStartSeatNo := phase.ActingSeat
+	if phase.Type == a.state.Table.CurrentPhase && phase.HandID == a.state.HandID && a.state.Table.PhaseStartSeatNo != 0 {
+		phaseStartSeatNo = a.state.Table.PhaseStartSeatNo
+	}
 	a.state.PhaseID = phase.ID
 	if phase.HandID != "" {
 		a.state.HandID = phase.HandID
 	}
 	a.state.Table.CurrentPhase = phase.Type
+	a.state.Table.PhaseStartSeatNo = phaseStartSeatNo
 	a.state.Table.ActingSeatNo = phase.ActingSeat
 	a.state.Table.CurrentToCall = phase.ToCall
+	a.state.Table.HandClosed = false
 
 	if err := a.store.AppendEvents(ctx, []model.EventLogEntry{{
 		EventID:       model.EventID(a.streamKey(), a.streamSeq),
@@ -229,15 +249,23 @@ func (a *Actor) OpenPhase(ctx context.Context, phase PhaseDefinition) error {
 
 func (a *Actor) persistAction(ctx context.Context, envelope CommandEnvelope, eventID string, nextSeq int64) error {
 	actionType := ""
+	seatNo := 0
 	switch cmd := envelope.Command.(type) {
 	case SubmitArenaAction:
 		actionType = string(cmd.ActionType)
+		seatNo = cmd.SeatNo
 	case ApplyPhaseTimeout:
 		actionType = "timeout"
+		seatNo = cmd.SeatNo
 	case CloseHand:
 		actionType = "close_hand"
 	case StartHand:
 		actionType = "start_hand"
+	}
+
+	seatID := fmt.Sprintf("system:%s", a.state.TableID)
+	if seatNo > 0 {
+		seatID = fmt.Sprintf("seat:%s:%02d", a.state.TableID, seatNo)
 	}
 
 	return a.store.AppendActionRecords(ctx, []model.ActionRecord{{
@@ -246,7 +274,9 @@ func (a *Actor) persistAction(ctx context.Context, envelope CommandEnvelope, eve
 		TableID:          a.state.TableID,
 		HandID:           a.state.HandID,
 		PhaseID:          a.state.PhaseID,
+		SeatID:           seatID,
 		ActionType:       actionType,
+		ActionSeq:        int(nextSeq),
 		ExpectedStateSeq: envelope.ExpectedStateSeq,
 		AcceptedStateSeq: nextSeq,
 		ValidationStatus: "accepted",
@@ -262,7 +292,7 @@ func (a *Actor) persistAction(ctx context.Context, envelope CommandEnvelope, eve
 	}})
 }
 
-func (a *Actor) persistEvents(ctx context.Context, eventID string, nextSeq int64, events []Event) error {
+func (a *Actor) persistEvents(ctx context.Context, eventID string, nextSeq int64, baseStreamSeq int64, events []Event) error {
 	logEntries := make([]model.EventLogEntry, 0, len(events))
 	for idx, event := range events {
 		logEntries = append(logEntries, model.EventLogEntry{
@@ -270,7 +300,7 @@ func (a *Actor) persistEvents(ctx context.Context, eventID string, nextSeq int64
 			AggregateType: "table",
 			AggregateID:   a.state.TableID,
 			StreamKey:     a.streamKey(),
-			StreamSeq:     a.streamSeq,
+			StreamSeq:     baseStreamSeq + int64(idx),
 			TournamentID:  a.state.TournamentID,
 			TableID:       a.state.TableID,
 			HandID:        a.state.HandID,
@@ -294,7 +324,7 @@ func (a *Actor) persistEvents(ctx context.Context, eventID string, nextSeq int64
 	return a.store.AppendEvents(ctx, logEntries)
 }
 
-func (a *Actor) persistDerivedState(ctx context.Context, cmd Command, nextTable State, nextSeq int64, eventID string) error {
+func (a *Actor) persistDerivedState(ctx context.Context, cmd Command, nextTable State, nextSeq int64, eventID string, finalStreamSeq int64) error {
 	now := a.clock.Now().UTC()
 
 	switch typed := cmd.(type) {
@@ -323,14 +353,16 @@ func (a *Actor) persistDerivedState(ctx context.Context, cmd Command, nextTable 
 			}
 		}
 		_ = typed
-	case CloseHand:
+	}
+
+	if nextTable.HandClosed {
 		if err := a.store.SaveHandSnapshot(ctx, model.HandSnapshot{
 			ID:           fmt.Sprintf("handsnap:%s:%d", a.state.HandID, nextSeq),
 			TournamentID: a.state.TournamentID,
 			TableID:      a.state.TableID,
 			HandID:       a.state.HandID,
 			StreamKey:    a.streamKey(),
-			StreamSeq:    a.streamSeq,
+			StreamSeq:    finalStreamSeq,
 			StateSeq:     nextSeq,
 			TruthMetadata: model.TruthMetadata{
 				SchemaVersion:       1,
@@ -345,13 +377,13 @@ func (a *Actor) persistDerivedState(ctx context.Context, cmd Command, nextTable 
 		}
 	}
 
-	if _, ok := cmd.(CloseHand); ok || a.state.PhaseID != "" {
+	if nextTable.HandClosed || a.state.PhaseID != "" {
 		return a.store.SaveTableSnapshot(ctx, model.TableSnapshot{
 			ID:           fmt.Sprintf("tblsnap:%s:%d", a.state.TableID, nextSeq),
 			TournamentID: a.state.TournamentID,
 			TableID:      a.state.TableID,
 			StreamKey:    a.streamKey(),
-			StreamSeq:    a.streamSeq,
+			StreamSeq:    finalStreamSeq,
 			StateSeq:     nextSeq,
 			TruthMetadata: model.TruthMetadata{
 				SchemaVersion:       1,

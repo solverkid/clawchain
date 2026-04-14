@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/clawchain/clawchain/arena/model"
 	"github.com/clawchain/clawchain/arena/testutil"
 )
 
@@ -102,6 +103,109 @@ func TestPhaseOpenPersistsDeadlineAndSnapshotAtomically(t *testing.T) {
 	require.True(t, repo.HasTableSnapshot("tbl:tour_1:01"))
 }
 
+func TestHandlePersistsTableSnapshotAtLatestStreamSeq(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Date(2026, time.April, 10, 13, 0, 0, 0, time.UTC))
+	store := &recordingActorStore{}
+	actor := NewRecoveredActor(ActorState{
+		TableID:      "tbl:tour_1:01",
+		TournamentID: "tour_1",
+		HandID:       "hand:tour_1:01:0001",
+		PhaseID:      "phase-wager-1",
+		StateSeq:     1,
+		Table: State{
+			CurrentPhase:  PhaseWager,
+			ActingSeatNo:  7,
+			CurrentToCall: 0,
+			MinRaiseSize:  50,
+			Seats: map[int]Seat{
+				7: {SeatNo: 7, State: SeatStateActive, Stack: 500},
+				8: {SeatNo: 8, State: SeatStateActive, Stack: 500},
+			},
+		},
+	}, 291, clock, store)
+
+	_, err := actor.Handle(context.Background(), CommandEnvelope{
+		RequestID:        "req-latest-stream-seq",
+		ExpectedStateSeq: 1,
+		Command: SubmitArenaAction{
+			SeatNo:     7,
+			ActionType: ActionCheck,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, store.events, 1)
+	require.Len(t, store.tableSnapshots, 1)
+	require.Equal(t, int64(292), store.events[0].StreamSeq)
+	require.Equal(t, store.events[0].StreamSeq, store.tableSnapshots[0].StreamSeq)
+}
+
+func TestHandlePersistsHandSnapshotWhenActionAutoClosesHand(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Date(2026, time.April, 10, 13, 0, 0, 0, time.UTC))
+	store := &recordingActorStore{}
+	actor := NewRecoveredActor(ActorState{
+		TableID:      "tbl:tour_1:01",
+		TournamentID: "tour_1",
+		HandID:       "hand:tour_1:01:0001",
+		PhaseID:      "phase-wager-1",
+		StateSeq:     1,
+		Table: State{
+			CurrentPhase:     PhaseWager,
+			PhaseStartSeatNo: 7,
+			ActingSeatNo:     7,
+			CurrentToCall:    0,
+			MinRaiseSize:     50,
+			Seats: map[int]Seat{
+				7: {SeatNo: 7, State: SeatStateActive, Stack: 500},
+				8: {SeatNo: 8, State: SeatStateActive, Stack: 500, Folded: true},
+			},
+		},
+	}, 291, clock, store)
+
+	_, err := actor.Handle(context.Background(), CommandEnvelope{
+		RequestID:        "req-hand-snapshot-action",
+		ExpectedStateSeq: 1,
+		Command: SubmitArenaAction{
+			SeatNo:     7,
+			ActionType: ActionCheck,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, store.handSnapshots, 1)
+	require.True(t, actor.State().Table.HandClosed)
+}
+
+func TestHandlePersistsHandSnapshotWhenTimeoutAutoClosesHand(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Date(2026, time.April, 10, 13, 0, 0, 0, time.UTC))
+	store := &recordingActorStore{}
+	actor := NewRecoveredActor(ActorState{
+		TableID:      "tbl:tour_1:01",
+		TournamentID: "tour_1",
+		HandID:       "hand:tour_1:01:0001",
+		PhaseID:      "phase-wager-1",
+		StateSeq:     1,
+		Table: State{
+			CurrentPhase:     PhaseWager,
+			PhaseStartSeatNo: 7,
+			ActingSeatNo:     7,
+			CurrentToCall:    100,
+			MinRaiseSize:     100,
+			Seats: map[int]Seat{
+				7: {SeatNo: 7, State: SeatStateActive, Stack: 500},
+				8: {SeatNo: 8, State: SeatStateActive, Stack: 500, Folded: true, CommittedThisHand: 100},
+			},
+		},
+	}, 291, clock, store)
+
+	_, err := actor.Handle(context.Background(), CommandEnvelope{
+		RequestID:        "req-hand-snapshot-timeout",
+		ExpectedStateSeq: 1,
+		Command:          ApplyPhaseTimeout{SeatNo: 7},
+	})
+	require.NoError(t, err)
+	require.Len(t, store.handSnapshots, 1)
+	require.True(t, actor.State().Table.HandClosed)
+}
+
 func newActorForTest(t *testing.T) *Actor {
 	t.Helper()
 
@@ -146,4 +250,37 @@ func fixtureSignalPhase() PhaseDefinition {
 
 func ptrTime(value time.Time) *time.Time {
 	return &value
+}
+
+type recordingActorStore struct {
+	events         []model.EventLogEntry
+	actionRecords  []model.ActionRecord
+	deadlines      []model.ActionDeadline
+	tableSnapshots []model.TableSnapshot
+	handSnapshots  []model.HandSnapshot
+}
+
+func (s *recordingActorStore) AppendEvents(_ context.Context, events []model.EventLogEntry) error {
+	s.events = append(s.events, events...)
+	return nil
+}
+
+func (s *recordingActorStore) AppendActionRecords(_ context.Context, actions []model.ActionRecord) error {
+	s.actionRecords = append(s.actionRecords, actions...)
+	return nil
+}
+
+func (s *recordingActorStore) SaveTableSnapshot(_ context.Context, snapshot model.TableSnapshot) error {
+	s.tableSnapshots = append(s.tableSnapshots, snapshot)
+	return nil
+}
+
+func (s *recordingActorStore) SaveHandSnapshot(_ context.Context, snapshot model.HandSnapshot) error {
+	s.handSnapshots = append(s.handSnapshots, snapshot)
+	return nil
+}
+
+func (s *recordingActorStore) UpsertActionDeadline(_ context.Context, deadline model.ActionDeadline) error {
+	s.deadlines = append(s.deadlines, deadline)
+	return nil
 }

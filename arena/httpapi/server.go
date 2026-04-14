@@ -18,6 +18,7 @@ type ActionGateway interface {
 
 type SeatAssignment struct {
 	TableID   string `json:"table_id"`
+	SeatNo    int    `json:"seat_no,omitempty"`
 	StateSeq  int64  `json:"state_seq"`
 	ReadOnly  bool   `json:"read_only"`
 	SessionID string `json:"session_id,omitempty"`
@@ -48,6 +49,7 @@ type ArenaService interface {
 	LockWave(ctx context.Context, waveID string) (WaveMutationResponse, error)
 	PublishSeats(ctx context.Context, waveID string) (WaveMutationResponse, error)
 	ForceRemoveBeforeStart(ctx context.Context, waveID, minerID string) (map[string]any, error)
+	Disqualify(ctx context.Context, tournamentID, minerID, reason string) (map[string]any, error)
 	ArmTimeCap(ctx context.Context, tournamentID string) (map[string]any, error)
 	VoidTournament(ctx context.Context, tournamentID, reason string) (map[string]any, error)
 	Standing(ctx context.Context, tournamentID string) (map[string]any, bool)

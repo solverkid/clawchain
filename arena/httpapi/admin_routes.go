@@ -61,6 +61,21 @@ func (s *Server) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, response)
+	case r.Method == http.MethodPost && len(parts) == 6 && parts[0] == "v1" && parts[1] == "admin" && parts[2] == "arena" && parts[3] == "tournaments" && parts[5] == "disqualify":
+		var payload struct {
+			MinerID string `json:"miner_id"`
+			Reason  string `json:"reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		response, err := s.deps.Arena.Disqualify(r.Context(), parts[4], payload.MinerID, payload.Reason)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, response)
 	case r.Method == http.MethodPost && len(parts) == 6 && parts[0] == "v1" && parts[1] == "admin" && parts[2] == "arena" && parts[3] == "tournaments" && parts[5] == "time-cap":
 		response, err := s.deps.Arena.ArmTimeCap(r.Context(), parts[4])
 		if err != nil {

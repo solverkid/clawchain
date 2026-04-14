@@ -1,135 +1,302 @@
-"""
-ClawChain Mining Service — 数据模型 & SQLite 初始化
-"""
+from __future__ import annotations
 
-import sqlite3
-import os
-from pathlib import Path
-
-DB_PATH = Path(__file__).parent / "mining.db"
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS miners (
-    address TEXT PRIMARY KEY,
-    name TEXT,
-    registration_index INTEGER,
-    challenges_completed INTEGER DEFAULT 0,
-    challenges_failed INTEGER DEFAULT 0,
-    total_rewards INTEGER DEFAULT 0,
-    consecutive_days INTEGER DEFAULT 0,
-    last_active_day TEXT,
-    reputation INTEGER DEFAULT 500,
-    consecutive_failures INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'active',
-    suspended_at TIMESTAMP,
-    faucet_claimed INTEGER DEFAULT 0,
-    staked_amount INTEGER DEFAULT 0,
-    staked_at TIMESTAMP,
-    ip_address TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS challenges (
-    id TEXT PRIMARY KEY,
-    epoch INTEGER,
-    type TEXT,
-    tier INTEGER DEFAULT 1,
-    prompt TEXT,
-    expected_answer TEXT,
-    status TEXT DEFAULT 'pending',
-    is_spot_check INTEGER DEFAULT 0,
-    known_answer TEXT,
-    salt TEXT,
-    commitment TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS submissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    challenge_id TEXT,
-    miner_address TEXT,
-    commit_hash TEXT,
-    answer TEXT,
-    nonce TEXT,
-    is_correct INTEGER,
-    reward_amount INTEGER DEFAULT 0,
-    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (challenge_id) REFERENCES challenges(id),
-    FOREIGN KEY (miner_address) REFERENCES miners(address)
-);
-
-CREATE TABLE IF NOT EXISTS epoch_rewards (
-    epoch INTEGER PRIMARY KEY,
-    miner_pool INTEGER,
-    validator_pool INTEGER,
-    eco_fund INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS global_state (
-    key TEXT PRIMARY KEY,
-    value TEXT
-);
-
-CREATE TABLE IF NOT EXISTS epoch_anchors (
-    epoch_id INTEGER PRIMARY KEY,
-    settlement_root TEXT NOT NULL,
-    anchor_type TEXT DEFAULT 'local',
-    tx_hash TEXT,
-    records_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-"""
+from sqlalchemy import (
+    MetaData,
+    Table,
+    Column,
+    String,
+    Integer,
+    Float,
+    Boolean,
+    Text,
+    DateTime,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 
 
-def get_db(db_path=None):
-    """获取 SQLite 连接（WAL 模式，支持并发读）"""
-    path = db_path or DB_PATH
-    db = sqlite3.connect(str(path), check_same_thread=False)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
-    return db
+metadata = MetaData()
+
+miners = Table(
+    "miners",
+    metadata,
+    Column("address", String, primary_key=True),
+    Column("name", String, nullable=False),
+    Column("registration_index", Integer, nullable=False, default=0),
+    Column("status", String, nullable=False, default="active"),
+    Column("public_key", Text, nullable=False),
+    Column("economic_unit_id", String, nullable=False),
+    Column("ip_address", String, nullable=True),
+    Column("user_agent_hash", String, nullable=True),
+    Column("total_rewards", Integer, nullable=False, default=0),
+    Column("forecast_commits", Integer, nullable=False, default=0),
+    Column("forecast_reveals", Integer, nullable=False, default=0),
+    Column("settled_tasks", Integer, nullable=False, default=0),
+    Column("correct_direction_count", Integer, nullable=False, default=0),
+    Column("edge_score_total", Float, nullable=False, default=0.0),
+    Column("held_rewards", Integer, nullable=False, default=0),
+    Column("fast_task_opportunities", Integer, nullable=False, default=0),
+    Column("fast_task_misses", Integer, nullable=False, default=0),
+    Column("fast_window_start_at", DateTime(timezone=True), nullable=True),
+    Column("admission_state", String, nullable=False, default="probation"),
+    Column("model_reliability", Float, nullable=False, default=1.0),
+    Column("ops_reliability", Float, nullable=False, default=1.0),
+    Column("arena_multiplier", Float, nullable=False, default=1.0),
+    Column("poker_mtt_multiplier", Float, nullable=False, default=1.0),
+    Column("public_rank", Integer, nullable=True),
+    Column("public_elo", Integer, nullable=False, default=1200),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
 
 
-def init_db(db_path=None):
-    """初始化数据库 schema"""
-    db = get_db(db_path)
-    db.executescript(SCHEMA)
-    db.commit()
-    return db
+forecast_task_runs = Table(
+    "forecast_task_runs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("lane", String, nullable=False),
+    Column("asset", String, nullable=False),
+    Column("publish_at", DateTime(timezone=True), nullable=False),
+    Column("commit_deadline", DateTime(timezone=True), nullable=False),
+    Column("reveal_deadline", DateTime(timezone=True), nullable=False),
+    Column("resolve_at", DateTime(timezone=True), nullable=False),
+    Column("baseline_q_bps", Integer, nullable=False),
+    Column("baseline_method", String, nullable=False),
+    Column("snapshot_health", String, nullable=False),
+    Column("task_state", String, nullable=False, default="reward_eligible"),
+    Column("degraded_reason", String, nullable=True),
+    Column("void_reason", String, nullable=True),
+    Column("resolution_source", String, nullable=True),
+    Column("pack_hash", String, nullable=False),
+    Column("pack_json", JSONB, nullable=False),
+    Column("commit_close_ref_price", Float, nullable=True),
+    Column("end_ref_price", Float, nullable=True),
+    Column("outcome", Integer, nullable=True),
+    Column("reward_window_id", String, nullable=True),
+    Column("state", String, nullable=False, default="published"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
 
 
-def migrate_db(db):
-    """Add columns introduced after v0.1.0 (idempotent)."""
-    migrations = [
-        ("challenges", "salt", "ALTER TABLE challenges ADD COLUMN salt TEXT"),
-        ("challenges", "commitment", "ALTER TABLE challenges ADD COLUMN commitment TEXT"),
-        ("miners", "staked_amount", "ALTER TABLE miners ADD COLUMN staked_amount INTEGER DEFAULT 0"),
-        ("miners", "staked_at", "ALTER TABLE miners ADD COLUMN staked_at TIMESTAMP"),
-        ("miners", "ip_address", "ALTER TABLE miners ADD COLUMN ip_address TEXT"),
-        ("miners", "auth_secret", "ALTER TABLE miners ADD COLUMN auth_secret TEXT"),
-        ("miners", "public_key", "ALTER TABLE miners ADD COLUMN public_key TEXT"),
-        ("miners", "last_nonce", "ALTER TABLE miners ADD COLUMN last_nonce INTEGER DEFAULT 0"),
-    ]
-    for table, col, sql in migrations:
-        try:
-            db.execute(f"SELECT {col} FROM {table} LIMIT 1")
-        except Exception:
-            db.execute(sql)
-    db.commit()
+forecast_submissions = Table(
+    "forecast_submissions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("task_run_id", String, nullable=False),
+    Column("miner_address", String, nullable=False),
+    Column("economic_unit_id", String, nullable=False),
+    Column("commit_request_id", String, nullable=True, unique=True),
+    Column("reveal_request_id", String, nullable=True, unique=True),
+    Column("commit_hash", String, nullable=False),
+    Column("commit_nonce", String, nullable=False),
+    Column("p_yes_bps", Integer, nullable=True),
+    Column("eligibility_status", String, nullable=False, default="eligible"),
+    Column("state", String, nullable=False, default="committed"),
+    Column("score", Float, nullable=False, default=0.0),
+    Column("reward_amount", Integer, nullable=False, default=0),
+    Column("reward_window_id", String, nullable=True),
+    Column("accepted_commit_at", DateTime(timezone=True), nullable=False),
+    Column("accepted_reveal_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("task_run_id", "miner_address", name="uq_forecast_submission_task_miner"),
+)
 
 
-def get_global(db, key, default=None):
-    """读取全局状态"""
-    row = db.execute("SELECT value FROM global_state WHERE key=?", (key,)).fetchone()
-    return row["value"] if row else default
+reward_windows = Table(
+    "reward_windows",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("lane", String, nullable=False),
+    Column("state", String, nullable=False, default="finalized"),
+    Column("window_start_at", DateTime(timezone=True), nullable=False),
+    Column("window_end_at", DateTime(timezone=True), nullable=False),
+    Column("task_count", Integer, nullable=False, default=0),
+    Column("submission_count", Integer, nullable=False, default=0),
+    Column("miner_count", Integer, nullable=False, default=0),
+    Column("total_reward_amount", Integer, nullable=False, default=0),
+    Column("settlement_batch_id", String, nullable=True),
+    Column("policy_bundle_version", String, nullable=False, default="pb_2026_04_09_a"),
+    Column("canonical_root", String, nullable=True),
+    Column("task_run_ids", JSONB, nullable=False, default=list),
+    Column("miner_addresses", JSONB, nullable=False, default=list),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
 
 
-def set_global(db, key, value):
-    """设置全局状态"""
-    db.execute(
-        "INSERT OR REPLACE INTO global_state (key, value) VALUES (?, ?)",
-        (key, str(value)),
-    )
-    db.commit()
+settlement_batches = Table(
+    "settlement_batches",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("lane", String, nullable=False),
+    Column("state", String, nullable=False, default="open"),
+    Column("window_start_at", DateTime(timezone=True), nullable=False),
+    Column("window_end_at", DateTime(timezone=True), nullable=False),
+    Column("reward_window_ids", JSONB, nullable=False, default=list),
+    Column("policy_bundle_version", String, nullable=False, default="pb_2026_04_09_a"),
+    Column("task_count", Integer, nullable=False, default=0),
+    Column("miner_count", Integer, nullable=False, default=0),
+    Column("total_reward_amount", Integer, nullable=False, default=0),
+    Column("anchor_job_id", String, nullable=True),
+    Column("anchor_schema_version", String, nullable=True),
+    Column("canonical_root", String, nullable=True),
+    Column("anchor_payload_json", JSONB, nullable=True, default=None),
+    Column("anchor_payload_hash", String, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+anchor_jobs = Table(
+    "anchor_jobs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("settlement_batch_id", String, nullable=False),
+    Column("lane", String, nullable=False),
+    Column("state", String, nullable=False, default="anchor_submitted"),
+    Column("anchor_payload_hash", String, nullable=False),
+    Column("broadcast_status", String, nullable=True),
+    Column("broadcast_tx_hash", String, nullable=True),
+    Column("last_broadcast_at", DateTime(timezone=True), nullable=True),
+    Column("failure_reason", Text, nullable=True),
+    Column("submitted_at", DateTime(timezone=True), nullable=False),
+    Column("anchored_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+artifacts = Table(
+    "artifacts",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("kind", String, nullable=False),
+    Column("entity_type", String, nullable=False),
+    Column("entity_id", String, nullable=False),
+    Column("payload_json", JSONB, nullable=False),
+    Column("payload_hash", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+reward_hold_entries = Table(
+    "reward_hold_entries",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("miner_address", String, nullable=False),
+    Column("task_run_id", String, nullable=False),
+    Column("submission_id", String, nullable=False),
+    Column("amount_held", Integer, nullable=False, default=0),
+    Column("amount_released", Integer, nullable=False, default=0),
+    Column("state", String, nullable=False, default="held"),
+    Column("release_after", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+risk_review_cases = Table(
+    "risk_review_cases",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("case_type", String, nullable=False),
+    Column("severity", String, nullable=False, default="medium"),
+    Column("state", String, nullable=False, default="open"),
+    Column("economic_unit_id", String, nullable=False),
+    Column("miner_address", String, nullable=True),
+    Column("task_run_id", String, nullable=True),
+    Column("submission_id", String, nullable=True),
+    Column("decision", String, nullable=True),
+    Column("decision_reason", Text, nullable=True),
+    Column("reviewed_by", String, nullable=True),
+    Column("authority_level", String, nullable=True),
+    Column("trace_id", String, nullable=True),
+    Column("override_log_id", String, nullable=True),
+    Column("reviewed_at", DateTime(timezone=True), nullable=True),
+    Column("evidence_json", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+arena_result_entries = Table(
+    "arena_result_entries",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=False),
+    Column("miner_address", String, nullable=False),
+    Column("rated_or_practice", String, nullable=False),
+    Column("human_only", Boolean, nullable=False, default=True),
+    Column("eligible_for_multiplier", Boolean, nullable=False, default=False),
+    Column("arena_score", Float, nullable=False),
+    Column("conservative_skill", Float, nullable=True),
+    Column("multiplier_after", Float, nullable=False, default=1.0),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+poker_mtt_tournaments = Table(
+    "poker_mtt_tournaments",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("runtime_source", String, nullable=False, default="lepoker-gameserver"),
+    Column("rated_or_practice", String, nullable=False),
+    Column("human_only", Boolean, nullable=False, default=True),
+    Column("field_size", Integer, nullable=False),
+    Column("buy_in_tier", String, nullable=True),
+    Column("structure_version", String, nullable=True),
+    Column("status", String, nullable=False, default="completed"),
+    Column("policy_bundle_version", String, nullable=False, default="poker_mtt_v1"),
+    Column("started_at", DateTime(timezone=True), nullable=True),
+    Column("completed_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+poker_mtt_result_entries = Table(
+    "poker_mtt_result_entries",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=False),
+    Column("miner_address", String, nullable=False),
+    Column("rated_or_practice", String, nullable=False),
+    Column("human_only", Boolean, nullable=False, default=True),
+    Column("field_size", Integer, nullable=False),
+    Column("final_rank", Integer, nullable=False),
+    Column("finish_percentile", Float, nullable=False),
+    Column("tournament_result_score", Float, nullable=False),
+    Column("hidden_eval_score", Float, nullable=False, default=0.0),
+    Column("consistency_input_score", Float, nullable=False, default=0.0),
+    Column("total_score", Float, nullable=False),
+    Column("eligible_for_multiplier", Boolean, nullable=False, default=False),
+    Column("rolling_score", Float, nullable=True),
+    Column("multiplier_before", Float, nullable=False, default=1.0),
+    Column("multiplier_after", Float, nullable=False, default=1.0),
+    Column("evaluation_state", String, nullable=False, default="provisional"),
+    Column("evaluation_version", String, nullable=False, default="poker_mtt_v1"),
+    Column("evidence_root", String, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("tournament_id", "miner_address", name="uq_poker_mtt_result_tournament_miner"),
+)
+
+
+TABLES = {
+    "miners": miners,
+    "forecast_task_runs": forecast_task_runs,
+    "forecast_submissions": forecast_submissions,
+    "reward_windows": reward_windows,
+    "settlement_batches": settlement_batches,
+    "anchor_jobs": anchor_jobs,
+    "artifacts": artifacts,
+    "reward_hold_entries": reward_hold_entries,
+    "risk_review_cases": risk_review_cases,
+    "arena_result_entries": arena_result_entries,
+    "poker_mtt_tournaments": poker_mtt_tournaments,
+    "poker_mtt_result_entries": poker_mtt_result_entries,
+}

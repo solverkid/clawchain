@@ -1,6 +1,7 @@
 package app
 
 import (
+	txsigning "cosmossdk.io/x/tx/signing"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/codec"
 	"github.com/cosmos/cosmos-sdk/codec/address"
@@ -12,8 +13,7 @@ import (
 	distr "github.com/cosmos/cosmos-sdk/x/distribution"
 	"github.com/cosmos/cosmos-sdk/x/mint"
 	"github.com/cosmos/cosmos-sdk/x/staking"
-	txsigning "cosmossdk.io/x/tx/signing"
-	"google.golang.org/protobuf/reflect/protoregistry"
+	gogoproto "github.com/cosmos/gogoproto/proto"
 )
 
 type EncodingConfig struct {
@@ -35,7 +35,7 @@ func MakeEncodingConfig() EncodingConfig {
 
 	// 创建带有 address codec 的 InterfaceRegistry（修复 gentx address codec 问题）
 	interfaceRegistry, err := codectypes.NewInterfaceRegistryWithOptions(codectypes.InterfaceRegistryOptions{
-		ProtoFiles: protoregistry.GlobalFiles,
+		ProtoFiles: gogoproto.HybridResolver,
 		SigningOptions: txsigning.Options{
 			AddressCodec:          address.NewBech32Codec(AccountAddressPrefix),
 			ValidatorAddressCodec: address.NewBech32Codec(AccountAddressPrefix + "valoper"),

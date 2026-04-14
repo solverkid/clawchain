@@ -34,7 +34,7 @@ V1 does:
 - keep mining mostly automatic
 - add one small daily interaction
 - present forecast, arena, and future games as one unified activity system
-- use TUI, slash commands, skills, and WebUI as the main surfaces
+- use TUI, plugin/slash commands, menu bar, and Control UI / WebChat as the main surfaces
 
 ---
 
@@ -106,7 +106,7 @@ All present and future mining forms must fit one registry:
 
 - TUI is for presence and quick status
 - slash commands are for control
-- WebUI is for understanding and browsing
+- Control UI / WebChat is for understanding and browsing
 - runtime is for execution
 
 ---
@@ -130,9 +130,11 @@ It includes:
 - high-level performance summary
 - lightweight memory of recent interaction
 
-The companion is persistent across sessions.
+The companion is persistent across user touchpoints.
 
-It is the same companion whether the user is in TUI, WebUI, or command flow.
+That persistence cannot rely on OpenClaw session transcript alone.
+
+It requires an explicit companion state store so the same companion appears consistently across TUI, Control UI / WebChat, menu bar, and command flow.
 
 ### 4.2 Runtime
 
@@ -175,9 +177,10 @@ Surfaces are where the user sees and controls the companion.
 
 V1 surfaces:
 
+- macOS menu bar companion
 - OpenClaw TUI
-- slash commands / skill commands
-- companion-aware WebUI
+- plugin commands / slash commands
+- companion-aware Control UI / WebChat surfaces
 
 Deferred surface:
 
@@ -424,7 +427,7 @@ It should **not** mean:
 
 ### 9.1 TUI
 
-TUI is the companion's ambient home.
+TUI is the companion's ambient chat/status surface.
 
 It should show:
 
@@ -439,7 +442,7 @@ It should not try to be the full analytics console.
 
 ### 9.2 Slash commands / skill commands
 
-Slash commands are the shortest control path.
+Commands are the shortest control path.
 
 Recommended V1 command set:
 
@@ -453,13 +456,15 @@ Recommended V1 command set:
 
 These are companion-centered verbs, not raw operator commands.
 
-### 9.3 WebUI
+If they need deterministic runtime control, they should be implemented through plugin commands or tool-dispatch, not left as plain model-mediated skills.
 
-WebUI is the medium-depth understanding surface.
+### 9.3 Control UI / WebChat
+
+Control UI / WebChat is the medium-depth understanding surface.
 
 It should evolve from the current operator/read-model shape into a companion-first product surface.
 
-Recommended V1 WebUI sections:
+Recommended V1 sections:
 
 - `Companion Home`
 - `Activities`
@@ -476,7 +481,7 @@ The runtime should support:
 - automatic background participation
 - pause/resume
 - preference nudges from daily check-in
-- status syncing to TUI and WebUI
+- status syncing to TUI and Control UI / WebChat
 
 ---
 
@@ -576,7 +581,7 @@ not:
 
 The intended future flow is:
 
-- user sees companion in TUI or WebUI
+- user sees companion in TUI, menu bar, or Control UI / WebChat
 - user opens activity detail or game hub when deeper engagement is wanted
 
 ### 13.2 Future role of Electron
@@ -626,7 +631,7 @@ V1 product-layer success means:
 3. automatic mining remains the default
 4. daily interaction feels optional but sticky
 5. new mining forms can be added as activities without changing the main shell
-6. TUI, commands, and WebUI all reflect one consistent companion identity
+6. TUI, commands, menu bar, and Control UI / WebChat all reflect one consistent companion identity
 
 ---
 

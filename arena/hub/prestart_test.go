@@ -51,6 +51,42 @@ func TestSeatsPublishedAllowsSingleShardLocalRepublish(t *testing.T) {
 	require.GreaterOrEqual(t, len(recorder.snapshots), 2)
 }
 
+func TestInitialSeatAssignmentsBalanceUnderfilledField(t *testing.T) {
+	h, _ := newHubForTest(t, 43)
+
+	result, err := h.LockAndPack(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result.Tournaments, 1)
+	assignments := result.Tournaments[0].SeatAssignments
+
+	require.Len(t, uniqueTables(assignments), 5)
+	require.Equal(t, 9, countAssignmentsOnTable(assignments, tableID(result.Tournaments[0].TournamentID, 1)))
+	require.Equal(t, 9, countAssignmentsOnTable(assignments, tableID(result.Tournaments[0].TournamentID, 2)))
+	require.Equal(t, 9, countAssignmentsOnTable(assignments, tableID(result.Tournaments[0].TournamentID, 3)))
+	require.Equal(t, 8, countAssignmentsOnTable(assignments, tableID(result.Tournaments[0].TournamentID, 4)))
+	require.Equal(t, 8, countAssignmentsOnTable(assignments, tableID(result.Tournaments[0].TournamentID, 5)))
+}
+
+func TestInitialSeatAssignmentsUseShuffledDrawNotSequentialMinerOrder(t *testing.T) {
+	h, _ := newHubForTest(t, 16)
+
+	result, err := h.LockAndPack(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result.Tournaments, 1)
+
+	firstTable := make([]string, 0, 8)
+	for _, assignment := range result.Tournaments[0].SeatAssignments {
+		if assignment.TableNo != 1 {
+			continue
+		}
+		firstTable = append(firstTable, assignment.MinerID)
+	}
+	require.NotEqual(t, []string{
+		"miner-01", "miner-02", "miner-03", "miner-04",
+		"miner-05", "miner-06", "miner-07", "miner-08",
+	}, firstTable)
+}
+
 func newHubForTest(t *testing.T, entrants int) (*Service, *recordingStore) {
 	t.Helper()
 

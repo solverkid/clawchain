@@ -1,17 +1,21 @@
 package hub
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"sort"
 	"time"
 
 	"github.com/clawchain/clawchain/arena/model"
 )
 
-const seatsPerTable = 8
+const seatsPerTable = 9
 
 var (
 	errContextRequired       = errors.New("context is required")
@@ -90,6 +94,18 @@ func (s *Service) CanAdvanceRound() bool {
 	return true
 }
 
+func (s *Service) ClosedTableIDs() []string {
+	tableIDs := make([]string, 0, len(s.state.ClosedTables))
+	for tableID, closed := range s.state.ClosedTables {
+		if !closed {
+			continue
+		}
+		tableIDs = append(tableIDs, tableID)
+	}
+	sort.Strings(tableIDs)
+	return tableIDs
+}
+
 func (s *Service) NextBarrierDecision() TransitionDecision {
 	tableCount := len(s.state.LiveTables)
 	if tableCount == 0 {
@@ -107,6 +123,35 @@ func (s *Service) NextBarrierDecision() TransitionDecision {
 		return TransitionRebalance
 	default:
 		return TransitionNone
+	}
+}
+
+func (s *Service) BuildTransitionPlan() TransitionPlan {
+	decision := s.NextBarrierDecision()
+	assignments := currentAssignments(s.state)
+	if decision == TransitionNone || len(assignments) == 0 {
+		return TransitionPlan{
+			Decision:        decision,
+			SeatAssignments: assignments,
+		}
+	}
+
+	switch decision {
+	case TransitionFinalTable:
+		return TransitionPlan{
+			Decision:        decision,
+			SeatAssignments: reseatAssignments(tableID(s.state.TournamentID, 1), 1, assignments),
+		}
+	case TransitionBreakTable, TransitionRebalance:
+		return TransitionPlan{
+			Decision:        decision,
+			SeatAssignments: rebalanceAssignments(s.state.TournamentID, assignments, targetTableCount(s.state.PlayersRemaining)),
+		}
+	default:
+		return TransitionPlan{
+			Decision:        decision,
+			SeatAssignments: assignments,
+		}
 	}
 }
 
@@ -348,19 +393,50 @@ func entrantIDs(entrants []model.Entrant) []string {
 }
 
 func assignSeats(tournamentID string, entrants []model.Entrant) []SeatAssignment {
+	if len(entrants) == 0 {
+		return nil
+	}
+
+	draw := shuffledEntrants(tournamentID, entrants)
+	targets := balancedTargetSizes(len(draw), targetTableCount(len(draw)))
 	assignments := make([]SeatAssignment, 0, len(entrants))
-	for i, entrant := range entrants {
-		tableNo := (i / seatsPerTable) + 1
-		seatNo := (i % seatsPerTable) + 1
-		assignments = append(assignments, SeatAssignment{
-			EntrantID: entrant.ID,
-			MinerID:   entrant.MinerID,
-			TableID:   model.TableID(tournamentID, tableNo),
-			TableNo:   tableNo,
-			SeatNo:    seatNo,
-		})
+
+	offset := 0
+	for tableIdx, tableSize := range targets {
+		tableNo := tableIdx + 1
+		for seatIdx := 0; seatIdx < tableSize; seatIdx++ {
+			entrant := draw[offset+seatIdx]
+			assignments = append(assignments, SeatAssignment{
+				EntrantID: entrant.ID,
+				MinerID:   entrant.MinerID,
+				TableID:   model.TableID(tournamentID, tableNo),
+				TableNo:   tableNo,
+				SeatNo:    seatIdx + 1,
+			})
+		}
+		offset += tableSize
 	}
 	return assignments
+}
+
+func shuffledEntrants(tournamentID string, entrants []model.Entrant) []model.Entrant {
+	draw := slices.Clone(entrants)
+	sort.Slice(draw, func(i, j int) bool {
+		left := drawKey(tournamentID, draw[i])
+		right := drawKey(tournamentID, draw[j])
+		if cmp := bytes.Compare(left[:], right[:]); cmp != 0 {
+			return cmp < 0
+		}
+		if draw[i].MinerID != draw[j].MinerID {
+			return draw[i].MinerID < draw[j].MinerID
+		}
+		return draw[i].ID < draw[j].ID
+	})
+	return draw
+}
+
+func drawKey(tournamentID string, entrant model.Entrant) [32]byte {
+	return sha256.Sum256([]byte(tournamentID + "|" + entrant.ID + "|" + entrant.MinerID + "|" + entrant.SeatAlias))
 }
 
 func seatingByEntrant(assignments []SeatAssignment) map[string]SeatAssignment {
@@ -387,19 +463,10 @@ func (s *Service) lookupAssignment(entrantID string) (SeatAssignment, string) {
 }
 
 func targetTableCount(playersRemaining int) int {
-	switch {
-	case playersRemaining <= seatsPerTable:
-		return 1
-	case playersRemaining >= 9 && playersRemaining <= 13:
-		return 2
-	default:
-		for n := 2; n <= int(math.Max(2, float64(playersRemaining))); n++ {
-			if 7*n <= playersRemaining && playersRemaining <= 9*n {
-				return n
-			}
-		}
-		return 2
+	if playersRemaining <= 0 {
+		return 0
 	}
+	return int(math.Ceil(float64(playersRemaining) / float64(seatsPerTable)))
 }
 
 func needsRebalance(tables []LiveTable) bool {
@@ -423,4 +490,152 @@ func needsRebalance(tables []LiveTable) bool {
 
 func tableID(tournamentID string, tableNo int) string {
 	return model.TableID(tournamentID, tableNo)
+}
+
+func currentAssignments(state State) []SeatAssignment {
+	if len(state.Tournaments) == 0 {
+		return nil
+	}
+	assignments := slices.Clone(state.Tournaments[0].SeatAssignments)
+	sort.Slice(assignments, func(i, j int) bool {
+		if assignments[i].TableID != assignments[j].TableID {
+			return assignments[i].TableID < assignments[j].TableID
+		}
+		return assignments[i].SeatNo < assignments[j].SeatNo
+	})
+	return assignments
+}
+
+func reseatAssignments(targetTableID string, targetTableNo int, assignments []SeatAssignment) []SeatAssignment {
+	next := slices.Clone(assignments)
+	sort.Slice(next, func(i, j int) bool {
+		if next[i].TableID != next[j].TableID {
+			return next[i].TableID < next[j].TableID
+		}
+		return next[i].SeatNo < next[j].SeatNo
+	})
+	for i := range next {
+		next[i].TableID = targetTableID
+		next[i].TableNo = targetTableNo
+		next[i].SeatNo = i + 1
+	}
+	return next
+}
+
+func rebalanceAssignments(tournamentID string, assignments []SeatAssignment, targetTables int) []SeatAssignment {
+	if targetTables <= 0 {
+		return slices.Clone(assignments)
+	}
+
+	grouped := make(map[string][]SeatAssignment)
+	for _, assignment := range assignments {
+		grouped[assignment.TableID] = append(grouped[assignment.TableID], assignment)
+	}
+
+	tableIDs := make([]string, 0, len(grouped))
+	for tableID := range grouped {
+		tableIDs = append(tableIDs, tableID)
+	}
+	sort.Slice(tableIDs, func(i, j int) bool {
+		if len(grouped[tableIDs[i]]) != len(grouped[tableIDs[j]]) {
+			return len(grouped[tableIDs[i]]) > len(grouped[tableIDs[j]])
+		}
+		return tableIDs[i] < tableIDs[j]
+	})
+	if targetTables > len(tableIDs) {
+		targetTables = len(tableIDs)
+	}
+	keepTableIDs := append([]string(nil), tableIDs[:targetTables]...)
+	sort.Strings(keepTableIDs)
+
+	kept := make(map[string][]SeatAssignment, len(keepTableIDs))
+	for _, tableID := range keepTableIDs {
+		kept[tableID] = append([]SeatAssignment(nil), grouped[tableID]...)
+		sort.Slice(kept[tableID], func(i, j int) bool { return kept[tableID][i].SeatNo < kept[tableID][j].SeatNo })
+	}
+
+	pool := make([]SeatAssignment, 0)
+	for _, tableID := range tableIDs[targetTables:] {
+		tableAssignments := append([]SeatAssignment(nil), grouped[tableID]...)
+		sort.Slice(tableAssignments, func(i, j int) bool { return tableAssignments[i].SeatNo > tableAssignments[j].SeatNo })
+		pool = append(pool, tableAssignments...)
+	}
+
+	targetSizes := balancedTargetSizes(len(assignments), targetTables)
+	for idx, tableID := range keepTableIDs {
+		for len(kept[tableID]) > targetSizes[idx] {
+			source := kept[tableID]
+			pool = append(pool, source[len(source)-1])
+			kept[tableID] = source[:len(source)-1]
+		}
+	}
+
+	sort.Slice(pool, func(i, j int) bool {
+		if pool[i].TableID != pool[j].TableID {
+			return pool[i].TableID < pool[j].TableID
+		}
+		return pool[i].SeatNo > pool[j].SeatNo
+	})
+
+	for idx, tableID := range keepTableIDs {
+		for len(kept[tableID]) < targetSizes[idx] && len(pool) > 0 {
+			mover := pool[0]
+			pool = pool[1:]
+			mover.TableID = tableID
+			mover.TableNo = tableNoFromTableID(tableID)
+			kept[tableID] = append(kept[tableID], mover)
+		}
+	}
+
+	next := make([]SeatAssignment, 0, len(assignments))
+	for _, tableID := range keepTableIDs {
+		tableAssignments := kept[tableID]
+		sort.Slice(tableAssignments, func(i, j int) bool {
+			if tableAssignments[i].TableID != tableAssignments[j].TableID {
+				return tableAssignments[i].TableID < tableAssignments[j].TableID
+			}
+			return tableAssignments[i].SeatNo < tableAssignments[j].SeatNo
+		})
+		for idx := range tableAssignments {
+			tableAssignments[idx].SeatNo = idx + 1
+			tableAssignments[idx].TableID = tableID
+			tableAssignments[idx].TableNo = tableNoFromTableID(tableID)
+		}
+		next = append(next, tableAssignments...)
+	}
+
+	sort.Slice(next, func(i, j int) bool {
+		if next[i].TableID != next[j].TableID {
+			return next[i].TableID < next[j].TableID
+		}
+		return next[i].SeatNo < next[j].SeatNo
+	})
+	return next
+}
+
+func balancedTargetSizes(playersRemaining, tableCount int) []int {
+	targets := make([]int, tableCount)
+	base := playersRemaining / tableCount
+	remainder := playersRemaining % tableCount
+	for i := range targets {
+		targets[i] = base
+		if i < remainder {
+			targets[i]++
+		}
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i] > targets[j] })
+	return targets
+}
+
+func tableNoFromTableID(tableID string) int {
+	for idx := len(tableID) - 1; idx >= 0; idx-- {
+		if tableID[idx] == ':' {
+			value := 0
+			for _, ch := range tableID[idx+1:] {
+				value = value*10 + int(ch-'0')
+			}
+			return value
+		}
+	}
+	return 0
 }

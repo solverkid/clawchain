@@ -1,0 +1,50 @@
+services:
+  poker_mtt_redis:
+    image: redis:7-alpine
+    container_name: poker-mtt-redis
+    ports:
+      - "36379:6379"
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  poker_mtt_rmqnamesrv:
+    image: apache/rocketmq:5.3.2
+    platform: linux/amd64
+    container_name: poker-mtt-rmqnamesrv
+    ports:
+      - "39876:9876"
+    command: sh mqnamesrv
+
+  poker_mtt_rmqbroker:
+    image: apache/rocketmq:5.3.2
+    platform: linux/amd64
+    container_name: poker-mtt-rmqbroker
+    depends_on:
+      - poker_mtt_rmqnamesrv
+    ports:
+      - "39009:10909"
+      - "39011:10911"
+      - "39012:10912"
+    environment:
+      - NAMESRV_ADDR=poker_mtt_rmqnamesrv:9876
+    volumes:
+      - ./poker-mtt/rocketmq/broker.conf:/home/rocketmq/rocketmq-5.3.2/conf/broker.conf
+    command: sh mqbroker -c /home/rocketmq/rocketmq-5.3.2/conf/broker.conf
+
+  poker_mtt_rmqproxy:
+    image: apache/rocketmq:5.3.2
+    platform: linux/amd64
+    container_name: poker-mtt-rmqproxy
+    depends_on:
+      - poker_mtt_rmqnamesrv
+      - poker_mtt_rmqbroker
+    ports:
+      - "38080:8080"
+      - "38081:8081"
+    environment:
+      - NAMESRV_ADDR=poker_mtt_rmqnamesrv:9876
+    command: sh mqproxy

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 
 	"cosmossdk.io/log"
@@ -13,11 +14,14 @@ import (
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/config"
 	"github.com/cosmos/cosmos-sdk/client/keys"
+	"github.com/cosmos/cosmos-sdk/codec/address"
 	"github.com/cosmos/cosmos-sdk/server"
 	serverconfig "github.com/cosmos/cosmos-sdk/server/config"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
+	authcmdcli "github.com/cosmos/cosmos-sdk/x/auth/client/cli"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	bankcli "github.com/cosmos/cosmos-sdk/x/bank/client/cli"
 	genutilcli "github.com/cosmos/cosmos-sdk/x/genutil/client/cli"
 
 	"github.com/clawchain/clawchain/app"
@@ -44,36 +48,44 @@ func NewRootCmd() *cobra.Command {
 		WithHomeDir(app.DefaultNodeHome).
 		WithViper("")
 
+	preRunHandler := makePreRunHandler(initClientCtx)
+
 	rootCmd := &cobra.Command{
-		Use:   "clawchaind",
-		Short: "ClawChain - Proof of Availability AI Agent Blockchain",
-		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SetOut(cmd.OutOrStdout())
-			cmd.SetErr(cmd.ErrOrStderr())
-
-			initClientCtx, err := client.ReadPersistentCommandFlags(initClientCtx, cmd.Flags())
-			if err != nil {
-				return err
-			}
-
-			initClientCtx, err = config.ReadFromClientConfig(initClientCtx)
-			if err != nil {
-				return err
-			}
-
-			if err := client.SetCmdClientContextHandler(initClientCtx, cmd); err != nil {
-				return err
-			}
-
-			customAppTemplate, customAppConfig := initAppConfig()
-			customCMTConfig := initCometBFTConfig()
-
-			return server.InterceptConfigsPreRunHandler(cmd, customAppTemplate, customAppConfig, customCMTConfig)
-		},
+		Use:               "clawchaind",
+		Short:             "ClawChain - Proof of Availability AI Agent Blockchain",
+		PersistentPreRunE: preRunHandler,
 	}
+	rootCmd.SetContext(context.WithValue(context.Background(), server.ServerContextKey, server.NewDefaultContext()))
+	_ = client.SetCmdClientContext(rootCmd, initClientCtx)
 
-	initRootCmd(rootCmd, encodingConfig, app.ModuleBasics)
+	initRootCmd(rootCmd, encodingConfig, app.ModuleBasics, preRunHandler)
 	return rootCmd
+}
+
+func makePreRunHandler(initClientCtx client.Context) func(cmd *cobra.Command, args []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		cmd.SetOut(cmd.OutOrStdout())
+		cmd.SetErr(cmd.ErrOrStderr())
+
+		clientCtx, err := client.ReadPersistentCommandFlags(initClientCtx, cmd.Flags())
+		if err != nil {
+			return err
+		}
+
+		clientCtx, err = config.ReadFromClientConfig(clientCtx)
+		if err != nil {
+			return err
+		}
+
+		if err := client.SetCmdClientContextHandler(clientCtx, cmd); err != nil {
+			return err
+		}
+
+		customAppTemplate, customAppConfig := initAppConfig()
+		customCMTConfig := initCometBFTConfig()
+
+		return server.InterceptConfigsPreRunHandler(cmd, customAppTemplate, customAppConfig, customCMTConfig)
+	}
 }
 
 // initCometBFTConfig returns default CometBFT config
@@ -100,7 +112,12 @@ func initAppConfig() (string, interface{}) {
 	return serverconfig.DefaultConfigTemplate, customAppConfig
 }
 
-func initRootCmd(rootCmd *cobra.Command, encodingConfig app.EncodingConfig, basicManager module.BasicManager) {
+func initRootCmd(
+	rootCmd *cobra.Command,
+	encodingConfig app.EncodingConfig,
+	basicManager module.BasicManager,
+	preRunHandler func(cmd *cobra.Command, args []string) error,
+) {
 	rootCmd.AddCommand(
 		genutilcli.InitCmd(app.AllModuleBasics(), app.DefaultNodeHome),
 		genutilcli.Commands(encodingConfig.TxConfig, app.AllModuleBasics(), app.DefaultNodeHome),
@@ -112,17 +129,36 @@ func initRootCmd(rootCmd *cobra.Command, encodingConfig app.EncodingConfig, basi
 
 	// query/tx subcommands
 	queryCmd := &cobra.Command{
-		Use:     "query",
-		Aliases: []string{"q"},
-		Short:   "Querying subcommands",
-		RunE:    client.ValidateCmd,
+		Use:               "query",
+		Aliases:           []string{"q"},
+		Short:             "Querying subcommands",
+		RunE:              client.ValidateCmd,
+		PersistentPreRunE: preRunHandler,
 	}
 	txCmd := &cobra.Command{
-		Use:   "tx",
-		Short: "Transactions subcommands",
-		RunE:  client.ValidateCmd,
+		Use:               "tx",
+		Short:             "Transactions subcommands",
+		RunE:              client.ValidateCmd,
+		PersistentPreRunE: preRunHandler,
 	}
+	basicManager.AddQueryCommands(queryCmd)
+	basicManager.AddTxCommands(txCmd)
+	txCmd.AddCommand(
+		authcmdcli.GetSignCommand(),
+		authcmdcli.GetBroadcastCommand(),
+	)
+	replaceBankTxCommand(txCmd)
 	rootCmd.AddCommand(queryCmd, txCmd)
+}
+
+func replaceBankTxCommand(txCmd *cobra.Command) {
+	for _, cmd := range txCmd.Commands() {
+		if cmd.Name() == "bank" {
+			txCmd.RemoveCommand(cmd)
+			break
+		}
+	}
+	txCmd.AddCommand(bankcli.NewTxCmd(address.NewBech32Codec(app.AccountAddressPrefix)))
 }
 
 func newApp(logger log.Logger, db dbm.DB, traceStore io.Writer, appOpts servertypes.AppOptions) servertypes.Application {

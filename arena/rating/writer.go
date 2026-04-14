@@ -14,6 +14,7 @@ import (
 type repository interface {
 	AppendRatingInputs(ctx context.Context, inputs []model.RatingInput) error
 	AppendCollusionMetrics(ctx context.Context, metrics []model.CollusionMetric) error
+	LoadPersistedMinerStates(ctx context.Context) ([]model.RatingRuntimeState, error)
 	UpsertRatingState(ctx context.Context, state model.RatingState) error
 	SaveRatingSnapshot(ctx context.Context, snapshot model.RatingSnapshot) error
 	SavePublicLadderSnapshot(ctx context.Context, snapshot model.PublicLadderSnapshot) error
@@ -31,7 +32,9 @@ type Writer struct {
 
 func NewWriter(repo repository, now func() time.Time) *Writer {
 	if now == nil {
-		now = time.Now().UTC
+		now = func() time.Time {
+			return time.Now().UTC()
+		}
 	}
 
 	return &Writer{
@@ -43,6 +46,35 @@ func NewWriter(repo repository, now func() time.Time) *Writer {
 
 func (w *Writer) CurrentMultiplier(minerAddress string) float64 {
 	return w.currentState(minerAddress).Multiplier
+}
+
+func (w *Writer) Bootstrap(ctx context.Context) error {
+	if w.repo == nil {
+		return nil
+	}
+
+	states, err := w.repo.LoadPersistedMinerStates(ctx)
+	if err != nil {
+		return fmt.Errorf("load persisted miner states: %w", err)
+	}
+
+	next := make(map[string]minerState, len(states))
+	for _, state := range states {
+		if state.MinerAddress == "" {
+			continue
+		}
+		next[state.MinerAddress] = minerState{
+			Mu:                      defaultFloat(state.Mu, defaultMu),
+			Sigma:                   defaultFloat(state.Sigma, defaultSigma),
+			ArenaReliability:        defaultFloat(state.ArenaReliability, defaultArenaReliability),
+			PublicELO:               defaultInt(state.PublicELO, defaultPublicELO),
+			PublicRank:              state.PublicRank,
+			Multiplier:              defaultFloat(state.Multiplier, defaultMultiplier),
+			EligibleTournamentCount: state.EligibleTournamentCount,
+		}
+	}
+	w.states = next
+	return nil
 }
 
 func (w *Writer) ApplyCompletedTournament(completion Completion) Outcome {
@@ -290,6 +322,20 @@ func defaultCompletionTime(completedAt time.Time, now time.Time) time.Time {
 
 func defaultString(value, fallback string) string {
 	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func defaultFloat(value, fallback float64) float64 {
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
+func defaultInt(value, fallback int) int {
+	if value == 0 {
 		return fallback
 	}
 	return value

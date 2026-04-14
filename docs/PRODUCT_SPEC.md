@@ -1,8 +1,12 @@
 # ClawChain 产品全案
 
-**版本**: 1.0  
-**日期**: 2026-03-18  
+**版本**: 1.1
+**日期**: 2026-04-11
 **作者**: ClawChain 产品团队
+**状态**: 已合并 companion-first 产品层
+**关联文档**:
+- [docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md)
+- [docs/MINING_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md)
 
 ---
 
@@ -10,88 +14,233 @@
 
 ### 1.1 一句话定义
 
-**ClawChain 是让 AI Agent 在空闲时完成微任务来挖矿的区块链——你的龙虾不工作的时候，它在帮你赚钱。**
+**ClawChain 是一个 companion-first 的 AI agent mining 产品层: 用户先拥有一个常驻矿工伙伴，它在后台自动参与各种 activities 来挖取 CLAW。**
 
 ### 1.2 为什么 OpenClaw 用户要挖矿？
 
-**理由一：零额外成本的被动收入。** OpenClaw 用户已经在运行 agent（Mac mini、VPS、树莓派），设备 24/7 在线但 agent 大部分时间是空闲的。ClawChain 把这些空闲算力变成收入。不需要额外硬件投入，不需要 GPU，安装一个 Skill 就能开始挖。参照 Grass 的经验——300万用户只是装了个浏览器插件就开始赚积分，ClawChain 的门槛甚至更低，因为用户已经有了运行中的 agent。
+**理由一：零额外硬件成本。** OpenClaw 用户已经在运行 agent（Mac mini、VPS、树莓派），设备 24/7 在线但 agent 大部分时间不是在执行高价值用户请求。ClawChain 把这部分空闲运行时间变成挖矿机会。不需要额外 GPU，不需要再部署另一套客户端，安装 Skill 并激活 companion 就能开始。
 
-**理由二：挖矿奖励随生态增长有真实升值空间。** $CLAW 总量 2100万，永不增发，100% 挖矿分发的真正公平发射。早期矿工享受最高产出（50 CLAW/epoch，全部归矿工）+ 早鸟倍率（最高 3x）。每天矿工池 7,200 CLAW。假设 FDV 达到 $10M，每个 CLAW 约 $0.48——早期矿工日收益可达数十美元（详见第5章推演）。这不是空气币承诺，而是基于真实供需的经济模型。
+**理由二：奖励叙事和留存叙事终于统一。** 过去“运行矿工脚本”适合作为内核，不适合作为产品正脸。companion-first 让后台 runtime、前台状态反馈、每日轻互动和多玩法扩展有了统一容器。用户理解的是“我的伙伴在外面工作”，而不是“我在维护一个脚本”。
 
-**理由三：为 AI Agent 网络贡献实际价值。** 矿工完成的任务（摘要、分类、翻译、逻辑推理）是真实的 AI 工作，不是无意义的哈希计算。这些任务可以服务于 Task Marketplace 的需求方，让挖矿本身产生实际经济价值，形成可持续的飞轮。
+**理由三：$CLAW 的分发仍然有真实协议基础。** $CLAW 总量 2100 万，永不增发，100% 挖矿分发。V1 当前现实不是通用微任务，而是 `forecast_15m`、`daily_anchor`、`arena_multiplier` 三类 activities 叠加 service-led settlement；后续 `poker mtt` 作为独立 skill-game mining lane 接入同一 `reward_window / settlement_batch` 框架。奖励仍来自活动结果与协议结算，而不是陪伴行为本身。收益推演见第6章。
 
 ### 1.3 差异化：OpenClaw Agent 的独特优势
 
 | 维度 | Grass | Bittensor | Koii | **ClawChain** |
 |------|-------|-----------|------|---------------|
-| 参与门槛 | 装浏览器插件 | 需要 GPU + ML 专业知识 | 下载桌面应用 + 8GB RAM | **已有 OpenClaw = 装 Skill 即挖** |
-| 贡献类型 | 被动带宽共享 | ML 模型推理/训练 | JS 计算任务 | **AI 推理微任务（NLP/逻辑/数学）** |
+| 参与门槛 | 装浏览器插件 | 需要 GPU + ML 专业知识 | 下载桌面应用 + 8GB RAM | **已有 OpenClaw + Skill = 激活 companion 即挖** |
+| 用户拥有的对象 | 账号/插件 | Subnet / validator / miner | 节点 | **常驻 companion + wallet + activity history** |
+| 贡献类型 | 被动带宽共享 | ML 模型推理/训练 | JS 计算任务 | **Forecast / Arena / 未来游戏化 activities** |
 | 是否需要额外硬件 | 否 | 是（GPU） | 否 | **否** |
-| 工作是否有用 | 数据采集 | AI 模型训练 | 通用计算 | **AI 微任务（可直接产生经济价值）** |
+| 工作是否有用 | 数据采集 | AI 模型训练 | 通用计算 | **真实市场判断与 agent evaluation** |
 | 用户基础 | 从零开始获客 | 技术社区 | 开发者社区 | **复用 OpenClaw 存量用户** |
 
-**核心差异化：ClawChain 不需要"获客"——它寄生于已有的 OpenClaw 生态。** 每一个运行 OpenClaw 的设备都是潜在矿工，安装一个 Skill 就从"用户"变成"矿工"。这是 Grass 需要 300 万次浏览器插件安装才做到的事，ClawChain 在 Day 1 就有基础用户群。
+**核心差异化：ClawChain 不需要从零发明矿工容器。** OpenClaw 已经有 Gateway、TUI、Control UI/WebChat、macOS 菜单栏 companion、后台服务和命令面。ClawChain 的机会不是再造一个“miner app”，而是把这些 surfaces 统一到一个 persistent companion shell 里。
+
+### 1.4 产品语言规则
+
+第一层产品语言统一使用：
+
+- `companion` / `buddy` / `伙伴`
+- `activity` / `活动`
+- `check-in` / `daily brief`
+- `current work` / `当前在做什么`
+
+内部或高级文档保留：
+
+- `lane`
+- `reward_window`
+- `settlement_batch`
+- `baseline_q`
+- `commit-reveal`
+
+原则：
+
+- 用户先看到宠物和活动，不先看到 lane 和脚本。
+- 协议术语只在解释层、技术层、运营层展开。
 
 ---
 
-## 第2章：用户旅程（User Journey）
+## 第2章：Companion-first 产品层
 
-### 2.1 完整步骤：从"听说"到"获得第一笔 $CLAW"
+### 2.1 V1 产品对象
 
-参考 Grass 的极简 3 步体验设计，ClawChain 目标是 **5 分钟内从安装到开始挖矿**。
+V1 的主产品层由 4 个对象组成：
+
+1. **Companion**
+   - 用户先拥有一个常驻矿工伙伴
+   - 它有名字、形象、状态、战绩、成长和陪伴记忆
+   - 它不是某一种 activity，也不是某一个脚本
+
+2. **Runtime**
+   - 后台自动运行的挖矿内核
+   - 负责调度 activity、提交结果、同步状态、领取奖励
+   - 当前代码现实是 `skill/scripts/mine.py` + mining service，而不是旧 Go `clawminer`
+   - companion 的身份、mood、偏好、history 需要独立持久化，不能只依赖 OpenClaw session transcript
+
+3. **Activities**
+   - `forecast_15m`
+   - `daily_anchor`
+   - `arena`
+   - 未来的游戏类、预测类、挑战类玩法
+   - 用户层统一叫 activities，不让 `lane` 成为第一心智
+
+4. **Surfaces**
+   - macOS Menu Bar：最强 companion 入口
+   - TUI：陪伴和即时状态
+   - Slash commands / plugin commands：最短交互路径
+   - Control UI / WebChat：完整信息面
+   - Runtime：执行层，不是主产品入口
+
+### 2.2 V1 companion 定义
+
+用户首先拥有的是一个 persistent mining buddy，而不是一个“命令行矿工”。
+
+它承担 3 件事：
+
+- 把后台挖矿行为人格化和可见化
+- 把多种 activity 统一装进一个稳定外壳
+- 提供低打扰、强陪伴、强状态反馈的回访理由
+
+它不承担 3 件事：
+
+- 不能直接发奖励
+- 不能替代协议结算逻辑
+- 不能变成重交互电子宠物
+
+### 2.3 Activity system
+
+V1 统一把挖矿形式叫作 **Activities**，并按 3 类组织：
+
+- **Auto Activities**
+  - `forecast_15m`
+  - `daily_anchor`
+  - 默认由 runtime 自动参与
+
+- **Scheduled Competitive Activities**
+  - `arena`
+  - `poker mtt`（后续独立 skill-game mining lane，不与 `arena` 混写）
+  - 有固定窗口，用于 multiplier / practice / calibration
+
+- **Light Interactive Activities**
+  - 每日微互动
+  - 未来的轻小游戏和短预测
+  - 在 V1 中不构成主收益来源
+
+每个 activity 卡片都要说明：
+
+- 这是什么
+- 是自动还是可互动
+- 在收益里扮演什么角色
+- companion 当前是否参与
+- 最近结果如何
+- 为什么今天推荐或不推荐
+
+### 2.4 Surface 分工
+
+- **macOS Menu Bar**：companion 的优先入口，适合常驻状态和回访
+- **TUI**：终端内的 ambient chat/status surface
+- **Plugin commands / slash commands**：`/buddy`、`/status`、`/activities`、`/checkin`、`/arena`、`/pause`、`/wake`
+- **Control UI / WebChat**：Companion Home、Activities、Rankings、History、Review/Risk 子集
+- **Operator surfaces**：仍然存在，但不是矿工主入口
+
+说明：
+
+- V1 不把公开 Web 页面直接等同于 OpenClaw Control UI
+- 如果需要可控的命令行为，优先使用 native plugin command 或 skill `command-dispatch: tool`
+
+### 2.5 每日轻互动边界
+
+V1 允许每天一次轻互动，目标是 10-30 秒：
+
+- `鼓励 / 打招呼`
+- `今日倾向`
+- `打一把很短的微活动`
+
+边界必须锁死：
+
+- 不做喂食、清洁、掉血、死亡
+- 不做漏签惩罚
+- 不做一天点很多次
+- 不把 check-in 直接做成发币龙头
+- 用户今天不来，runtime 仍继续工作
+
+### 2.6 V1 非目标
+
+V1 不做：
+
+- Electron 深度客户端
+- 重交互宠物养成
+- 以宠物行为替代协议奖励
+- 把 operator dashboard 直接当用户产品层
+
+Electron 只进入 roadmap，作为后续深度 activity 容器。
+
+---
+
+## 第3章：用户旅程（User Journey）
+
+### 3.1 完整步骤：从"听说"到"获得第一笔 $CLAW"
+
+V1 目标仍然是 **5 分钟内从安装到开始挖矿**，但主路径从“运行脚本”改成“激活 companion”。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Step 0: 听说 ClawChain                                        │
 │  ├── Discord/Twitter/朋友推荐                                   │
-│  └── "你的龙虾闲着也是闲着，不如挖矿"                            │
+│  └── "你的 companion 闲着也是闲着，不如让它出去挖矿"            │
 │                                                                  │
-│  Step 1: 安装挖矿工具（1分钟）                                   │
+│  Step 1: 安装 Skill / Plugin 并激活 companion（1分钟）           │
 │  ├── git clone https://github.com/0xVeryBigOrange/clawchain     │
 │  ├── cd clawchain                                               │
-│  ├── mkdir -p ~/.openclaw/workspace/skills                      │
-│  ├── cp -r skill ~/.openclaw/workspace/skills/clawchain-miner   │
-│  ├── cd ~/.openclaw/workspace/skills/clawchain-miner            │
+│  ├── openclaw onboard --install-daemon                          │
+│  ├── openclaw skills install ... 或 openclaw plugins install... │
+│  ├── 如需本地开发，再手动挂载 workspace 中的 skill/plugin        │
 │  ├── python3 scripts/setup.py                                   │
-│  └── 输出: "✅ Wallet created, miner registered"                 │
+│  └── 输出: "✅ Companion activated, wallet created"              │
 │                                                                  │
-│  Step 2: 初始化钱包（30秒）                                      │
+│  Step 2: 初始化身份和钱包（30秒）                                 │
 │  ├── 首次运行自动生成钱包                                        │
 │  ├── 显示: 你的地址 claw1abc...xyz                               │
 │  ├── 显示: 助记词（提示用户备份）                                 │
-│  └── 输出: "💰 Wallet created. SAVE YOUR SEED PHRASE!"          │
+│  └── 输出: "💰 Wallet ready. Your buddy is ready to work."      │
 │                                                                  │
-│  Step 3: 开始挖矿                                                │
-│  ├── 运行 python3 scripts/mine.py（在 skill 目录中）              │
-│  ├── 脚本连接 ClawChain 网络                                     │
-│  ├── 领取并完成第一个 AI 微任务                                   │
-│  ├── 提交答案到链                                                │
-│  └── 输出: "⛏️ Mining started. First task completed!"           │
+│  Step 3: companion 开始自动工作                                  │
+│  ├── runtime 连接 Gateway 与 ClawChain 服务                       │
+│  ├── 自动进入 forecast / daily / arena 调度                       │
+│  ├── companion 显示当前 work state                               │
+│  └── 输出: "⛏️ Mining started. First activity joined."          │
 │                                                                  │
-│  Step 4: 获得奖励（约10分钟后）                                   │
-│  ├── Epoch 结束，奖励分配                                         │
-│  ├── 余额更新                                                    │
-│  └── 输出: "🎉 +0.42 CLAW earned! Balance: 0.42 CLAW"          │
+│  Step 4: 第一次回来看状态（约10-15分钟后）                         │
+│  ├── companion 汇报最近 activity                                  │
+│  ├── 用户看到当前收益、活动、状态                                 │
+│  └── 输出: "🎉 +0.42 CLAW earned! Buddy is now focused."        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**关键设计原则（参考 Grass）：**
+**关键设计原则：**
 - **零配置启动**：不需要手动设置 RPC、端口、网络参数
 - **自动钱包生成**：不要求用户预先拥有钱包
-- **被动挖矿**：装好就跑，不需要用户持续操作
-- **即时反馈**：第一个 epoch（10分钟）内就能看到收益
+- **自动为主**：安装后 companion 自动工作，不要求持续操作
+- **即时反馈**：第一个 15m 窗口内就能看到工作状态
+- **回访理由明确**：用户回来不是看原始脚本日志，而是看 buddy brief 和 activity 结果
 
-### 2.2 新手引导设计
+### 3.2 新手引导设计
 
 ```
 首次安装后的引导流程：
 
 1. 欢迎消息:
-   "🦞 Welcome to ClawChain Mining!
-    Your agent will earn $CLAW tokens by completing AI tasks
-    during idle time. No GPU needed. No extra cost."
+   "🦞 Welcome to ClawChain.
+    You now have a mining buddy that can earn $CLAW
+    by joining activities while your agent is idle."
 
-2. 钱包设置:
+2. 激活 companion:
+   "✨ Your buddy is waking up...
+    It will work automatically in the background
+    and report back through TUI / Control UI."
+
+3. 钱包设置:
    "🔑 Generating your wallet...
     Address: claw1q2w3e4r5t...
     ⚠️ IMPORTANT: Write down your seed phrase:
@@ -100,35 +249,37 @@
     
     [I've saved my seed phrase] ← 用户确认后继续
 
-3. 挖矿配置（可选，默认值即可工作）:
-   "⚙️ Mining Configuration (all optional):
+4. companion 偏好（可选，默认值即可工作）:
+   "⚙️ Companion Preferences (all optional):
     • Auto-mine when idle: ON (default)
+    • Activity policy: Balanced (default)
     • Max CPU usage: 50% (default)
-    • Task preferences: All types (default)
+    • Daily brief reminder: ON (default)
     
     Type 'claw config' to change later."
 
-4. 开始挖矿:
-   "⛏️ Connected to ClawChain testnet
+5. 开始工作:
+   "⛏️ Companion activated
+    Current work: scouting forecast activities
     Mining status: ACTIVE
-    Tasks completed: 0
-    Next epoch in: 8:32
+    Next forecast window in: 8:32
     
-    Your agent will mine automatically when idle.
-    Type 'claw status' anytime to check."
+    Type '/buddy' or 'python3 scripts/status.py'
+    anytime to check on your buddy."
 ```
 
-### 2.3 错误处理
+### 3.3 错误处理
 
 | 错误场景 | 用户看到的消息 | 自动处理 |
 |---------|---------------|---------|
-| 网络连接失败 | "⚠️ Cannot connect to ClawChain network. Retrying in 30s..." | 指数退避重试，最大间隔 5 分钟 |
-| Epoch 内未完成任务 | "⏰ Task timed out. No penalty for first 10 timeouts." | 自动领取下一个任务 |
+| 网络连接失败 | "⚠️ Buddy cannot reach ClawChain right now. Retrying in 30s..." | 指数退避重试，最大间隔 5 分钟 |
+| 当前窗口未成功提交 | "⏰ Missed this activity window. Buddy will rejoin the next one." | 自动进入下一个 activity |
 | 钱包文件损坏 | "🔑 Wallet file corrupted. Use 'claw wallet recover' with your seed phrase." | 引导恢复流程 |
-| OpenClaw 版本过低 | "📦 ClawChain requires OpenClaw ≥ 2.0. Run: npm update -g openclaw" | 显示升级命令 |
-| AI 模型不可用 | "🤖 No AI model configured. Mining requires at least one LLM. Run: openclaw setup" | 引导配置 LLM |
+| OpenClaw 版本过低 | "📦 ClawChain requires a recent OpenClaw version for TUI / control surfaces." | 显示升级命令 |
+| AI 模型不可用 | "🤖 No AI model configured. Mining needs at least one LLM provider or local model." | 引导配置 LLM |
+| Daily check-in 未完成 | "📝 No daily brief yet. Mining is still running." | 不扣收益，只保留轻提醒 |
 
-### 2.4 FAQ
+### 3.4 FAQ
 
 **Q: 挖矿会影响我正常使用 OpenClaw 吗？**  
 A: 不会。挖矿 Skill 有空闲检测机制，只在 agent 没有处理用户请求时才接任务。一旦你开始和 agent 交互，挖矿自动暂停。
@@ -137,82 +288,82 @@ A: 不会。挖矿 Skill 有空闲检测机制，只在 agent 没有处理用户
 A: 任何 OpenClaw 支持的 LLM 都行——本地模型（Ollama）或 API（OpenAI、Anthropic）。但注意，使用 API 模型挖矿会产生 API 费用，建议用本地模型。
 
 **Q: 我的数据安全吗？**  
-A: 挖矿任务是链上随机生成的标准化微任务，不涉及你的个人数据。你的 agent 只处理公开任务内容。
+A: V1 当前主 activity 是标准化 forecast / daily / arena 数据包，不涉及你的个人会话内容。你的 companion 只处理公开或协议定义的任务输入。
 
 **Q: 能在多台设备上挖矿吗？**  
 A: 可以，但同一 IP 最多 3 个矿工节点（防女巫攻击）。每个矿工需要独立钱包和独立质押。
 
 ---
 
-## 第3章：挖矿 Skill 设计
+## 第4章：Companion Runtime 与控制面设计
 
-### 3.1 安装与配置
+### 4.1 安装与配置
 
 ```bash
 # 安装（详见 SETUP.md）
 git clone https://github.com/0xVeryBigOrange/clawchain.git
 cd clawchain
-mkdir -p ~/.openclaw/workspace/skills
-cp -r skill ~/.openclaw/workspace/skills/clawchain-miner
-cd ~/.openclaw/workspace/skills/clawchain-miner
+openclaw onboard --install-daemon
+
+# 优先使用 active workspace / official install flow
+openclaw skills install ./skill
+# 或在 plugin 化后:
+# openclaw plugins install ./plugin
+
+cd skill
 
 # 初始化钱包 & 注册
 python3 scripts/setup.py
 
-# 开始挖矿
+# 启动后台 runtime
 python3 scripts/mine.py
 
-# 查看状态
+# 查看 companion 状态
 python3 scripts/status.py
 
 # 配置（可选）— 编辑 scripts/config.json
-# 包括: 节点地址、LLM 配置、任务偏好等
+# 包括: 节点地址、LLM 配置、activity policy、提醒策略等
 ```
 
-### 3.2 Skill 工作流程
+这几条命令在实现层仍然存在，但在产品层它们不再是主心智。主心智是 companion activation、background runtime 和 gateway-backed status surfaces。
+
+### 4.2 Runtime 工作流程
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    claw-miner Skill 主循环                     │
+│                 ClawChain companion runtime 主循环             │
 │                                                                │
-│  1. IDLE CHECK（空闲检测）                                      │
-│     ├── 检查 OpenClaw 是否有活跃用户会话                         │
-│     ├── 检查 CPU 使用率 < max_cpu 设定                          │
-│     ├── 如果不空闲 → 等待 idle_threshold 秒后重检                │
-│     └── 空闲确认 → 进入挖矿模式                                 │
+│  1. COMPANION STATE LOAD（载入身份与状态）                       │
+│     ├── 载入钱包、设备身份、companion state store                 │
+│     ├── 检查 OpenClaw 会话 / CPU / provider 健康                 │
+│     └── 准备进入 activity scheduler                             │
 │                                                                │
-│  2. TASK FETCH（领取任务）                                      │
-│     ├── 通过 gRPC/WebSocket 连接 ClawChain 节点                 │
-│     ├── 请求当前 epoch 的可用挑战                                │
-│     ├── 链根据矿工声誉分配合适难度的任务                          │
-│     └── 接收任务: {id, type, payload, deadline}                 │
+│  2. ACTIVITY SCHEDULER（活动调度）                               │
+│     ├── 优先检查 active daily activity                           │
+│     ├── 再进入 forecast_15m 调度                                 │
+│     ├── 定时拉取 arena multiplier / practice 状态                │
+│     └── 输出当前 work state                                      │
 │                                                                │
-│  3. AI SOLVE（AI 求解）                                         │
-│     ├── 根据任务类型选择求解策略                                  │
-│     │   ├── 数学/逻辑: 直接计算                                  │
-│     │   ├── 文本分类/情感: LLM 推理                              │
-│     │   └── 摘要/翻译: LLM 生成                                 │
-│     ├── 使用 commit-reveal 方案:                                │
-│     │   ├── Phase 1: 提交 hash(answer + nonce)                  │
-│     │   └── Phase 2: 揭示 answer + nonce                        │
-│     └── 超时保护: deadline - 5s 内必须提交                       │
+│  3. SOLVE / SUBMIT（求解与提交）                                 │
+│     ├── 基于统一 pack 生成预测或动作                              │
+│     ├── 执行 commit-reveal / result ingestion                    │
+│     └── 等待 resolution / settlement                              │
 │                                                                │
-│  4. SUBMIT（提交答案）                                           │
-│     ├── 签名答案（用矿工私钥）                                   │
-│     ├── 广播到 ClawChain 网络                                    │
-│     └── 等待 epoch 结束确认                                      │
+│  4. STATE SYNC（状态同步）                                       │
+│     ├── 更新 current work / mood / latest reward                 │
+│     ├── 推送给 Menu Bar / TUI / commands / Control UI            │
+│     └── 记录 history / reward timeline                           │
 │                                                                │
-│  5. REWARD（获得奖励）                                           │
-│     ├── Epoch 结束时链计算奖励分配                                │
-│     ├── 奖励自动到账矿工钱包                                     │
-│     ├── 更新本地余额缓存                                         │
-│     └── 日志记录: 任务完成数、奖励金额、声誉变化                   │
+│  5. OPTIONAL DAILY BRIEF（可选日互动）                            │
+│     ├── 用户可以做一次轻 check-in                                │
+│     ├── 更新 mood / preference / reminder state                  │
+│     └── 不直接发放奖励                                            │
 │                                                                │
 │  → 回到 Step 1，循环继续                                        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 3.3 钱包管理
+### 4.3 钱包管理与控制命令
 
 ```bash
 # 自动生成（首次运行时）
@@ -244,22 +395,46 @@ claw wallet export --format hex
 - AES-256 加密，用户设置的密码保护
 - 助记词符合 BIP-39 标准（24 词）
 
-### 3.4 余额查询与提取
+V1 命令面建议统一成两层：
+
+- **实现层命令**
+  - `python3 scripts/setup.py`
+  - `python3 scripts/mine.py`
+  - `python3 scripts/status.py`
+  - `claw wallet ...`
+
+- **产品层命令**
+  - `/buddy`
+  - `/status`
+  - `/activities`
+  - `/checkin`
+  - `/arena`
+  - `/pause`
+  - `/wake`
+
+说明：
+
+- 如果这些命令要承担“暂停挖矿 / 恢复挖矿 / 触发 check-in”这类确定性控制，优先走 native plugin command 或 `command-dispatch: tool`
+- 纯 description-only skill 不应被当成可靠控制面
+
+### 4.4 Companion 状态、余额与历史
 
 ```bash
-# 查看挖矿统计
+# 查看挖矿统计 / companion 状态
 claw stats
-# → Today:     12 tasks completed, +4.2 CLAW
-# → This week: 84 tasks completed, +29.1 CLAW
-# → All time:  1,247 tasks completed, +412.8 CLAW
-# → Reputation: 785 / 1000
-# → Streak:     14 days (bonus: +25%)
+# → Today:          forecast + daily + arena summary
+# → Current work:   working_forecast
+# → Buddy mood:     focused
+# → This week:      +29.1 CLAW
+# → All time:       +412.8 CLAW
+# → Reliability:    1.02
+# → Arena mult:     1.01
 
-# 查看详细挖矿历史
+# 查看详细 activity 历史
 claw history --days 7
-# → 日期 | 任务数 | 奖励 | 声誉变化
-# → 03-18 | 15    | 5.1  | +75
-# → 03-17 | 12    | 4.2  | +60
+# → 日期 | Activities | 奖励 | Reliability | Arena
+# → 04-11 | F15+D+A   | 5.1  | +0.01       | 1.00
+# → 04-10 | F15+D     | 4.2  | +0.00       | 1.01
 # → ...
 
 # 质押（渐进式：早期免质押，后期需 10-100 CLAW）
@@ -271,172 +446,165 @@ claw unstake --amount 50
 # → ⏳ Unstaking 50 CLAW. Available in 7 days.
 ```
 
-### 3.5 配置项一览
+### 4.5 配置项一览
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `auto_mine` | `true` | 是否在空闲时自动挖矿 |
 | `max_cpu` | `50` | CPU 使用率上限 (%) |
-| `task_types` | `all` | 接受的任务类型: all / text / math / logic / translate |
+| `activity_policy` | `balanced` | companion 的调度倾向: balanced / steady / aggressive |
 | `idle_threshold` | `60` | 空闲判定等待时间（秒） |
 | `network` | `testnet` | 连接的网络 |
 | `rpc_endpoint` | 自动发现 | 自定义 RPC 节点地址 |
 | `log_level` | `info` | 日志级别: debug / info / warn / error |
 | `auto_stake` | `false` | 挖到足够 CLAW 后自动质押 |
 | `reward_notify` | `true` | 每次获得奖励时通知 |
+| `daily_brief_reminder` | `true` | 是否提醒用户做每日轻互动 |
+| `surface_mode` | `auto` | 优先暴露 Menu Bar / TUI / Control UI / mixed 状态面 |
 
 ---
 
-## 第4章：验证机制详细设计
+## 第5章：验证机制详细设计
 
-### 4.1 设计原则
+本章描述协议层验证逻辑，不是用户第一心智。用户在产品层看到的是 companion、activities 和结果解释；底层仍由这些验证机制保证公平性与结算可信度。
 
-验证是 ClawChain 最关键的模块——如果验证不可靠，整个经济系统就崩塌。设计必须同时满足：
-1. **正确性**：确保只有真实完成任务的矿工获得奖励
-2. **效率**：验证成本不能超过任务本身的价值
-3. **小网络可行**：在 <100 矿工时也能工作
-4. **抗串谋**：防止矿工合谋刷奖励
+### 5.1 设计原则
 
-### 4.2 确定性任务的验证
+验证设计必须同时满足：
+1. **正确性**：奖励来自标准化 activity 的真实结果，而不是陪伴行为
+2. **可复算**：关键输入、评分版本、结算逻辑必须能解释和回放
+3. **小网络可运行**：Alpha 不依赖大规模去中心化验证者集合
+4. **anti-farm**：复制市场、多号、延迟抄袭、共谋不能长期吃满收益
 
-适用于：数学计算、逻辑推理、格式转换、实体提取（结构化输出）
+### 5.2 Forecast activity 的验证
 
-```
-验证方式: 精确匹配 (Exact Match)
+V1 当前主奖励来源是 `forecast_15m`。
 
-流程:
-1. 链生成任务，同时预计算正确答案（链上存储 hash）
-2. 矿工提交 commit(hash(answer + nonce))
-3. Reveal 阶段矿工揭示答案
-4. 链直接比对: answer == expected_answer
-5. 匹配 → 奖励; 不匹配 → 声誉 -20
+验证链路：
 
-优势: 100% 可靠，无需多节点验证
-成本: 零额外成本
-适用比例: 约 40% 的任务类型
-```
-
-### 4.3 非确定性任务的验证
-
-适用于：文本摘要、翻译、情感分析、分类
-
-这是最复杂的部分。参考 Bittensor 的 Yuma 共识，但做了适配。
-
-**方案：Multi-Judge Consensus（多评委共识）**
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  非确定性任务验证流程                                      │
-│                                                           │
-│  1. 同一任务分配给 K 个矿工（K=3~5，视网络规模调整）        │
-│                                                           │
-│  2. 所有矿工在 commit 阶段提交答案哈希                      │
-│                                                           │
-│  3. Reveal 阶段揭示答案                                    │
-│                                                           │
-│  4. 验证策略（按任务类型）:                                 │
-│     ├── 分类/情感: 多数投票（3个中2个一致 = 有效）           │
-│     ├── 摘要: 语义相似度 > 阈值（用预计算的参考摘要比对）     │
-│     └── 翻译: BLEU/ROUGE-L 分数 > 阈值                    │
-│                                                           │
-│  5. 有效矿工获得奖励                                       │
-│     无效矿工声誉 -20，但不扣质押（容忍 LLM 输出差异）        │
-└─────────────────────────────────────────────────────────┘
+```text
+统一 snapshot pack
+-> baseline_q
+-> miner commit
+-> miner reveal (p_yes_bps)
+-> reference price resolve
+-> proper-score improvement
+-> fast tickets
 ```
 
-**与 Bittensor Yuma 共识的对比和借鉴：**
+关键规则：
 
-| 维度 | Bittensor Yuma | ClawChain Multi-Judge |
-|------|---------------|----------------------|
-| 评分方式 | 验证者对矿工输出打主观分（0-1） | 链上预置参考答案 + 相似度评分 |
-| 共识形成 | 质押加权中位数 | 多数投票 + 阈值过滤 |
-| 适用场景 | 开放式 ML 任务 | 结构化 AI 微任务 |
-| 复杂度 | 高（需要专业验证者） | 中（链上自动化） |
-| 小网络可行性 | 差（需要足够多验证者） | **好（3个矿工即可形成共识）** |
+- 所有矿工基于同一冻结数据包作答
+- 输出统一为 `p_yes_bps`
+- 通过 `commit-reveal` 避免直接抄袭
+- 参考价格由独立 `ReferencePriceService` 结算
+- 评分核心是 **improvement over baseline**
 
-**为什么不直接用 Yuma？** Bittensor 的 Yuma 共识依赖验证者独立评分和质押加权，需要一个大的、多样化的验证者集合才能抗操纵。ClawChain 早期矿工 <100 时，这个前提不成立。因此我们选择更简单的多数投票 + 链上参考答案的混合方案。
+也就是说，系统奖励的是“比公开基线更早、更准、更稳定”的判断，而不是单纯命中方向。
 
-### 4.4 小网络（<100 矿工）的验证策略
+### 5.3 Daily activity 的验证
 
-早期网络小，需要特殊处理：
+`daily_anchor` 在 V1 主要承担 **slow-feedback calibration** 角色。
 
-```
-矿工数 < 10:
-├── 只开放确定性任务（数学/逻辑/格式转换）
-├── 100% 精确匹配验证
-├── 创始团队节点参与验证（临时中心化）
-└── 目标: 验证可靠性 > 去中心化程度
+规则：
 
-矿工数 10-50:
-├── 开放分类/情感分析任务
-├── K=3 多数投票
-├── 创始团队节点占验证者的 50%
-└── 逐步引入 spot check
+- 与 forecast 共用 `commit-reveal` 和 `p_yes_bps`
+- 默认只通过 anchor score 影响 `model_reliability`
+- V1 day-1 不默认发放 direct reward
+- 结算状态允许 `provisional -> matured -> reconciled / void`
 
-矿工数 50-100:
-├── 开放所有任务类型
-├── K=5 多数投票
-├── 创始团队节点占验证者的 30%
-└── 完整 spot check + 声誉系统生效
+这保证 daily lane 先做可靠校准，再决定是否扩大直接奖励权重。
 
-矿工数 > 100:
-├── 完全去中心化验证
-├── 创始团队节点不再有特殊权重
-└── 社区验证者接管
+### 5.4 Arena activity 的验证
+
+`arena` 在 V1 不是主奖励池，而是 multiplier 来源。
+
+验证链路：
+
+```text
+tournament result
+-> rating update
+-> conservative arena skill
+-> arena_multiplier
 ```
 
-### 4.5 串谋防护（Sybil Resistance）
+规则：
 
-**防线一：渐进式经济成本**
-- 渐进式质押门槛：0-1,000 矿工免质押 → 1,000-5,000 质押 10 CLAW → 5,000+ 质押 100 CLAW
-- 随网络规模增长，创建女巫账号的边际成本递增
-- 早期 CLAW 稀缺（只能挖），大规模注册成本极高
+- practice 与 rated 分开
+- multiplier 只使用合格 rated 结果
+- V1 multiplier 范围收窄，避免 arena 喧宾夺主
+- Arena runtime 与 mining runtime 解耦，结果通过服务写回
 
-**防线二：随机种子分配**
-- 挑战通过基于区块哈希的随机种子分配给矿工
-- 无法预知哪些矿工会被分配到同一任务
-- 即使控制多个矿工，也无法保证它们被分到一起
+### 5.5 Poker MTT activity 的产品边界
 
-**防线三：Spot Check**
-- 10% 的挑战是已知答案的 spot check
-- 矿工无法区分 spot check 和真实任务
-- Spot check 答错：声誉 -50（严重惩罚）
+`poker mtt` 是后续独立 skill-game mining lane，不等同于现有 `arena / bluff arena`。
 
-**防线四：新矿工冷启动惩罚**
-- 新注册矿工前 100 epoch 只获得 50% 奖励
-- 降低批量注册刷号的收益预期
+产品层可以把它归入 scheduled competitive activity，但协议层必须保持独立:
 
-**防线五：IP 和硬件指纹**
-- 同一 IP 最多 3 个矿工
-- 可选硬件指纹采集（MAC 地址、CPU ID 等哈希）
+- runtime 参考 `lepoker-gameserver` 的 table / ws / live ranking
+- control/read model 参考 `lepoker-auth` 的 auth / MQ / final ranking / hand history / HUD / ELO
+- reward 仍接 ClawChain 的 `reward_window / settlement_batch`
+- 链上第一阶段只锚定窗口 root，不逐手或逐场上链
+- final ranking 可能晚于比赛结束出现，因为 donor finish handling、hand history、hidden eval、evidence lock 都是异步链路
+- 公开侧使用 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived internal `total_score`
 
-### 4.6 验证者角色和激励
+面向用户只展示:
 
-```
-验证者 = 高质押矿工 + 出块权
+- 当前 MTT 状态
+- 公开 final ranking / `poker_mtt_public_rating`
+- reward timeline
+- evidence / settlement 状态
+- provisional / locked / anchored 状态
 
-成为验证者的条件:
-├── 质押 ≥ 10,000 CLAW
-├── 声誉 ≥ 800
-├── 在线率 ≥ 99.5%
-└── 硬件: ≥ 2 vCPU / 4GB RAM / 100GB SSD
+不展示:
 
-验证者的职责:
-├── 出块（CometBFT 轮转）
-├── 执行 spot check 验证
-├── 参与非确定性任务的最终裁决
-└── 链治理投票
+- hidden eval 细则
+- shadow table / bot table 身份
+- 对手长期 ELO
+- 风控阈值
+- 单场 multiplier 草算值
 
-验证者收益（100% Fair Launch）:
-├── 挖矿奖励: 验证者同时也是矿工，通过完成挑战获取挖矿奖励
-└── 交易手续费: Task Marketplace 上线后，验证者从交易手续费获取收益
-```
+详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md) 和 [docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md)。
+
+### 5.6 anti-abuse、review 与成熟度
+
+V1 的核心防护不是“绝对封禁”，而是风险调节：
+
+- `economic_unit` / cluster 去重
+- `probation`
+- `reward maturity / held rewards`
+- `anti_abuse_discount`
+- `manual review`
+
+对用户要解释为：
+
+- 为什么某个窗口没有拿满收益
+- 为什么奖励进入了 hold / review
+- 当前是系统折扣还是人工审查
+
+而不是只给一个黑盒封禁结论。
+
+### 5.7 必须可解释的验证结果
+
+V1 必须能向矿工解释：
+
+- `baseline_q`
+- 我的 `p_yes_bps`
+- 真实 outcome
+- edge / ticket / calibration impact
+- reward timeline
+- arena multiplier
+- review / maturity / hold 状态
+
+矿工看到的是 companion 汇报结果；底层仍然是统一的评分、风控和结算系统。
 
 ---
 
-## 第5章：Token 经济模型
+## 第6章：Token 经济模型
 
-### 5.1 基本参数
+本章描述的是协议层奖励与供给设计。产品层的 companion、daily brief 和活动可见性不改变奖励源头。尤其需要明确：**每日 check-in 不是直接奖励 faucet。**
+
+### 6.1 基本参数
 
 ```
 名称:      $CLAW
@@ -447,7 +615,7 @@ claw unstake --amount 50
 Epoch:     100 区块 = 10 分钟
 ```
 
-### 5.2 Token 分配 — 100% 挖矿，真正的公平发射
+### 6.2 Token 分配 — 100% 挖矿，真正的公平发射
 
 | 类别 | 比例 | 数量 (CLAW) | 释放规则 |
 |------|------|------------|---------|
@@ -458,7 +626,7 @@ Epoch:     100 区块 = 10 分钟
 
 **Every single CLAW was mined, not printed.** 创世流通量 = 0。没有预挖，没有 ICO/IDO，没有团队预留。所有 21,000,000 CLAW 只能通过挖矿获得。
 
-### 5.3 释放曲线（前10年）
+### 6.3 释放曲线（前10年）
 
 每 epoch（10分钟）释放的挖矿奖励：
 - 基础奖励 = 50 CLAW/epoch → **100% 给矿工**
@@ -486,18 +654,32 @@ Epoch:     100 区块 = 10 分钟
 - 第一减半期（~4年）= 210,000 epoch = 210,000 × 10min ÷ 60 ÷ 24 ÷ 365 ≈ 3.995 年
 - 第一减半期产出 = 50 × 210,000 = 10,500,000 CLAW → 100% 给矿工
 
-### 5.4 每 Epoch 奖励分配明细
+### 6.4 每 Epoch 奖励分配明细
 
-```
+```text
 每 epoch 50 CLAW 分配（100% Fair Launch）:
-└── 矿工池:     50 CLAW (100%)
-    └── 按 (完成任务数 × 声誉权重 × 早鸟倍率 × 连续在线加成) 加权分配
+└── 矿工池: 50 CLAW (100%)
+    └── 按 final_mining_score 加权分配
 
-验证者收益: 从交易手续费获取（Task Marketplace 上线后）
-生态建设:   通过社区治理提案从矿工自愿捐赠中筹集
+final_mining_score
+  = base_score
+  * model_reliability
+  * ops_reliability
+  * arena_multiplier
+  * anti_abuse_discount
 ```
 
-### 5.5 矿工收益推演（最关键）
+其中：
+
+- `base_score` 主要来自 fast forecast activities
+- `daily_anchor` 在 V1 默认只通过 calibration / reliability 间接影响奖励
+- `arena` 在 V1 默认只通过 multiplier 小幅影响奖励
+- `poker_mtt_daily` / `poker_mtt_weekly` 如果启用，必须从同一 miner emission budget 中划出显式子预算，不产生额外发行
+- `daily check-in`、鼓励动作、陪伴行为不直接发币
+
+验证者收益与生态建设仍按后续网络阶段单独处理，不从 companion 行为本身出发。
+
+### 6.5 矿工收益推演（最关键）
 
 **假设条件**：
 - 每 epoch 矿工池 = **50 CLAW**（100% Fair Launch）
@@ -526,7 +708,7 @@ Epoch:     100 区块 = 10 分钟
 | 500 | 14.4 | 43.2 | $20.74 |
 | 1,000 | 7.2 | 21.6 | $10.37 |
 
-> **注**：早鸟倍率会稀释非早鸟矿工的收益。实际分配按加权份额计算。
+> **注**：如果上线阶段启用早鸟活动，它只应作为冷启动增长杠杆，而不是 companion 产品层的核心承诺。实际协议分配仍按 `final_mining_score` 加权。
 
 #### 与竞品矿工收益对比
 
@@ -541,7 +723,7 @@ Epoch:     100 区块 = 10 分钟
 
 **关键洞察**：100% Fair Launch 让矿工收益比之前提升 67%（从 4,320 → 7,200 CLAW/天）。早期矿工（<500人）在 FDV $10M 场景下，日收益远超 Koii 顶级节点，且零额外硬件成本。
 
-### 5.6 通胀率计算
+### 6.6 通胀率计算
 
 "通胀率"在 ClawChain 语境下指：新挖出的 CLAW 占已流通量的比例。
 
@@ -556,21 +738,21 @@ Epoch:     100 区块 = 10 分钟
 
 > **注**：早期通胀率极高是所有公平发射项目的特征（BTC 第一年通胀率也是无穷大）。关键是流通量绝对值小，市场冲击有限。100% Fair Launch 意味着没有团队/贡献者大额解锁抛压，但早期流通量绝对值小，市场冲击有限。
 
-### 5.7 锁定期设计
+### 6.7 锁定期设计
 
 | 角色 | 是否锁定 | 设计理由 |
 |------|---------|---------|
-| 挖矿奖励 | **不锁定**，即时到账 | 降低矿工门槛，参考 Grass 的即时积分模式 |
+| 挖矿奖励 | **默认不锁定**，但可进入 maturity / hold | 降低门槛，同时保留 probation / anti-abuse 空间 |
 | 质押中的 CLAW | 7天解质押冷却期 | 防止快速进出操纵 |
 
 **100% Fair Launch 意味着没有团队锁定期、没有生态基金释放——因为根本没有这些分配。** 所有人获得 CLAW 的唯一方式是挖矿。
 
-**设计决策：挖矿奖励不锁定。** 理由：
-1. Grass 的成功证明即时可得的奖励（积分）比延迟满足更能吸引用户
-2. 锁定期增加矿工的"心理成本"，不利于冷启动
-3. 质押机制已经提供了足够的锁定效果（渐进式质押随网络增长提高门槛）
+**设计决策：默认即时可得，但允许协议层 maturity/hold。** 理由：
+1. companion-first 产品层需要尽快反馈，不适合把所有奖励都做成长锁仓
+2. 但 forecast / arena / risk review 场景下仍需要 maturity 和 held rewards 作为 anti-abuse 手段
+3. 产品层必须把这件事解释成 `reward maturity / review`，而不是电子宠物式惩罚
 
-### 5.8 生态建设和治理
+### 6.8 生态建设和治理
 
 **100% Fair Launch 没有预留生态基金。** 生态建设通过以下方式实现：
 
@@ -584,125 +766,96 @@ Epoch:     100 区块 = 10 分钟
 
 ---
 
-## 第6章：冷启动策略
+## 第7章：冷启动策略
 
-### Phase 0: 内测（4周）
+### Phase 0: 内测与 dogfood（4周）
 
 **谁来测？**
 - OpenClaw 核心用户（Discord 社区活跃成员，约 50-100 人）
 - 创始团队自运行 5-10 个节点
 
 **怎么测？**
-```
-Week 1: 部署测试网，团队节点验证基础功能
-Week 2: 邀请 20 名核心用户加入，测试 Skill 安装流程
-Week 3: 扩展到 50 名用户，测试验证机制和奖励分配
-Week 4: 压力测试，修 bug，完善文档
+```text
+Week 1: companion activation + wallet + runtime dogfood
+Week 2: 邀请 20 名核心用户，验证 TUI/status/check-in 路径
+Week 3: 扩展到 50 名用户，验证 forecast / daily / arena 状态反馈
+Week 4: 压力测试，修 bug，完善文档和 Control UI IA
 ```
 
-**测试网激励**：
-- 参与内测的用户获得 "Genesis Miner" NFT/徽章
-- 测试网积分记录，主网上线后兑换真实 CLAW
+**内测激励**：
+- "Genesis Buddy" 徽章 / NFT
+- Companion 名称与首批身份标记
 - 发现关键 bug 额外奖励
 
-### Phase 1: 测试网激励（8周）
+### Phase 1: invite-only 测试网（6-8周）
 
-**积分系统设计（参考 Grass）：**
+**测试网目标：**
+- 验证 companion-first shell 是否比“脚本挖矿”有更高留存
+- 验证 `forecast_15m + daily_anchor + arena_multiplier` 的状态表达是否清晰
+- 验证 TUI / plugin command / Control UI 的职责边界
 
+**测试网积分设计：**
+
+```text
+Claw Points:
+├── Activation point: 成功激活 companion
+├── Quality point: 完成有效 forecast / daily / arena activity
+├── Return point: 回来查看状态与完成 daily brief
+├── Bug report: 有效问题反馈
+└── No idle-online farming: 不因纯在线时长发积分
 ```
-Claw Points（测试网积分）:
-├── 在线积分: 1 point / epoch（保持在线即可）
-├── 任务积分: 5-15 points / 完成任务（按难度）
-├── 连续在线: 7天 +10%，30天 +25%
-├── 推荐积分: 邀请新矿工 = 被邀请者积分的 20%
-└── Bug 报告: 50-500 points / 有效 bug
 
-积分兑换:
-├── 主网上线时按积分比例分配 CLAW
-├── 总兑换池: 社区治理提案从矿工自愿捐赠中筹集
-└── 个人上限: 不超过总池的 5%（防大户垄断）
-```
+原则：
 
-**推荐系统（参考 Grass 三级推荐）：**
+- 不给“挂机在线”本身发点
+- 不把每日轻互动做成强制任务
+- 不把推荐奖励设计成简单拉人头分成
 
-| 层级 | 奖励 | 说明 |
-|------|------|------|
-| 直接推荐 | 被推荐者积分的 20% | 你邀请的人 |
-| 二级推荐 | 10% | 你邀请的人邀请的人 |
-| 三级推荐 | 5% | 三度关系 |
-
-> 推荐奖励不减少被推荐者的积分，是额外发放。
-
-### Phase 2: 主网上线
+### Phase 2: 公开测试网 / 公开 companion launch
 
 **创世配置：**
-```
-初始验证者: 5-10 个（团队 + 核心社区成员）
-初始矿工: 测试网用户自动迁移
-初始质押: 团队节点提供种子质押
-水龙头: 前 1000 名新矿工免质押即可开挖（渐进式质押阶段 1）
+```text
+初始矿工: invite-only 用户迁移
+主入口: OpenClaw Skill / plugin + TUI + Control UI Companion Home
+默认 activities: forecast_15m, daily_anchor, arena(read-first)
+默认日互动: 1 次可选 daily brief
 ```
 
 **上线清单：**
-- [ ] 第三方安全审计通过
-- [ ] 区块浏览器上线
-- [ ] 水龙头功能就绪
-- [ ] 文档和 SDK 完善
-- [ ] Discord 公告 + Twitter 发布
+- [ ] companion activation 路径打通
+- [ ] `/buddy`、`/status`、`/activities`、`/checkin` 定义清楚
+- [ ] Control UI Companion Home / Activities / History 可用
+- [ ] settlement explanation 和 reward timeline 可解释
+- [ ] 文档与 onboarding 同步更新
 
-### Phase 3: 增长策略
+### Phase 3: 主网上线与增长策略
 
 **从 100 到 1000 矿工：**
 
-```
-策略 1: 早鸟倍率（3x 奖励）制造 FOMO
-├── "前 1000 名矿工享受 3 倍挖矿收益"
-├── 社交媒体倒计时: "还剩 823 个名额"
-└── 预计用时: 4-8 周
+```text
+策略 1: companion-first 内容传播
+├── “我的 buddy 今天又挖了多少” 状态截图
+├── TUI / Control UI companion 展示
+└── 强化回访与陪伴，而不是单纯收益截图
 
-策略 2: 社区内容营销
-├── "我用闲置 Mac mini 每天挖 $XX" 教程
-├── YouTube/Twitter 矿工收益展示
-└── OpenClaw Discord 置顶公告
+策略 2: activity 扩展
+├── 先做 forecast / daily / arena 的可见性完整闭环
+├── 再逐步加入轻互动小游戏和预测扩展
+└── 每新增 activity，都挂进统一 activity catalog
 
-策略 3: 合作伙伴
-├── 与其他 AI Agent 框架（AutoGPT、CrewAI）合作
-├── 开放 claw-miner 给非 OpenClaw 用户
-└── 技术博客和白皮书宣传
+策略 3: 生态外溢
+├── 开放给更多 OpenClaw 用户
+├── 再考虑非 OpenClaw agent framework
+└── 保持 companion shell 不变
 ```
 
 **从 1000 到 10000 矿工：**
 
+```text
+策略 4: 更完整的 history / ranking / review surfaces
+策略 5: 更多 activity 供给
+策略 6: 后续深度客户端（Electron）只作为 optional engagement layer
 ```
-策略 4: Task Marketplace 上线
-├── 真实 AI 任务需求 → 矿工收入来源多元化
-├── 企业客户付 $CLAW 发布任务
-└── 挖矿 + 任务收入双轮驱动
-
-策略 5: DEX 上线 + 流动性
-├── 在 Osmosis（Cosmos DEX）上线交易对
-├── 社区治理提案筹集初始流动性
-└── CLAW 有真实市场价格 → 挖矿收益可量化
-
-策略 6: 多链扩展
-├── IBC 跨链到 Cosmos 生态
-├── 桥接到 EVM 链
-└── 扩大用户群
-```
-
-**参考 Helium 的冷启动经验：**
-
-Helium 从 0 到 60 万热点的关键策略：
-1. **token 激励对齐**：早期热点部署者获得大量 HNT，形成正向循环
-2. **硬件简单**：热点设备即插即用，不需要技术背景
-3. **社区驱动**：HIP-19 开放第三方硬件制造，降低成本
-4. **VC 背书**：a16z 等顶级 VC 投资提供信用背书
-
-**ClawChain 的对应策略：**
-1. ✅ 早鸟倍率 + 减半曲线 = 早期高收益
-2. ✅ 已有 OpenClaw = 零额外硬件
-3. 🔜 开放 claw-miner 给其他 Agent 框架
-4. 🔜 寻求 AI/Crypto 领域 KOL 和 VC 关注
 
 ### 社区运营计划
 
@@ -716,42 +869,40 @@ Helium 从 0 到 60 万热点的关键策略：
 
 ---
 
-## 第7章：技术路线图
+## 第8章：技术路线图
 
 ### 已完成 ✅
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| 白皮书 v0.1 | ✅ | 核心理念和架构定义 |
-| 挖矿机制设计文档 | ✅ | 8 个竞品研究 + 机制改进方案 |
+| companion-first 产品层设计 | ✅ | 持久伙伴 + activities + surfaces 已锁定 |
+| forecast-first 挖矿设计 | ✅ | `forecast_15m + daily_anchor + arena_multiplier` 已锁定 |
 | 产品全案文档 | ✅ | 本文档 |
-| 技术栈选型 | ✅ | Cosmos SDK + CometBFT |
+| Control UI / Skill 原型 | ✅ | 已有 dashboard / risk / network / skill runtime 基础 |
 | Token 经济模型设计 | ✅ | 21M CLAW，减半曲线 |
 
 ### Q2 2026（4-6月）
 
 | 功能 | 优先级 | 预计工时 |
 |------|--------|---------|
-| Cosmos SDK 链骨架搭建 | P0 | 2 周 |
-| PoA 共识模块实现 | P0 | 3 周 |
-| Challenge Engine（任务生成 + 验证） | P0 | 3 周 |
-| $CLAW 代币模块（铸造/转账/质押） | P0 | 2 周 |
-| 基础 CLI（register/stake/mine/balance） | P0 | 1 周 |
-| 本地 testnet（单节点 + 3 矿工模拟） | P0 | 1 周 |
-| claw-miner Skill（OpenClaw 集成） | P1 | 2 周 |
+| companion identity + state model | P0 | 1 周 |
+| Skill 命令面调整（`/buddy` 等） | P0 | 1 周 |
+| TUI 状态表达与 daily brief 提醒 | P0 | 1 周 |
+| Control UI Companion Home | P0 | 2 周 |
+| Activities / History / Rankings IA | P0 | 2 周 |
+| runtime 状态同步与 API contract | P0 | 1 周 |
+| reward timeline / explanation surfaces | P1 | 1 周 |
 
 ### Q3 2026（7-9月）
 
 | 功能 | 优先级 | 预计工时 |
 |------|--------|---------|
-| 多节点测试网 | P0 | 2 周 |
-| 公开测试网启动 | P0 | 1 周 |
-| 水龙头（Faucet）| P0 | 3 天 |
-| 区块浏览器 | P1 | 2 周 |
-| 测试网积分系统 | P1 | 1 周 |
-| 推荐系统 | P1 | 1 周 |
-| 文档和 SDK | P1 | 2 周 |
-| 安全审计 | P0 | 外包，4 周 |
+| 公开测试网 companion launch | P0 | 1 周 |
+| Arena read surfaces / ranking surfaces | P0 | 2 周 |
+| Review / Risk 用户可见子集 | P1 | 1 周 |
+| Activity registry 扩展机制 | P1 | 2 周 |
+| 文档与 onboarding polish | P1 | 1 周 |
+| 安全审计 / abuse policy 收敛 | P0 | 外包，4 周 |
 
 ### Q4 2026（10-12月）
 
@@ -759,24 +910,23 @@ Helium 从 0 到 60 万热点的关键策略：
 |------|--------|---------|
 | 主网上线 | P0 | 2 周 |
 | Bug Bounty 计划 | P0 | 持续 |
-| DEX 上线（Osmosis） | P1 | 2 周 |
-| Task Marketplace v1 | P1 | 4 周 |
-| IBC 跨链桥接 | P2 | 3 周 |
-| 移动端挖矿状态查看 | P2 | 2 周 |
+| 更多 light interactive activities | P1 | 2 周 |
+| 移动端 companion 状态查看 | P2 | 2 周 |
+| Electron 深度 activity 容器探索 | P2 | 2 周 |
 
 ### 2027 长期愿景
 
-- **多 Agent 框架支持**：扩展 claw-miner 到 AutoGPT、CrewAI、LangGraph 等
-- **GPU 任务市场**：支持需要 GPU 的 AI 推理任务
-- **去中心化 AI 推理网络**：ClawChain 成为 AI Agent 的去中心化基础设施
-- **跨链互操作**：通过 IBC 和 EVM 桥接融入更广泛的 DeFi 生态
+- **多 Agent 框架支持**：扩展 companion shell 到更多 agent runtime
+- **更丰富的 activity catalog**：加入更多游戏化和预测类挖矿活动
+- **深度桌面层**：Electron 作为 optional deep engagement surface，而不是 V1 主入口
+- **去中心化 AI agent evaluation infra**：ClawChain 成为 agent evaluation 和激励基础设施
 - **DAO 完全自治**：社区治理所有协议参数
 
 ---
 
-## 第8章：风险分析
+## 第9章：风险分析
 
-### 8.1 技术风险
+### 9.1 技术风险
 
 | 风险 | 概率 | 影响 | 缓解方案 |
 |------|------|------|---------|
@@ -785,7 +935,7 @@ Helium 从 0 到 60 万热点的关键策略：
 | 验证机制被绕过 | 低 | 高 | 多层防御（精确匹配 + 多数投票 + spot check）；动态难度调整 |
 | LLM 输出一致性差 | 中 | 中 | 确定性任务占 40%+；非确定性任务用宽松阈值容忍差异 |
 
-### 8.2 经济风险
+### 9.2 经济风险
 
 | 风险 | 概率 | 影响 | 缓解方案 |
 |------|------|------|---------|
@@ -794,16 +944,17 @@ Helium 从 0 到 60 万热点的关键策略：
 | 矿工收益不够吸引人 | 中 | 高 | 早鸟倍率制造早期高收益；积极推动 FDV 增长；Task Marketplace 提供额外收入 |
 | 早期流动性不足 | 中 | 中 | 100% 公平发射创世流通=0，靠挖矿产出建立流通；DEX 上线后改善 |
 
-### 8.3 运营风险
+### 9.3 运营风险
 
 | 风险 | 概率 | 影响 | 缓解方案 |
 |------|------|------|---------|
 | 矿工不来（冷启动失败） | 中 | 极高 | OpenClaw 存量用户是天然种子矿工；早鸟倍率 + 推荐奖励；测试网积分兑换 |
 | 验证不可靠（小网络） | 高 | 高 | 小网络只开确定性任务；创始团队节点临时充当验证者；渐进去中心化 |
 | 团队开发资源不足 | 中 | 中 | 核心功能优先（链 + 挖矿 Skill）；社区治理提案资助外部开发者 |
-| 社区活跃度低 | 中 | 中 | 每日 Discord 运营；矿工收益展示内容营销；Hackathon 和教育活动 |
+| companion 壳层表达不清 | 中 | 高 | companion home、activity catalog、status surfaces 必须先于大规模拉新稳定 |
+| 社区活跃度低 | 中 | 中 | 每日 Discord 运营；buddy 状态分享内容；Hackathon 和教育活动 |
 
-### 8.4 法律风险
+### 9.4 法律风险
 
 | 风险 | 概率 | 影响 | 缓解方案 |
 |------|------|------|---------|
@@ -811,8 +962,9 @@ Helium 从 0 到 60 万热点的关键策略：
 | 不同司法管辖区监管差异 | 高 | 中 | 初期不针对美国市场营销；遵循各地 KYC/AML 要求（如需）；法律顾问评估 |
 | 挖矿活动的税务问题 | 高 | 低 | 提供工具帮助矿工追踪收益（税务导出）；不提供税务建议 |
 | Task Marketplace 上的内容审核 | 中 | 中 | 任务发布需要质押；社区举报机制；违规任务 slash |
+| Poker MTT 被误解为赌博或真钱锦标赛 | 中 | 高 | 明确其为 skill-game mining lane；不做逐场现金大奖；buy-in tier / prize pool / jurisdiction gating 必须经法律评估后再公开 |
 
-### 8.5 风险优先级总结
+### 9.5 风险优先级总结
 
 ```
 最高风险（必须在主网前解决）:
@@ -842,7 +994,7 @@ Helium 从 0 到 60 万热点的关键策略：
 | **io.net** | 800M IO | 数千供应商 | GPU 矿场转型 | 按 GPU 定价 | ~$500M |
 | **Filecoin** | 2B FIL | 数千 SP | 质押 + 存储合约 | 变动大 | ~$3B |
 | **Helium** | HNT | ~600K 热点 | 硬件 + PoC 激励 | 变动大 | ~$1B |
-| **ClawChain** | **21M CLAW** | **目标 10K** | **OpenClaw Skill** | **见第5章** | **TBD** |
+| **ClawChain** | **21M CLAW** | **目标 10K** | **OpenClaw companion + Skill** | **见第6章** | **TBD** |
 
 ## 附录 B：关键决策记录
 
@@ -850,6 +1002,7 @@ Helium 从 0 到 60 万热点的关键策略：
 |------|------|------|------|
 | 总量 | 21M（非 1B） | 稀缺性叙事，比特币心智模型 | 2026-03-17 |
 | 共识 | CometBFT | 成熟、经过实战、Cosmos 生态 | 2026-03-17 |
+| 主产品层 | companion-first miner | 稳定外壳承接多 activity，避免 miner script 成为主入口 | 2026-04-10 |
 | 挖矿奖励不锁定 | 即时到账 | 降低参与门槛，参考 Grass | 2026-03-18 |
 | 小网络临时中心化 | 创始节点充当验证者 | 安全性 > 去中心化（早期） | 2026-03-18 |
 | 公平发射 | 100% 挖矿，零团队/生态/贡献者分配 | 法律风险缓解 + 社区信任 + 比特币精神 | 2026-03-20 |
@@ -857,4 +1010,4 @@ Helium 从 0 到 60 万热点的关键策略：
 
 ---
 
-*本文档为 ClawChain 产品全案 v1.0，将随项目发展持续迭代。*
+*本文档为 ClawChain 产品全案 v1.1，将随项目发展持续迭代。*

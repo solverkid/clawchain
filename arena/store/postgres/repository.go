@@ -1139,6 +1139,7 @@ func (r *Repository) AppendSubmissionLedgerEntries(ctx context.Context, entries 
 			payload_artifact_ref = EXCLUDED.payload_artifact_ref,
 			payload = EXCLUDED.payload,
 			updated_at = EXCLUDED.updated_at
+		WHERE submission_ledger.payload_hash = EXCLUDED.payload_hash
 	`
 
 	for _, entry := range entries {
@@ -1150,7 +1151,7 @@ func (r *Repository) AppendSubmissionLedgerEntries(ctx context.Context, entries 
 			entry.UpdatedAt = now
 		}
 
-		_, err := r.db.ExecContext(
+		result, err := r.db.ExecContext(
 			ctx,
 			query,
 			entry.RequestID,
@@ -1175,6 +1176,13 @@ func (r *Repository) AppendSubmissionLedgerEntries(ctx context.Context, entries 
 		)
 		if err != nil {
 			return fmt.Errorf("append submission_ledger %s: %w", entry.RequestID, err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("append submission_ledger %s rows affected: %w", entry.RequestID, err)
+		}
+		if rowsAffected == 0 {
+			return fmt.Errorf("append submission_ledger %s: request_id payload conflict", entry.RequestID)
 		}
 	}
 
@@ -2564,6 +2572,243 @@ func (r *Repository) ListEntrantsByWave(ctx context.Context, waveID string) ([]m
 	return entrants, rows.Err()
 }
 
+func (r *Repository) ListSeatsByTournament(ctx context.Context, tournamentID string) ([]model.Seat, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			seat_id,
+			table_id,
+			tournament_id,
+			entrant_id,
+			seat_no,
+			seat_alias,
+			miner_id,
+			seat_state,
+			stack,
+			timeout_streak,
+			sit_out_warning_count,
+			last_forced_blind_round,
+			last_manual_action_at,
+			tournament_seat_draw_token,
+			admin_status_overlay,
+			removed_reason,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_seat
+		WHERE tournament_id = $1
+	`, tournamentID)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_seat for tournament %s: %w", tournamentID, err)
+	}
+	defer rows.Close()
+
+	seats := make([]model.Seat, 0)
+	for rows.Next() {
+		var (
+			seat             model.Seat
+			entrantID        sql.NullString
+			lastManualAction sql.NullTime
+			seatState        string
+		)
+		if err := rows.Scan(
+			&seat.ID,
+			&seat.TableID,
+			&seat.TournamentID,
+			&entrantID,
+			&seat.SeatNo,
+			&seat.SeatAlias,
+			&seat.MinerID,
+			&seatState,
+			&seat.Stack,
+			&seat.TimeoutStreak,
+			&seat.SitOutWarningCount,
+			&seat.LastForcedBlindRound,
+			&lastManualAction,
+			&seat.TournamentSeatDrawToken,
+			&seat.AdminStatusOverlay,
+			&seat.RemovedReason,
+			&seat.Payload,
+			&seat.SchemaVersion,
+			&seat.PolicyBundleVersion,
+			&seat.StateHash,
+			&seat.PayloadHash,
+			&seat.ArtifactRef,
+			&seat.CreatedAt,
+			&seat.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_seat for tournament %s: %w", tournamentID, err)
+		}
+		seat.State = model.SeatState(seatState)
+		if entrantID.Valid {
+			seat.EntrantID = entrantID.String
+		}
+		if lastManualAction.Valid {
+			ts := lastManualAction.Time
+			seat.LastManualActionAt = &ts
+		}
+		seats = append(seats, seat)
+	}
+
+	return seats, rows.Err()
+}
+
+func (r *Repository) ListEliminationEventsByTournament(ctx context.Context, tournamentID string) ([]model.EliminationEvent, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			elimination_event_id,
+			tournament_id,
+			table_id,
+			hand_id,
+			seat_id,
+			entrant_id,
+			finish_rank,
+			stage_reached,
+			occurred_at,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at
+		FROM arena_elimination_event
+		WHERE tournament_id = $1
+	`, tournamentID)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_elimination_event for tournament %s: %w", tournamentID, err)
+	}
+	defer rows.Close()
+
+	events := make([]model.EliminationEvent, 0)
+	for rows.Next() {
+		var (
+			event     model.EliminationEvent
+			tableID   sql.NullString
+			handID    sql.NullString
+			seatID    sql.NullString
+			entrantID sql.NullString
+		)
+		if err := rows.Scan(
+			&event.ID,
+			&event.TournamentID,
+			&tableID,
+			&handID,
+			&seatID,
+			&entrantID,
+			&event.FinishRank,
+			&event.StageReached,
+			&event.OccurredAt,
+			&event.Payload,
+			&event.SchemaVersion,
+			&event.PolicyBundleVersion,
+			&event.StateHash,
+			&event.PayloadHash,
+			&event.ArtifactRef,
+			&event.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_elimination_event for tournament %s: %w", tournamentID, err)
+		}
+		if tableID.Valid {
+			event.TableID = tableID.String
+		}
+		if handID.Valid {
+			event.HandID = handID.String
+		}
+		if seatID.Valid {
+			event.SeatID = seatID.String
+		}
+		if entrantID.Valid {
+			event.EntrantID = entrantID.String
+		}
+		events = append(events, event)
+	}
+
+	return events, rows.Err()
+}
+
+func (r *Repository) ListOperatorInterventionsByTournament(ctx context.Context, tournamentID string) ([]model.OperatorIntervention, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			intervention_id,
+			tournament_id,
+			table_id,
+			seat_id,
+			miner_id,
+			intervention_type,
+			status,
+			requested_by,
+			requested_at,
+			effective_at_safe_point,
+			reason_code,
+			reason_detail,
+			created_event_id,
+			resolved_event_id,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_operator_intervention
+		WHERE tournament_id = $1
+	`, tournamentID)
+	if err != nil {
+		return nil, fmt.Errorf("list arena_operator_intervention for tournament %s: %w", tournamentID, err)
+	}
+	defer rows.Close()
+
+	interventions := make([]model.OperatorIntervention, 0)
+	for rows.Next() {
+		var (
+			intervention model.OperatorIntervention
+			tableID      sql.NullString
+			seatID       sql.NullString
+		)
+		if err := rows.Scan(
+			&intervention.ID,
+			&intervention.TournamentID,
+			&tableID,
+			&seatID,
+			&intervention.MinerID,
+			&intervention.InterventionType,
+			&intervention.Status,
+			&intervention.RequestedBy,
+			&intervention.RequestedAt,
+			&intervention.EffectiveAtSafePoint,
+			&intervention.ReasonCode,
+			&intervention.ReasonDetail,
+			&intervention.CreatedEventID,
+			&intervention.ResolvedEventID,
+			&intervention.Payload,
+			&intervention.SchemaVersion,
+			&intervention.PolicyBundleVersion,
+			&intervention.StateHash,
+			&intervention.PayloadHash,
+			&intervention.ArtifactRef,
+			&intervention.CreatedAt,
+			&intervention.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan arena_operator_intervention for tournament %s: %w", tournamentID, err)
+		}
+		if tableID.Valid {
+			intervention.TableID = tableID.String
+		}
+		if seatID.Valid {
+			intervention.SeatID = seatID.String
+		}
+		interventions = append(interventions, intervention)
+	}
+
+	return interventions, rows.Err()
+}
+
 func (r *Repository) ListActionDeadlinesByTournament(ctx context.Context, tournamentID string) ([]model.ActionDeadline, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT
@@ -2623,6 +2868,184 @@ func (r *Repository) ListActionDeadlinesByTournament(ctx context.Context, tourna
 	}
 
 	return deadlines, rows.Err()
+}
+
+func (r *Repository) LoadRoundBarrier(ctx context.Context, tournamentID string, roundNo int) (model.RoundBarrier, error) {
+	var barrier model.RoundBarrier
+	err := r.db.QueryRowContext(ctx, `
+		SELECT
+			barrier_id,
+			tournament_id,
+			round_no,
+			expected_table_count,
+			received_hand_close_count,
+			barrier_state,
+			pending_reseat_plan_ref,
+			pending_level_no,
+			terminate_after_current_round,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM arena_round_barrier
+		WHERE tournament_id = $1 AND round_no = $2
+	`, tournamentID, roundNo).Scan(
+		&barrier.ID,
+		&barrier.TournamentID,
+		&barrier.RoundNo,
+		&barrier.ExpectedTableCount,
+		&barrier.ReceivedHandCloseCount,
+		&barrier.BarrierState,
+		&barrier.PendingReseatPlanRef,
+		&barrier.PendingLevelNo,
+		&barrier.TerminateAfterCurrentRound,
+		&barrier.Payload,
+		&barrier.SchemaVersion,
+		&barrier.PolicyBundleVersion,
+		&barrier.StateHash,
+		&barrier.PayloadHash,
+		&barrier.ArtifactRef,
+		&barrier.CreatedAt,
+		&barrier.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.RoundBarrier{}, sql.ErrNoRows
+		}
+		return model.RoundBarrier{}, fmt.Errorf("load arena_round_barrier %s round %d: %w", tournamentID, roundNo, err)
+	}
+	return barrier, nil
+}
+
+func (r *Repository) LoadSubmissionLedgerEntry(ctx context.Context, requestID string) (model.SubmissionLedger, error) {
+	var entry model.SubmissionLedger
+	err := r.db.QueryRowContext(ctx, `
+		SELECT
+			request_id,
+			tournament_id,
+			table_id,
+			hand_id,
+			phase_id,
+			seat_id,
+			seat_alias,
+			miner_id,
+			expected_state_seq,
+			validation_status,
+			payload_artifact_ref,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref,
+			created_at,
+			updated_at
+		FROM submission_ledger
+		WHERE request_id = $1
+	`, requestID).Scan(
+		&entry.RequestID,
+		&entry.TournamentID,
+		&entry.TableID,
+		&entry.HandID,
+		&entry.PhaseID,
+		&entry.SeatID,
+		&entry.SeatAlias,
+		&entry.MinerID,
+		&entry.ExpectedStateSeq,
+		&entry.ValidationStatus,
+		&entry.PayloadArtifactRef,
+		&entry.Payload,
+		&entry.SchemaVersion,
+		&entry.PolicyBundleVersion,
+		&entry.StateHash,
+		&entry.PayloadHash,
+		&entry.ArtifactRef,
+		&entry.CreatedAt,
+		&entry.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.SubmissionLedger{}, sql.ErrNoRows
+		}
+		return model.SubmissionLedger{}, fmt.Errorf("load submission_ledger %s: %w", requestID, err)
+	}
+	return entry, nil
+}
+
+func (r *Repository) LoadActionRecord(ctx context.Context, requestID string) (model.ActionRecord, error) {
+	var (
+		action      model.ActionRecord
+		processedAt sql.NullTime
+	)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT
+			request_id,
+			tournament_id,
+			table_id,
+			hand_id,
+			phase_id,
+			seat_id,
+			seat_alias,
+			action_type,
+			action_amount_bucket,
+			action_seq,
+			expected_state_seq,
+			accepted_state_seq,
+			validation_status,
+			result_event_id,
+			received_at,
+			processed_at,
+			error_code,
+			duplicate_of_request_id,
+			payload,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref
+		FROM arena_action
+		WHERE request_id = $1
+	`, requestID).Scan(
+		&action.RequestID,
+		&action.TournamentID,
+		&action.TableID,
+		&action.HandID,
+		&action.PhaseID,
+		&action.SeatID,
+		&action.SeatAlias,
+		&action.ActionType,
+		&action.ActionAmountBucket,
+		&action.ActionSeq,
+		&action.ExpectedStateSeq,
+		&action.AcceptedStateSeq,
+		&action.ValidationStatus,
+		&action.ResultEventID,
+		&action.ReceivedAt,
+		&processedAt,
+		&action.ErrorCode,
+		&action.DuplicateOfRequestID,
+		&action.Payload,
+		&action.SchemaVersion,
+		&action.PolicyBundleVersion,
+		&action.StateHash,
+		&action.PayloadHash,
+		&action.ArtifactRef,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.ActionRecord{}, sql.ErrNoRows
+		}
+		return model.ActionRecord{}, fmt.Errorf("load arena_action %s: %w", requestID, err)
+	}
+	if processedAt.Valid {
+		ts := processedAt.Time
+		action.ProcessedAt = &ts
+	}
+	return action, nil
 }
 
 func (r *Repository) ListExpiredActionDeadlines(ctx context.Context, asOf time.Time) ([]model.ActionDeadline, error) {
@@ -2883,6 +3306,66 @@ func (r *Repository) ListRatingInputs(ctx context.Context, tournamentID string) 
 	}
 
 	return inputs, rows.Err()
+}
+
+func (r *Repository) LoadPersistedMinerStates(ctx context.Context) ([]model.RatingRuntimeState, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			rs.miner_address,
+			rs.mu,
+			rs.sigma,
+			rs.arena_reliability,
+			rs.public_elo,
+			m.public_rank,
+			m.arena_multiplier,
+			COALESCE(mult.eligible_tournament_count, 0)
+		FROM rating_state_current rs
+		LEFT JOIN miners m
+			ON m.address = rs.miner_address
+		LEFT JOIN (
+			SELECT
+				miner_address,
+				SUM(CASE WHEN eligible_for_multiplier THEN 1 ELSE 0 END) AS eligible_tournament_count
+			FROM arena_multiplier_snapshot
+			GROUP BY miner_address
+		) mult
+			ON mult.miner_address = rs.miner_address
+		ORDER BY rs.miner_address
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load persisted miner states: %w", err)
+	}
+	defer rows.Close()
+
+	states := make([]model.RatingRuntimeState, 0)
+	for rows.Next() {
+		var (
+			state      model.RatingRuntimeState
+			publicRank sql.NullInt64
+			multiplier sql.NullFloat64
+		)
+		if err := rows.Scan(
+			&state.MinerAddress,
+			&state.Mu,
+			&state.Sigma,
+			&state.ArenaReliability,
+			&state.PublicELO,
+			&publicRank,
+			&multiplier,
+			&state.EligibleTournamentCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan persisted miner state: %w", err)
+		}
+		if publicRank.Valid {
+			state.PublicRank = int(publicRank.Int64)
+		}
+		if multiplier.Valid {
+			state.Multiplier = multiplier.Float64
+		}
+		states = append(states, state)
+	}
+
+	return states, rows.Err()
 }
 
 func (r *Repository) UpsertRatingState(ctx context.Context, state model.RatingState) error {

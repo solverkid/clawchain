@@ -25,6 +25,10 @@ mkdir -p "$ARTIFACT_DIR"
 for node in "${NODES[@]}"; do
     HOME_DIR="$ARTIFACT_DIR/$node"
     $BINARY init "$node" --chain-id "$CHAIN_ID" --home "$HOME_DIR" > /dev/null 2>&1
+    mkdir -p "$HOME_DIR/data"
+    cat > "$HOME_DIR/data/priv_validator_state.json" << EOF
+{"height":"0","round":0,"step":0,"signature":null,"signbytes":null}
+EOF
     echo "  ✅ $node initialized"
 done
 
