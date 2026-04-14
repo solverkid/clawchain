@@ -1161,6 +1161,8 @@ class ForecastMiningService:
         batch = await self.repo.get_settlement_batch(settlement_batch_id)
         if not batch:
             raise ValueError("settlement batch not found")
+        if batch.get("state") in {"cancelled", "no_positive_weight"} or int(batch.get("total_reward_amount", 0) or 0) <= 0:
+            raise ValueError("settlement batch not anchorable")
         current = now or utc_now()
         reward_window_ids = list(batch.get("reward_window_ids", []))
         task_run_ids: list[str] = []
@@ -2143,29 +2145,75 @@ class ForecastMiningService:
             or _default_poker_mtt_policy_bundle_version(self.settings, lane)
         )
         tournament_ids = sorted({result["tournament_id"] for result in selected_results})
-        miner_addresses = sorted({result["miner_address"] for result in selected_results})
 
         score_weights: dict[str, float] = {}
         submission_counts: dict[str, int] = {}
+        representative_miners: dict[str, str] = {}
         for result in selected_results:
-            miner_address = result["miner_address"]
-            submission_counts[miner_address] = submission_counts.get(miner_address, 0) + 1
-            score_weights[miner_address] = score_weights.get(miner_address, 0.0) + max(
-                0.0,
-                float(result.get("total_score", 0.0) or 0.0),
+            economic_unit_id = result.get("economic_unit_id") or result["miner_address"]
+            if (
+                economic_unit_id not in representative_miners
+                or result["miner_address"] < representative_miners[economic_unit_id]
+            ):
+                representative_miners[economic_unit_id] = result["miner_address"]
+            submission_counts[economic_unit_id] = submission_counts.get(economic_unit_id, 0) + 1
+            score_weights[economic_unit_id] = max(
+                score_weights.get(economic_unit_id, 0.0),
+                max(
+                    0.0,
+                    float(result.get("total_score", 0.0) or 0.0),
+                ),
             )
 
-        reward_allocations = _allocate_integer_pool_by_weights(
-            [(miner_address, score_weights.get(miner_address, 0.0)) for miner_address in miner_addresses],
-            reward_pool_amount,
-        )
+        economic_unit_ids = sorted(score_weights)
+        miner_addresses = sorted(representative_miners[economic_unit_id] for economic_unit_id in economic_unit_ids)
+        has_positive_weight = sum(weight for weight in score_weights.values() if weight > 0) > 0
+        if has_positive_weight:
+            reward_allocations = _allocate_integer_pool_by_weights(
+                [(economic_unit_id, score_weights.get(economic_unit_id, 0.0)) for economic_unit_id in economic_unit_ids],
+                reward_pool_amount,
+            )
+            budget_disposition = {
+                "state": "paid",
+                "requested_reward_pool_amount": reward_pool_amount,
+                "paid_amount": reward_pool_amount,
+                "forfeited_amount": 0,
+            }
+            reward_window_state = "finalized"
+            saved_reward_amount = reward_pool_amount
+        else:
+            reward_allocations = {economic_unit_id: 0 for economic_unit_id in economic_unit_ids}
+            budget_disposition = {
+                "state": "no_positive_weight",
+                "requested_reward_pool_amount": reward_pool_amount,
+                "paid_amount": 0,
+                "forfeited_amount": reward_pool_amount,
+            }
+            reward_window_state = "no_positive_weight"
+            saved_reward_amount = 0
+            if existing_window and existing_window.get("settlement_batch_id"):
+                existing_batch = await self.repo.get_settlement_batch(existing_window["settlement_batch_id"])
+                if existing_batch and existing_batch.get("state") in {None, "open"}:
+                    await self.repo.save_settlement_batch(
+                        {
+                            **existing_batch,
+                            "state": "cancelled",
+                            "total_reward_amount": 0,
+                            "anchor_job_id": None,
+                            "anchor_schema_version": None,
+                            "canonical_root": None,
+                            "anchor_payload_json": None,
+                            "anchor_payload_hash": None,
+                            "updated_at": isoformat_z(current),
+                        }
+                    )
         miner_reward_rows = [
             {
-                "miner_address": miner_address,
-                "gross_reward_amount": int(reward_allocations.get(miner_address, 0)),
-                "submission_count": submission_counts.get(miner_address, 0),
+                "miner_address": representative_miners[economic_unit_id],
+                "gross_reward_amount": int(reward_allocations.get(economic_unit_id, 0)),
+                "submission_count": submission_counts.get(economic_unit_id, 0),
             }
-            for miner_address in miner_addresses
+            for economic_unit_id in economic_unit_ids
         ]
 
         saved = await self.repo.save_reward_window(
@@ -2173,14 +2221,14 @@ class ForecastMiningService:
                 {
                     "id": resolved_reward_window_id,
                     "lane": lane,
-                    "state": "finalized",
+                    "state": reward_window_state,
                     "window_start_at": isoformat_z(window_start),
                     "window_end_at": isoformat_z(window_end),
                     "task_count": len(tournament_ids),
                     "submission_count": len(selected_results),
                     "miner_count": len(miner_addresses),
-                    "total_reward_amount": reward_pool_amount,
-                    "settlement_batch_id": existing_window.get("settlement_batch_id") if existing_window else None,
+                    "total_reward_amount": saved_reward_amount,
+                    "settlement_batch_id": existing_window.get("settlement_batch_id") if existing_window and has_positive_weight else None,
                     "task_run_ids": tournament_ids,
                     "miner_addresses": miner_addresses,
                     "policy_bundle_version": resolved_policy_bundle_version,
@@ -2204,10 +2252,12 @@ class ForecastMiningService:
                 "tournament_ids": tournament_ids,
                 "poker_mtt_result_ids": sorted(result["id"] for result in selected_results),
                 "miner_reward_rows": miner_reward_rows,
+                "budget_disposition": budget_disposition,
                 **(projection_metadata or {}),
             },
         )
-        await self._build_settlement_batches(current)
+        if has_positive_weight:
+            await self._build_settlement_batches(current)
         return await self.repo.get_reward_window(saved["id"]) or saved
 
     async def apply_arena_results(
@@ -2660,6 +2710,8 @@ class ForecastMiningService:
     async def _build_settlement_batches(self, now: datetime) -> None:
         reward_windows = await self.repo.list_reward_windows()
         for reward_window in reward_windows:
+            if reward_window.get("state") == "no_positive_weight":
+                continue
             settlement_batch_id = reward_window.get("settlement_batch_id") or "sb_" + reward_window["id"].removeprefix("rw_")
             existing_batch = await self.repo.get_settlement_batch(settlement_batch_id)
 

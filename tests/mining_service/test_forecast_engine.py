@@ -1346,6 +1346,295 @@ def test_build_poker_mtt_reward_window_creates_settlement_batch():
     asyncio.run(scenario())
 
 
+def test_build_poker_mtt_reward_window_rejects_no_positive_weights():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        for miner_address in ("claw1pokerzeroweightone", "claw1pokerzeroweighttwo"):
+            await service.register_miner(
+                address=miner_address,
+                name=miner_address,
+                public_key="pubkey",
+                miner_version="0.4.0",
+            )
+
+        await service.apply_poker_mtt_results(
+            tournament_id="poker-mtt-zero-weight-1",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1pokerzeroweightone",
+                    "final_rank": 30,
+                    "tournament_result_score": 0.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-zero-weight-1", "claw1pokerzeroweightone"),
+                },
+                {
+                    "miner_id": "claw1pokerzeroweighttwo",
+                    "final_rank": 30,
+                    "tournament_result_score": 0.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-zero-weight-1", "claw1pokerzeroweighttwo"),
+                },
+            ],
+            completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+        reward_window = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+            reward_pool_amount=100,
+            include_provisional=False,
+            now=datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc),
+        )
+        artifact = next(
+            artifact
+            for artifact in await repo.list_artifacts_for_entity("reward_window", reward_window["id"])
+            if artifact["kind"] == "poker_mtt_reward_window_projection"
+        )
+
+        assert reward_window["state"] == "no_positive_weight"
+        assert reward_window["total_reward_amount"] == 0
+        assert reward_window["settlement_batch_id"] is None
+        assert artifact["payload_json"]["budget_disposition"] == {
+            "forfeited_amount": 100,
+            "paid_amount": 0,
+            "requested_reward_pool_amount": 100,
+            "state": "no_positive_weight",
+        }
+        assert all(row["gross_reward_amount"] == 0 for row in artifact["payload_json"]["miner_reward_rows"])
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_no_positive_poker_mtt_window_does_not_enter_settlement():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(
+            poker_mtt_daily_reward_pool_amount=100,
+            poker_mtt_weekly_reward_pool_amount=0,
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1pokerreconcilezero",
+            name="poker-reconcile-zero",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await service.apply_poker_mtt_results(
+            tournament_id="poker-mtt-reconcile-zero-1",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1pokerreconcilezero",
+                    "final_rank": 30,
+                    "tournament_result_score": 0.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-reconcile-zero-1", "claw1pokerreconcilezero"),
+                }
+            ],
+            completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+        await service.reconcile(datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc))
+
+        reward_windows = [window for window in await repo.list_reward_windows() if window["lane"].startswith("poker_mtt_")]
+        settlement_batches = await repo.list_settlement_batches()
+
+        assert len(reward_windows) == 1
+        assert reward_windows[0]["state"] == "no_positive_weight"
+        assert reward_windows[0]["settlement_batch_id"] is None
+        assert settlement_batches == []
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_no_positive_rebuild_cancels_stale_open_settlement_batch():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        await service.register_miner(
+            address="claw1pokerstaleopen",
+            name="poker-stale-open",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await service.apply_poker_mtt_results(
+            tournament_id="poker-mtt-stale-open-1",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1pokerstaleopen",
+                    "final_rank": 1,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-stale-open-1", "claw1pokerstaleopen"),
+                }
+            ],
+            completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        )
+        positive_window = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+            reward_pool_amount=100,
+            include_provisional=False,
+            now=datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc),
+        )
+        stale_batch_id = positive_window["settlement_batch_id"]
+
+        stored = (await repo.list_poker_mtt_results_for_miner("claw1pokerstaleopen"))[0]
+        await repo.save_poker_mtt_result(
+            {
+                **stored,
+                "final_rank": 30,
+                "finish_percentile": 0.0,
+                "tournament_result_score": 0.0,
+                "total_score": 0.0,
+                "updated_at": "2026-04-10T09:05:00Z",
+            }
+        )
+        rebuilt = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+            reward_pool_amount=100,
+            include_provisional=False,
+            now=datetime(2026, 4, 11, 0, 10, 0, tzinfo=timezone.utc),
+        )
+        stale_batch = await repo.get_settlement_batch(stale_batch_id)
+
+        assert rebuilt["state"] == "no_positive_weight"
+        assert rebuilt["settlement_batch_id"] is None
+        assert stale_batch["state"] == "cancelled"
+        assert stale_batch["total_reward_amount"] == 0
+        assert stale_batch["anchor_payload_json"] is None
+
+        try:
+            await service.retry_anchor_settlement_batch(stale_batch_id, now=datetime(2026, 4, 11, 0, 11, 0, tzinfo=timezone.utc))
+        except ValueError as exc:
+            assert str(exc) == "settlement batch not anchorable"
+        else:
+            raise AssertionError("cancelled no-positive batch should not be anchorable")
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_build_poker_mtt_reward_window_folds_duplicate_economic_units():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        for miner_address in ("claw1pokerdupone", "claw1pokerduptwo", "claw1pokerfair"):
+            await service.register_miner(
+                address=miner_address,
+                name=miner_address,
+                public_key="pubkey",
+                miner_version="0.4.0",
+            )
+
+        await service.apply_poker_mtt_results(
+            tournament_id="poker-mtt-duplicate-unit-1",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1pokerdupone",
+                    "economic_unit_id": "claw1poker-shared-unit",
+                    "final_rank": 1,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-duplicate-unit-1", "claw1pokerdupone"),
+                },
+                {
+                    "miner_id": "claw1pokerduptwo",
+                    "economic_unit_id": "claw1poker-shared-unit",
+                    "final_rank": 2,
+                    "tournament_result_score": 0.5,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-duplicate-unit-1", "claw1pokerduptwo"),
+                },
+                {
+                    "miner_id": "claw1pokerfair",
+                    "economic_unit_id": "claw1poker-fair-unit",
+                    "final_rank": 1,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-duplicate-unit-1", "claw1pokerfair"),
+                },
+            ],
+            completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+        reward_window = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+            reward_pool_amount=100,
+            include_provisional=False,
+            now=datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc),
+        )
+        artifact = next(
+            artifact
+            for artifact in await repo.list_artifacts_for_entity("reward_window", reward_window["id"])
+            if artifact["kind"] == "poker_mtt_reward_window_projection"
+        )
+
+        assert reward_window["miner_count"] == 2
+        assert reward_window["submission_count"] == 3
+        assert artifact["payload_json"]["miner_reward_rows"] == [
+            {
+                "gross_reward_amount": 50,
+                "miner_address": "claw1pokerfair",
+                "submission_count": 1,
+            },
+            {
+                "gross_reward_amount": 50,
+                "miner_address": "claw1pokerdupone",
+                "submission_count": 2,
+            }
+        ]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_build_poker_mtt_reward_window_propagates_explicit_policy_bundle_version():
     async def scenario():
         repo = FakeRepository()
