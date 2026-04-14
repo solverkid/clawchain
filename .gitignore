@@ -1,5 +1,6 @@
 # Binaries
 build/
+clawchaind
 *.exe
 *.test
 *.out
@@ -24,6 +25,7 @@ vendor/
 node_modules/
 website/node_modules/
 website/.next/
+website/out/
 
 # Test coverage
 *.cover
@@ -34,3 +36,8 @@ coverage.txt
 data/
 __pycache__/
 .gitnexus
+
+# Local/generated poker MTT and testnet artifacts
+deploy/testnet-artifacts/
+deploy/local-single-val*/
+lepoker-gameserver
