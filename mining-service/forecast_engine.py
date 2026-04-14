@@ -32,6 +32,8 @@ class ForecastSettings:
     commit_window_seconds: int = 3
     reveal_window_seconds: int = 13
     daily_cutoff_hour_utc: int = 0
+    poker_mtt_reward_windows_enabled: bool = False
+    poker_mtt_settlement_anchoring_enabled: bool = False
     poker_mtt_daily_reward_pool_amount: int = 0
     poker_mtt_weekly_reward_pool_amount: int = 0
     poker_mtt_finalization_watermark_seconds: int = 21600
@@ -1176,6 +1178,9 @@ class ForecastMiningService:
             raise ValueError("settlement batch not found")
         if batch.get("state") in {"cancelled", "no_positive_weight"} or int(batch.get("total_reward_amount", 0) or 0) <= 0:
             raise ValueError("settlement batch not anchorable")
+        batch_lane = str(batch.get("lane") or "")
+        if batch_lane.startswith("poker_mtt_") and not getattr(self.settings, "poker_mtt_settlement_anchoring_enabled", False):
+            raise ValueError("poker mtt settlement anchoring disabled")
         current = now or utc_now()
         reward_window_ids = list(batch.get("reward_window_ids", []))
         task_run_ids: list[str] = []
@@ -1185,7 +1190,7 @@ class ForecastMiningService:
             reward_window = await self.repo.get_reward_window(reward_window_id)
             if reward_window:
                 task_run_ids.extend(reward_window.get("task_run_ids", []))
-                if str(batch.get("lane") or "").startswith("poker_mtt_"):
+                if batch_lane.startswith("poker_mtt_"):
                     projection_artifacts = await self.repo.list_artifacts_for_entity("reward_window", reward_window_id)
                     projection_artifact = next(
                         (
@@ -2775,6 +2780,8 @@ class ForecastMiningService:
             await self._upsert_reward_window_artifact(saved, now)
 
     async def _build_poker_mtt_reward_windows(self, now: datetime) -> None:
+        if not getattr(self.settings, "poker_mtt_reward_windows_enabled", False):
+            return
         lane_configs = [
             ("poker_mtt_daily", int(getattr(self.settings, "poker_mtt_daily_reward_pool_amount", 0) or 0), _day_bucket_start, timedelta(days=1)),
             ("poker_mtt_weekly", int(getattr(self.settings, "poker_mtt_weekly_reward_pool_amount", 0) or 0), _week_bucket_start, timedelta(days=7)),

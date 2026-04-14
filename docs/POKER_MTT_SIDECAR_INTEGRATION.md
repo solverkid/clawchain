@@ -1084,3 +1084,95 @@ python3 scripts/poker_mtt/smoke_test.py
 
 - 本机人工 bring-up：可以直接用脚本
 - 自动化验证：更建议让 donor 以前台方式跑在独立会话里，再由 smoke test 对外探测
+
+### 18.6 30 人 WS 显式 join / 随机行动测试
+
+本轮已经实际跑过三类 30 人验证：
+
+#### A. Mock 30 人开赛 smoke
+
+```bash
+python3 scripts/poker_mtt/smoke_test.py --expected-users 30 --expected-room-count-at-least 4
+```
+
+结果摘要：
+
+- `mtt_id = local-smoke-1776180666`
+- `users_seen = 30`
+- `unique_rooms = 4`
+- room sizes: `8 / 7 / 8 / 7`
+- Redis snapshot count: `30`
+- alive count: `30`
+- died count: `0`
+- WS 下行包含 `currentMTTRanking`
+
+#### B. Mock 显式 join 30 人
+
+```bash
+python3 scripts/poker_mtt/explicit_join_harness.py --user-count 30 --table-room-count-at-least 4 --hold-seconds 60 --max-workers 30
+```
+
+结果摘要：
+
+- `mtt_id = explicit-join-1776180672`
+- `joined_users = 30`
+- `received_current_mtt_ranking = 30`
+- `users_with_ws_errors = 0`
+- Redis snapshot count: `30`
+- alive count: `30`
+- died count: `0`
+- `unique_rooms = 4`
+
+#### C. 本地 auth mock + 非 mock WS play 到完赛
+
+本地 auth mock：
+
+```bash
+python3 scripts/poker_mtt/local_auth_mock.py --user-count 30 --table-max-player 9 --client-act-timeout 4
+```
+
+sidecar auth mode：
+
+```bash
+scripts/poker_mtt/start_local_sidecar.sh --mode auth --auth-host http://127.0.0.1:18090 --mtt-user-count 30 --table-max-player 9
+```
+
+完整 play harness：
+
+```bash
+python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30
+```
+
+结果摘要：
+
+- `mtt_id = non-mock-play-1776180873`
+- `unique_rooms = 4`, room sizes: `8 / 8 / 7 / 7`
+- `connections.joined_users = 30`
+- `received_current_mtt_ranking = 30`
+- `users_with_sent_actions = 30`
+- `sent_action_total = 807`
+- `finish_mode.finished = true`
+- final standings: `snapshot_count = 30`, `alive_count = 1`, `died_count = 29`, `pending_count = 0`, `standings_count = 30`
+- winner: `member_id = 8:1`, `user_id = 8`, `end_chip = 90000`
+- rank 2: `19:1`
+- rank 3: `26:1`
+
+补充现实限制：
+
+- `users_with_ws_errors = 18`，主要是 bust / kick 后远端断连；不影响最终完赛和 standings 收敛
+- 测试期间 RocketMQ publish 有 `create grpc conn failed, err=context deadline exceeded` 类日志，但比赛启动、join、行动、ranking 和完赛不被阻断
+- donor 进程在 agent 非交互后台 `nohup` 场景下仍可能刚 listen 后退出；以前台方式运行 donor 时 30 人测试可跑到完赛
+
+### 18.7 Git 排除口径
+
+`lepoker-gameserver` 是独立 donor repo，不随 ClawChain 提交。
+
+当前 ClawChain repo 已把这些本地或生成物从 Git index 移除并写入 `.gitignore`：
+
+- `website/out/`
+- `deploy/testnet-artifacts/`
+- `deploy/local-single-val*/`
+- `clawchaind`
+- `lepoker-gameserver`
+
+后续提交继续用 path-scoped staging，不用 `git add .`。如果本地需要保留这些文件，保留在工作区即可；它们会显示为 ignored，不会进入 commit / push。

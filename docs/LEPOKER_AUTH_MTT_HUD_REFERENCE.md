@@ -732,6 +732,27 @@ Phase 1 只做 reference-driven adapter 和 projection，不做完整 donor cont
 - 不在 finish handler 里做 direct wallet payout
 - 不把 Redis key 当成隐式系统契约
 
+### 13.2 Phase 1 已借用 / 暂缓口径
+
+已经进入 ClawChain Phase 1 设计或实现的 reference 点：
+
+- thin auth adapter / local mock token 路径：借鉴 donor token verification 和 user context 注入，但不把 Cognito/JWKS 放进 `pokermtt` domain
+- final ranking 先 canonicalize，再投影 `poker_mtt_result_entries`
+- reward eligibility 必须等证据状态完整；未锁定结果不进 reward window
+- hand history 采用“一手完成后及时异步上传”的事件口径，不按每个 action 写永久存储
+- HUD / ELO / public rating 先作为后续 projector 输入，不直接参与 Phase 1 正向奖励权重
+- settlement 只锚窗口 root；projection artifact 保存 final ranking / evidence / multiplier roots
+- rollout 上默认关闭 poker MTT 自动 reward window 和 settlement anchoring，等 final ranking / evidence / projection 测试稳定后按环境打开
+
+暂缓的 donor 能力：
+
+- Cognito SRP / refresh / social login 全量迁移
+- Java `MttService` / `MttUserService` 业务中台原样搬运
+- RocketMQ consumer 直接写成 ClawChain scoring engine
+- ELO 或 public leaderboard 直接发币
+- per-hand S3 冷归档与 full replay bundle
+- `x/reputation` 直接接收单场 total score 或 raw HUD
+
 ---
 
 ## 14. 最后结论

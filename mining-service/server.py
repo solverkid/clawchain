@@ -105,6 +105,8 @@ def _forecast_settings(settings: AppSettings) -> ForecastSettings:
         commit_window_seconds=settings.commit_window_seconds,
         reveal_window_seconds=settings.reveal_window_seconds,
         daily_cutoff_hour_utc=settings.daily_cutoff_hour_utc,
+        poker_mtt_reward_windows_enabled=getattr(settings, "poker_mtt_reward_windows_enabled", False),
+        poker_mtt_settlement_anchoring_enabled=getattr(settings, "poker_mtt_settlement_anchoring_enabled", False),
         poker_mtt_daily_reward_pool_amount=getattr(settings, "poker_mtt_daily_reward_pool_amount", 0),
         poker_mtt_weekly_reward_pool_amount=getattr(settings, "poker_mtt_weekly_reward_pool_amount", 0),
         poker_mtt_finalization_watermark_seconds=getattr(settings, "poker_mtt_finalization_watermark_seconds", 21600),

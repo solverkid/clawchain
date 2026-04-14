@@ -2,7 +2,7 @@
 
 **版本**: 0.1
 **日期**: 2026-04-10
-**状态**: 设计冻结前评审稿
+**状态**: Phase 1 设计 + 实现状态对齐
 **范围**: `poker mtt` 独立产品线，不混入现有 `arena / bluff arena` 语义
 **依赖前提**: `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
 
@@ -84,6 +84,7 @@
 12. donor 的 `tournament_id` 在现有 settlement schema 里先映射到 `task_run_ids_root` 对应的 activity run 集合；后续可把字段泛化为 `activity_run_ids_root`
 13. controlled bot / shadow samples 属于 hidden evaluation evidence，不改变 public rated tournament 的 `human_only` 口径；如果 bot 进入公开对局，则该样本不得进入 human-only multiplier
 14. Go 版实现边界优先按仓库现有 `arena/*` 风格新开顶层 `pokermtt/*`，不要放进 `arena/*`，也不要把 donor Java structs 穿透进 ClawChain domain model
+15. Phase 1 reward / settlement 必须有显式 rollout gate：默认不自动打开 `poker_mtt_daily` / `poker_mtt_weekly` 发奖，也默认不把 poker MTT settlement batch 锚上链
 
 ### 2.4 术语表
 
@@ -170,6 +171,8 @@
 - 对 `rated + human_only` 结果更新独立的 `poker_mtt_multiplier`
 - 生成 `poker_mtt_daily` / `poker_mtt_weekly` reward window
 - 复用 settlement batch / anchor payload 链路
+- `poker_mtt_reward_windows_enabled` 控制自动日 / 周窗口生成
+- `poker_mtt_settlement_anchoring_enabled` 控制 poker MTT settlement batch 进入 anchor payload
 
 它当前还没有做:
 
@@ -954,6 +957,13 @@ Postgres 继续承接所有结构化聚合结果。
 10. 构建 canonical root 和 anchor payload
 11. 调用 `MsgAnchorSettlementBatch` 把 batch root 锚上链
 
+Phase 1 rollout gate:
+
+- `CLAWCHAIN_POKER_MTT_REWARD_WINDOWS_ENABLED=1` 后，`reconcile()` 才会自动构建 `poker_mtt_daily` / `poker_mtt_weekly`
+- `CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED=1` 后，poker MTT lane 的 `settlement_batch` 才允许 `retry_anchor_settlement_batch()`
+- 手动 `POST /admin/poker-mtt/reward-windows/build` 保留为 admin / test 入口，但即使手动构建了窗口，也必须显式打开 settlement anchoring gate 才能上链
+- reward window membership 只读 `locked_at` 落在窗口内的结果；anchor payload 只读 projection artifact 中的 locked / anchorable roots
+
 ## 10.2 链上应该锚什么
 
 应该锚的是窗口级聚合结果，而不是逐手历史。
@@ -1247,6 +1257,7 @@ hidden eval 和 reputation 都不该单独承担反作弊结论。
 5. 新增 `poker_mtt_multiplier`
 6. 按日 / 周生成 reward window
 7. 复用 settlement batch anchor 上链
+8. 默认关闭自动 reward window 和 poker settlement anchoring，等 final ranking / evidence / projection 测试通过后再按环境打开 gate
 
 Phase 1 不做：
 

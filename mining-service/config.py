@@ -38,6 +38,11 @@ class AppSettings:
     commit_window_seconds: int = int(os.getenv("CLAWCHAIN_COMMIT_WINDOW_SECONDS", "3"))
     reveal_window_seconds: int = int(os.getenv("CLAWCHAIN_REVEAL_WINDOW_SECONDS", "13"))
     daily_cutoff_hour_utc: int = int(os.getenv("CLAWCHAIN_DAILY_CUTOFF_HOUR_UTC", "0"))
+    poker_mtt_reward_windows_enabled: bool = _bool_env("CLAWCHAIN_POKER_MTT_REWARD_WINDOWS_ENABLED", False)
+    poker_mtt_settlement_anchoring_enabled: bool = _bool_env(
+        "CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED",
+        False,
+    )
     poker_mtt_daily_reward_pool_amount: int = int(os.getenv("CLAWCHAIN_POKER_MTT_DAILY_REWARD_POOL_AMOUNT", "0"))
     poker_mtt_weekly_reward_pool_amount: int = int(os.getenv("CLAWCHAIN_POKER_MTT_WEEKLY_REWARD_POOL_AMOUNT", "0"))
     poker_mtt_finalization_watermark_seconds: int = int(

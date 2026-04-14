@@ -1199,6 +1199,15 @@ def poker_mtt_reward_ready_refs(
     }
 
 
+def poker_mtt_rollout_settings(**overrides) -> forecast_engine.ForecastSettings:
+    defaults = {
+        "poker_mtt_reward_windows_enabled": True,
+        "poker_mtt_settlement_anchoring_enabled": True,
+    }
+    defaults.update(overrides)
+    return forecast_engine.ForecastSettings(**defaults)
+
+
 async def build_poker_mtt_anchor_fixture(
     *,
     repo: FakeRepository,
@@ -1241,6 +1250,78 @@ async def build_poker_mtt_anchor_fixture(
         include_provisional=False,
         now=datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc),
     )
+
+
+def test_reconcile_skips_poker_mtt_auto_windows_when_rollout_disabled():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(
+            poker_mtt_daily_reward_pool_amount=100,
+            poker_mtt_weekly_reward_pool_amount=250,
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1pokerdisabledauto",
+            name="poker-disabled-auto",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await service.apply_poker_mtt_results(
+            tournament_id="poker-mtt-disabled-auto-1",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1pokerdisabledauto",
+                    "final_rank": 1,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-disabled-auto-1", "claw1pokerdisabledauto"),
+                }
+            ],
+            completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+        await service.reconcile(datetime(2026, 4, 14, 0, 5, 0, tzinfo=timezone.utc))
+
+        reward_windows = [window for window in await repo.list_reward_windows() if window["lane"].startswith("poker_mtt_")]
+        assert reward_windows == []
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_retry_anchor_settlement_batch_rejects_poker_mtt_when_rollout_disabled():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        reward_window = await build_poker_mtt_anchor_fixture(
+            repo=repo,
+            service=service,
+            tournament_id="poker-mtt-anchor-disabled-1",
+            miner_addresses=["claw1pokeranchordisabled"],
+        )
+        batch = await repo.get_settlement_batch(reward_window["settlement_batch_id"])
+
+        try:
+            await service.retry_anchor_settlement_batch(
+                batch["id"],
+                now=datetime(2026, 4, 11, 0, 6, 0, tzinfo=timezone.utc),
+            )
+        except ValueError as exc:
+            assert str(exc) == "poker mtt settlement anchoring disabled"
+        else:
+            raise AssertionError("poker anchor should require explicit rollout enablement")
+
+    import asyncio
+
+    asyncio.run(scenario())
 
 
 def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
@@ -1465,7 +1546,7 @@ def test_build_poker_mtt_reward_window_rejects_no_positive_weights():
 def test_reconcile_no_positive_poker_mtt_window_does_not_enter_settlement():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings(
+        settings = poker_mtt_rollout_settings(
             poker_mtt_daily_reward_pool_amount=100,
             poker_mtt_weekly_reward_pool_amount=0,
         )
@@ -1682,7 +1763,7 @@ def test_build_poker_mtt_reward_window_folds_duplicate_economic_units():
 def test_build_poker_mtt_reward_window_propagates_explicit_policy_bundle_version():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings()
+        settings = poker_mtt_rollout_settings()
         service = forecast_engine.ForecastMiningService(repo, settings)
 
         await service.register_miner(
@@ -1740,7 +1821,7 @@ def test_build_poker_mtt_reward_window_propagates_explicit_policy_bundle_version
 def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings()
+        settings = poker_mtt_rollout_settings()
         service = forecast_engine.ForecastMiningService(repo, settings)
 
         await service.register_miner(
@@ -1824,7 +1905,7 @@ def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
 def test_retry_anchor_settlement_batch_rejects_incomplete_poker_mtt_projection_metadata():
     async def scenario():
         repo = FakeRepository()
-        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        service = forecast_engine.ForecastMiningService(repo, poker_mtt_rollout_settings())
         reward_window = await build_poker_mtt_anchor_fixture(
             repo=repo,
             service=service,
@@ -1865,7 +1946,7 @@ def test_retry_anchor_settlement_batch_rejects_incomplete_poker_mtt_projection_m
 def test_retry_anchor_settlement_batch_includes_poker_mtt_projection_roots_and_is_stable():
     async def scenario():
         repo = FakeRepository()
-        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        service = forecast_engine.ForecastMiningService(repo, poker_mtt_rollout_settings())
         reward_window = await build_poker_mtt_anchor_fixture(
             repo=repo,
             service=service,
@@ -1903,7 +1984,7 @@ def test_retry_anchor_settlement_batch_includes_poker_mtt_projection_roots_and_i
 def test_retry_anchor_settlement_batch_rejects_poker_mtt_root_mismatch_after_ready():
     async def scenario():
         repo = FakeRepository()
-        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        service = forecast_engine.ForecastMiningService(repo, poker_mtt_rollout_settings())
         reward_window = await build_poker_mtt_anchor_fixture(
             repo=repo,
             service=service,
@@ -2016,7 +2097,7 @@ def test_build_poker_mtt_reward_window_uses_locked_at_for_membership_time():
 def test_reconcile_auto_builds_closed_poker_mtt_daily_and_weekly_windows():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings(
+        settings = poker_mtt_rollout_settings(
             poker_mtt_daily_reward_pool_amount=100,
             poker_mtt_weekly_reward_pool_amount=250,
             poker_mtt_daily_policy_bundle_version="poker_mtt_daily_policy_v3",
@@ -2071,7 +2152,7 @@ def test_reconcile_auto_builds_closed_poker_mtt_daily_and_weekly_windows():
 def test_reconcile_skips_poker_mtt_auto_window_until_all_results_are_final():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings(
+        settings = poker_mtt_rollout_settings(
             poker_mtt_daily_reward_pool_amount=100,
             poker_mtt_weekly_reward_pool_amount=0,
         )
@@ -2140,7 +2221,7 @@ def test_reconcile_skips_poker_mtt_auto_window_until_all_results_are_final():
 def test_reconcile_does_not_release_unlocked_poker_mtt_window_after_watermark():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings(
+        settings = poker_mtt_rollout_settings(
             poker_mtt_daily_reward_pool_amount=100,
             poker_mtt_weekly_reward_pool_amount=0,
             poker_mtt_finalization_watermark_seconds=3600,

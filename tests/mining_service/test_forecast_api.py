@@ -1490,7 +1490,7 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
 def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
     clock = FrozenClock(datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(
-        settings=forecast_engine.ForecastSettings(),
+        settings=forecast_engine.ForecastSettings(poker_mtt_settlement_anchoring_enabled=True),
         repository=server.create_fake_repository(),
         now_fn=clock.now,
     )

@@ -397,6 +397,43 @@ Important limitation:
 - no large snapshot/feature/noise archival yet
 - replay proof is still lightweight and deterministic, not a full replay bundle
 
+## 3.9 Poker MTT Phase 1 Lane
+
+Implemented:
+
+- `pokermtt` Go package with sidecar-facing contract constants and identity guards
+- `authadapter` Go package for local token / bearer-style principal boundaries
+- local donor sidecar harnesses under `scripts/poker_mtt/`
+- `poker_mtt_tournaments`, `poker_mtt_final_rankings`, and `poker_mtt_result_entries` service-side models
+- final ranking projection into `poker_mtt_result_entries`
+- evidence manifests for final ranking plus stubbed hidden-eval / HUD / hand-history evidence roots
+- `poker_mtt_daily` / `poker_mtt_weekly` reward window projection artifacts
+- poker MTT settlement anchor payload hardening:
+  - projection artifact is required before anchoring
+  - final ranking / evidence / multiplier / projection roots are folded into `poker_projection_roots_root`
+  - repeated retries reject root drift after anchor payload materialization
+
+Rollout gates:
+
+- `CLAWCHAIN_POKER_MTT_REWARD_WINDOWS_ENABLED=1` enables automatic `reconcile()` construction of poker MTT daily / weekly reward windows
+- `CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED=1` enables poker MTT settlement batches to enter anchor payload generation
+- both gates default to disabled
+- manual `POST /admin/poker-mtt/reward-windows/build` remains available for admin / test projection, but anchoring still requires the settlement gate
+
+30-user donor sidecar acceptance already run locally:
+
+- mock smoke: `30` users seen, `4` rooms, Redis snapshot `30`, alive `30`, died `0`
+- explicit join: `30` joined, `30` received `currentMTTRanking`, `0` WS errors, `4` rooms
+- auth mock + non-mock WS play: `30` joined, `807` random legal-range actions sent, tournament finished, final standings `30`, alive `1`, died `29`
+- final winner in that run: `member_id=8:1`, `user_id=8`, `end_chip=90000`
+
+Operational caveats:
+
+- donor RocketMQ publish errors did not block local MTT start / join / action / ranking / finish, but MQ remains required for hand-history/HUD ingestion work
+- donor foreground run is reliable in the agent environment; background `nohup` startup can exit after listen under non-interactive process supervision
+- `lepoker-gameserver` remains a separate repo and separate GitNexus graph
+- `website/out/`, `deploy/testnet-artifacts/`, `deploy/local-single-val*/`, root `clawchaind`, and `lepoker-gameserver` are ignored/excluded from ClawChain commits
+
 ## 4. Codebase Reality: Active Path vs Legacy Drift
 
 ## 4.1 Active Path
