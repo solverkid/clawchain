@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from chain_adapter import build_anchor_tx_plan as build_chain_anchor_tx_plan
+from canonical import canonical_hash
+import poker_mtt_evidence
 import poker_mtt_results
 from repository import MiningRepository
 
@@ -180,9 +181,7 @@ def _baseline_probs(task_id: str, settings: ForecastSettings) -> tuple[int, int,
 
 
 def canonical_json_hash(payload: dict) -> str:
-    return "sha256:" + hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return canonical_hash(payload)
 
 
 def snapshot_metadata(
@@ -393,9 +392,7 @@ def _allocate_integer_pool_by_weights(weighted_items: list[tuple[str, float]], t
 
 
 def _hash_payload(payload: dict) -> str:
-    return "sha256:" + hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return canonical_hash(payload)
 
 
 def _build_anchor_job_id(settlement_batch_id: str, now: datetime) -> str:
@@ -1060,9 +1057,7 @@ class ForecastMiningService:
                 "total_reward_amount": reward_window.get("total_reward_amount", 0),
                 "window_end_at": reward_window.get("window_end_at"),
             }
-            replay_hash = "sha256:" + hashlib.sha256(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            replay_hash = _hash_payload(payload)
             return {
                 "entity_type": entity_type,
                 "entity_id": entity_id,
@@ -1088,9 +1083,7 @@ class ForecastMiningService:
                 "outcome": task.get("outcome"),
                 "reward_window_id": task.get("reward_window_id"),
             }
-            replay_hash = "sha256:" + hashlib.sha256(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            replay_hash = _hash_payload(payload)
             return {
                 "entity_type": entity_type,
                 "entity_id": entity_id,
@@ -1240,9 +1233,7 @@ class ForecastMiningService:
             "miner_reward_rows": miner_reward_rows,
             "canonical_root": canonical_root,
         }
-        anchor_payload_hash = "sha256:" + hashlib.sha256(
-            json.dumps(anchor_payload_json, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        anchor_payload_hash = _hash_payload(anchor_payload_json)
         saved = await self.repo.save_settlement_batch(
             {
                 **batch,
@@ -2080,6 +2071,72 @@ class ForecastMiningService:
             "field_size": field_size,
             "policy_bundle_version": policy_bundle_version,
             "items": items,
+        }
+
+    async def build_poker_mtt_evidence_manifests(
+        self,
+        *,
+        tournament_id: str,
+        policy_bundle_version: str,
+        accepted_degraded_kinds: Iterable[str] | None = None,
+        now: datetime | str | None = None,
+    ) -> dict:
+        if not policy_bundle_version:
+            raise ValueError("policy_bundle_version is required")
+        current = as_utc_datetime(now or utc_now()).replace(microsecond=0)
+        rows = await self.repo.list_poker_mtt_final_rankings_for_tournament(tournament_id)
+        if not rows:
+            raise ValueError("no poker mtt final rankings found")
+
+        manifests = [
+            poker_mtt_evidence.build_final_ranking_manifest(
+                tournament_id=tournament_id,
+                rows=rows,
+                policy_bundle_version=policy_bundle_version,
+                generated_at=current,
+            )
+        ]
+        for kind in sorted(set(accepted_degraded_kinds or [])):
+            manifests.append(
+                poker_mtt_evidence.build_stub_manifest(
+                    kind=kind,
+                    tournament_id=tournament_id,
+                    policy_bundle_version=policy_bundle_version,
+                    evidence_state="accepted_degraded",
+                    degraded_reason=f"phase1_{kind.removeprefix('poker_mtt_').removesuffix('_manifest')}_deferred",
+                    generated_at=current,
+                )
+            )
+
+        artifact_refs = []
+        for manifest in manifests:
+            artifact = await self.repo.save_artifact(
+                {
+                    "id": f"art:poker_mtt_tournament:{tournament_id}:{manifest['kind']}",
+                    "kind": manifest["kind"],
+                    "entity_type": "poker_mtt_tournament",
+                    "entity_id": tournament_id,
+                    "payload_json": manifest,
+                    "payload_hash": manifest["manifest_root"],
+                    "created_at": isoformat_z(current),
+                    "updated_at": isoformat_z(current),
+                }
+            )
+            artifact_refs.append(
+                {
+                    "kind": artifact["kind"],
+                    "artifact_id": artifact["id"],
+                    "payload_hash": artifact["payload_hash"],
+                }
+            )
+
+        artifact_refs.sort(key=lambda ref: ref["kind"])
+        return {
+            "tournament_id": tournament_id,
+            "policy_bundle_version": policy_bundle_version,
+            "evidence_root": _hash_sequence(artifact_refs),
+            "artifact_refs": artifact_refs,
+            "generated_at": isoformat_z(current),
         }
 
     async def build_poker_mtt_reward_window(
