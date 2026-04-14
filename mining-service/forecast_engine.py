@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from chain_adapter import build_anchor_tx_plan as build_chain_anchor_tx_plan
+import poker_mtt_results
 from repository import MiningRepository
 
 
@@ -1836,15 +1837,26 @@ class ForecastMiningService:
                 6,
             )
             finish_percentile = round((field_size - final_rank) / max(1, field_size - 1), 6)
-            eligible_for_multiplier = rated_or_practice == "rated" and human_only
             multiplier_before = float(miner.get("poker_mtt_multiplier", 1.0))
             multiplier_after = multiplier_before
             rolling_score = None
             economic_unit_id = result.get("economic_unit_id") or miner.get("economic_unit_id") or miner_address
+            evaluation_state = str(result.get("evaluation_state") or "provisional")
             evidence_state = str(result.get("evidence_state") or "pending")
-            no_multiplier_reason = result.get("no_multiplier_reason")
-            if no_multiplier_reason is None and not eligible_for_multiplier:
-                no_multiplier_reason = "not_rated_or_not_human"
+            locked_at = result.get("locked_at")
+            no_multiplier_reason = result.get("no_multiplier_reason") or poker_mtt_results.reward_gate_reason(
+                rank_state="ranked",
+                rank=final_rank,
+                rated_or_practice=rated_or_practice,
+                human_only=human_only,
+                evidence_state=evidence_state,
+                policy_bundle_version=policy_bundle_version,
+                locked_at=locked_at,
+                evidence_root=result.get("evidence_root"),
+                final_ranking_id=result.get("final_ranking_id"),
+                standing_snapshot_id=result.get("standing_snapshot_id"),
+            )
+            eligible_for_multiplier = no_multiplier_reason is None
 
             entry = await self.repo.save_poker_mtt_result(
                 {
@@ -1867,17 +1879,17 @@ class ForecastMiningService:
                     "rolling_score": None,
                     "multiplier_before": multiplier_before,
                     "multiplier_after": multiplier_after,
-                    "evaluation_state": str(result.get("evaluation_state") or "provisional"),
+                    "evaluation_state": evaluation_state,
                     "evaluation_version": policy_bundle_version,
                     "final_ranking_id": result.get("final_ranking_id"),
                     "standing_snapshot_id": result.get("standing_snapshot_id"),
                     "standing_snapshot_hash": result.get("standing_snapshot_hash"),
                     "evidence_root": result.get("evidence_root"),
                     "evidence_state": evidence_state,
-                    "locked_at": result.get("locked_at"),
+                    "locked_at": locked_at,
                     "anchor_state": str(result.get("anchor_state") or "unanchored"),
                     "anchor_payload_hash": result.get("anchor_payload_hash"),
-                    "risk_flags": list(result.get("risk_flags") or []),
+                    "risk_flags": list(result.get("risk_flags") or ([] if no_multiplier_reason is None else [no_multiplier_reason])),
                     "no_multiplier_reason": no_multiplier_reason,
                     "created_at": isoformat_z(completed_at),
                     "updated_at": isoformat_z(completed_at),
@@ -1942,6 +1954,132 @@ class ForecastMiningService:
             "items": items,
         }
 
+    async def project_poker_mtt_final_rankings(
+        self,
+        *,
+        tournament_id: str,
+        rated_or_practice: str,
+        human_only: bool,
+        field_size: int,
+        policy_bundle_version: str,
+        locked_at: datetime,
+    ) -> dict:
+        if rated_or_practice not in {"rated", "practice"}:
+            raise ValueError("invalid rated_or_practice")
+        if field_size < 2:
+            raise ValueError("field_size must be at least 2")
+        if not policy_bundle_version:
+            raise ValueError("policy_bundle_version is required")
+
+        locked_at_utc = as_utc_datetime(locked_at).replace(microsecond=0)
+        rows = await self.repo.list_poker_mtt_final_rankings_for_tournament(tournament_id)
+        if not rows:
+            raise ValueError("no poker mtt final rankings found")
+
+        await self.repo.save_poker_mtt_tournament(
+            {
+                "id": tournament_id,
+                "runtime_source": "lepoker-gameserver",
+                "rated_or_practice": rated_or_practice,
+                "human_only": human_only,
+                "field_size": field_size,
+                "status": "standings_ready",
+                "policy_bundle_version": policy_bundle_version,
+                "completed_at": isoformat_z(locked_at_utc),
+                "created_at": rows[0].get("created_at") or isoformat_z(locked_at_utc),
+                "updated_at": isoformat_z(locked_at_utc),
+            }
+        )
+
+        items = []
+        for row in rows:
+            miner_address = row.get("miner_address") or row.get("source_user_id")
+            if not miner_address:
+                raise ValueError(f"final ranking row missing miner address: {row.get('id')}")
+            miner = await self.repo.get_miner(miner_address)
+            if not miner:
+                raise ValueError(f"miner not found: {miner_address}")
+
+            projected = poker_mtt_results.project_final_ranking_row(
+                row,
+                rated_or_practice=rated_or_practice,
+                human_only=human_only,
+                field_size=field_size,
+                policy_bundle_version=policy_bundle_version,
+                locked_at=locked_at_utc,
+            )
+            multiplier_before = float(miner.get("poker_mtt_multiplier", 1.0))
+            multiplier_after = multiplier_before
+            rolling_score = None
+            entry = await self.repo.save_poker_mtt_result(
+                {
+                    **projected,
+                    "multiplier_before": multiplier_before,
+                    "multiplier_after": multiplier_after,
+                    "rolling_score": rolling_score,
+                }
+            )
+
+            if entry.get("eligible_for_multiplier") is True:
+                eligible_results = await self.repo.list_poker_mtt_results_for_miner(
+                    miner_address,
+                    eligible_only=True,
+                    limit=20,
+                )
+                eligible_count = len(
+                    await self.repo.list_poker_mtt_results_for_miner(miner_address, eligible_only=True)
+                )
+                if eligible_count <= 15:
+                    rolling_score = 0.0
+                    multiplier_after = 1.0
+                else:
+                    rolling_score = round(
+                        sum(item["total_score"] for item in eligible_results) / max(1, len(eligible_results)),
+                        6,
+                    )
+                    multiplier_after = round(clamp(1.0 + (rolling_score * 0.015), 0.96, 1.04), 6)
+                entry = await self.repo.save_poker_mtt_result(
+                    {
+                        **entry,
+                        "rolling_score": rolling_score,
+                        "multiplier_after": multiplier_after,
+                        "updated_at": isoformat_z(locked_at_utc),
+                    }
+                )
+                await self.repo.update_miner(
+                    miner_address,
+                    {
+                        "poker_mtt_multiplier": multiplier_after,
+                        "updated_at": locked_at_utc,
+                    },
+                )
+
+            items.append(
+                {
+                    "miner_id": miner_address,
+                    "final_ranking_id": row.get("id"),
+                    "final_rank": entry.get("final_rank"),
+                    "eligible_for_multiplier": entry.get("eligible_for_multiplier"),
+                    "evidence_state": entry.get("evidence_state"),
+                    "locked_at": entry.get("locked_at"),
+                    "no_multiplier_reason": entry.get("no_multiplier_reason"),
+                    "risk_flags": list(entry.get("risk_flags") or []),
+                    "tournament_result_score": entry.get("tournament_result_score"),
+                    "total_score": entry.get("total_score"),
+                    "poker_mtt_multiplier": multiplier_after,
+                    "rolling_score": rolling_score,
+                }
+            )
+
+        return {
+            "tournament_id": tournament_id,
+            "rated_or_practice": rated_or_practice,
+            "human_only": human_only,
+            "field_size": field_size,
+            "policy_bundle_version": policy_bundle_version,
+            "items": items,
+        }
+
     async def build_poker_mtt_reward_window(
         self,
         *,
@@ -1966,14 +2104,27 @@ class ForecastMiningService:
         current = now or utc_now()
         selected_results = []
         for result in await self.repo.list_poker_mtt_results():
-            completed_at = as_utc_datetime(result.get("created_at") or result.get("updated_at"))
-            if not (window_start <= completed_at < window_end):
+            locked_at = result.get("locked_at")
+            if not locked_at:
+                continue
+            locked_at_dt = as_utc_datetime(locked_at)
+            if not (window_start <= locked_at_dt < window_end):
                 continue
             if result.get("rated_or_practice") != "rated":
                 continue
             if result.get("human_only") is not True:
                 continue
             if not include_provisional and result.get("evaluation_state") != "final":
+                continue
+            if not result.get("evaluation_version"):
+                continue
+            if result.get("evidence_state") not in poker_mtt_results.REWARD_READY_EVIDENCE_STATES:
+                continue
+            if not result.get("final_ranking_id") or not result.get("standing_snapshot_id") or not result.get("evidence_root"):
+                continue
+            if result.get("no_multiplier_reason") is not None:
+                continue
+            if result.get("eligible_for_multiplier") is not True:
                 continue
             selected_results.append(result)
 
@@ -2451,12 +2602,25 @@ class ForecastMiningService:
 
             grouped_results: dict[datetime, list[dict]] = {}
             for result in all_results:
+                locked_at = result.get("locked_at")
+                if not locked_at:
+                    continue
                 if result.get("rated_or_practice") != "rated":
                     continue
                 if result.get("human_only") is not True:
                     continue
-                created_at = as_utc_datetime(result.get("created_at") or result.get("updated_at"))
-                window_start = bucket_fn(created_at)
+                if not result.get("evaluation_version"):
+                    continue
+                if result.get("evidence_state") not in poker_mtt_results.REWARD_READY_EVIDENCE_STATES:
+                    continue
+                if not result.get("final_ranking_id") or not result.get("standing_snapshot_id") or not result.get("evidence_root"):
+                    continue
+                if result.get("no_multiplier_reason") is not None:
+                    continue
+                if result.get("eligible_for_multiplier") is not True:
+                    continue
+                locked_at_dt = as_utc_datetime(locked_at)
+                window_start = bucket_fn(locked_at_dt)
                 window_end = window_start + window_size
                 if window_end > current:
                     continue

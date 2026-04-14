@@ -1183,6 +1183,22 @@ def test_poker_mtt_practice_results_do_not_change_multiplier_and_compute_total_s
     asyncio.run(scenario())
 
 
+def poker_mtt_reward_ready_refs(
+    tournament_id: str,
+    miner_address: str,
+    *,
+    locked_at: str = "2026-04-10T09:00:00Z",
+) -> dict:
+    return {
+        "final_ranking_id": f"poker_mtt_final_ranking:{tournament_id}:{miner_address}",
+        "standing_snapshot_id": f"poker_mtt_standing_snapshot:{tournament_id}:abc",
+        "standing_snapshot_hash": f"sha256:{tournament_id}",
+        "evidence_root": f"sha256:evidence:{tournament_id}:{miner_address}",
+        "evidence_state": "complete",
+        "locked_at": locked_at,
+    }
+
+
 def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
     async def scenario():
         repo = FakeRepository()
@@ -1210,6 +1226,11 @@ def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
                         "tournament_result_score": 0.9,
                         "hidden_eval_score": 0.6,
                         "consistency_input_score": 0.3,
+                        "evaluation_state": "final",
+                        **poker_mtt_reward_ready_refs(
+                            f"poker-mtt-rated-{index}",
+                            "claw1pokermttrated",
+                        ),
                     }
                 ],
                 completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
@@ -1231,6 +1252,11 @@ def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
                     "tournament_result_score": 0.9,
                     "hidden_eval_score": 0.6,
                     "consistency_input_score": 0.3,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs(
+                        "poker-mtt-rated-15",
+                        "claw1pokermttrated",
+                    ),
                 }
             ],
             completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
@@ -1280,6 +1306,7 @@ def test_build_poker_mtt_reward_window_creates_settlement_batch():
                     "hidden_eval_score": 0.0,
                     "consistency_input_score": 0.0,
                     "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-daily-1", "claw1pokerdailyone"),
                 },
                 {
                     "miner_id": "claw1pokerdailytwo",
@@ -1288,6 +1315,7 @@ def test_build_poker_mtt_reward_window_creates_settlement_batch():
                     "hidden_eval_score": 0.0,
                     "consistency_input_score": 0.0,
                     "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-daily-1", "claw1pokerdailytwo"),
                 },
             ],
             completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
@@ -1345,6 +1373,7 @@ def test_build_poker_mtt_reward_window_propagates_explicit_policy_bundle_version
                     "hidden_eval_score": 0.0,
                     "consistency_input_score": 0.0,
                     "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-policy-1", "claw1pokerpolicyone"),
                 }
             ],
             completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
@@ -1408,6 +1437,7 @@ def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
                     "hidden_eval_score": 0.0,
                     "consistency_input_score": 0.0,
                     "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-anchor-1", "claw1pokeranchorone"),
                 },
                 {
                     "miner_id": "claw1pokeranchortwo",
@@ -1416,6 +1446,7 @@ def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
                     "hidden_eval_score": 0.0,
                     "consistency_input_score": 0.0,
                     "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-anchor-1", "claw1pokeranchortwo"),
                 },
             ],
             completed_at=datetime(2026, 4, 10, 15, 0, 0, tzinfo=timezone.utc),
@@ -1457,7 +1488,7 @@ def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
     asyncio.run(scenario())
 
 
-def test_build_poker_mtt_reward_window_uses_created_at_for_membership_time():
+def test_build_poker_mtt_reward_window_uses_locked_at_for_membership_time():
     async def scenario():
         repo = FakeRepository()
         settings = forecast_engine.ForecastSettings()
@@ -1494,6 +1525,15 @@ def test_build_poker_mtt_reward_window_uses_created_at_for_membership_time():
             {
                 **stored,
                 "evaluation_state": "final",
+                "evidence_state": "complete",
+                "locked_at": "2026-04-10T09:00:00Z",
+                "final_ranking_id": "poker_mtt_final_ranking:poker-mtt-window-time-1:claw1pokerwindowtime",
+                "standing_snapshot_id": "poker_mtt_standing_snapshot:poker-mtt-window-time-1:abc",
+                "standing_snapshot_hash": "sha256:poker-mtt-window-time-1",
+                "evidence_root": "sha256:evidence:poker-mtt-window-time-1:claw1pokerwindowtime",
+                "eligible_for_multiplier": True,
+                "no_multiplier_reason": None,
+                "risk_flags": [],
                 "updated_at": "2026-04-12T00:00:00Z",
             }
         )
@@ -1547,6 +1587,7 @@ def test_reconcile_auto_builds_closed_poker_mtt_daily_and_weekly_windows():
                     "hidden_eval_score": 0.0,
                     "consistency_input_score": 0.0,
                     "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs("poker-mtt-auto-1", "claw1pokerautodaily"),
                 }
             ],
             completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
@@ -1613,6 +1654,15 @@ def test_reconcile_skips_poker_mtt_auto_window_until_all_results_are_final():
             {
                 **stored,
                 "evaluation_state": "final",
+                "evidence_state": "complete",
+                "locked_at": "2026-04-10T09:00:00Z",
+                "final_ranking_id": "poker_mtt_final_ranking:poker-mtt-auto-final-1:claw1pokerautofinal",
+                "standing_snapshot_id": "poker_mtt_standing_snapshot:poker-mtt-auto-final-1:abc",
+                "standing_snapshot_hash": "sha256:poker-mtt-auto-final-1",
+                "evidence_root": "sha256:evidence:poker-mtt-auto-final-1:claw1pokerautofinal",
+                "eligible_for_multiplier": True,
+                "no_multiplier_reason": None,
+                "risk_flags": [],
                 "updated_at": "2026-04-11T00:10:00Z",
             }
         )
@@ -1629,7 +1679,7 @@ def test_reconcile_skips_poker_mtt_auto_window_until_all_results_are_final():
     asyncio.run(scenario())
 
 
-def test_reconcile_releases_poker_mtt_window_after_watermark_with_projection_metadata():
+def test_reconcile_does_not_release_unlocked_poker_mtt_window_after_watermark():
     async def scenario():
         repo = FakeRepository()
         settings = forecast_engine.ForecastSettings(
@@ -1671,15 +1721,7 @@ def test_reconcile_releases_poker_mtt_window_after_watermark_with_projection_met
 
         await service.reconcile(datetime(2026, 4, 11, 1, 5, 0, tzinfo=timezone.utc))
         reward_windows = [window for window in await repo.list_reward_windows() if window["lane"].startswith("poker_mtt_")]
-        assert len(reward_windows) == 1
-
-        artifacts = await repo.list_artifacts_for_entity("reward_window", reward_windows[0]["id"])
-        projection = next(artifact for artifact in artifacts if artifact["kind"] == "poker_mtt_reward_window_projection")
-
-        assert projection["payload_json"]["include_provisional"] is True
-        assert projection["payload_json"]["completeness_mode"] == "watermark_release"
-        assert projection["payload_json"]["provisional_result_count"] == 1
-        assert projection["payload_json"]["watermark_at"] == "2026-04-11T01:00:00Z"
+        assert reward_windows == []
 
     import asyncio
 

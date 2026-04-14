@@ -1419,6 +1419,22 @@ def test_admin_apply_arena_results_updates_multiplier():
         assert miner_status.json()["data"]["arena_multiplier"] > 1.0
 
 
+def poker_mtt_reward_ready_refs(
+    tournament_id: str,
+    miner_address: str,
+    *,
+    locked_at: str = "2026-04-10T09:00:00Z",
+) -> dict:
+    return {
+        "final_ranking_id": f"poker_mtt_final_ranking:{tournament_id}:{miner_address}",
+        "standing_snapshot_id": f"poker_mtt_standing_snapshot:{tournament_id}:abc",
+        "standing_snapshot_hash": f"sha256:{tournament_id}",
+        "evidence_root": f"sha256:evidence:{tournament_id}:{miner_address}",
+        "evidence_state": "complete",
+        "locked_at": locked_at,
+    }
+
+
 def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(
@@ -1455,6 +1471,11 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
                             "tournament_result_score": 0.9,
                             "hidden_eval_score": 0.6,
                             "consistency_input_score": 0.3,
+                            "evaluation_state": "final",
+                            **poker_mtt_reward_ready_refs(
+                                f"poker-mtt-rated-{index}",
+                                wallet["address"],
+                            ),
                         }
                     ],
                 },
@@ -1504,6 +1525,7 @@ def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
                         "hidden_eval_score": 0.0,
                         "consistency_input_score": 0.0,
                         "evaluation_state": "final",
+                        **poker_mtt_reward_ready_refs("poker-mtt-api-daily-1", wallet_one["address"]),
                     },
                     {
                         "miner_id": wallet_two["address"],
@@ -1512,6 +1534,7 @@ def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
                         "hidden_eval_score": 0.0,
                         "consistency_input_score": 0.0,
                         "evaluation_state": "final",
+                        **poker_mtt_reward_ready_refs("poker-mtt-api-daily-1", wallet_two["address"]),
                     },
                 ],
             },
