@@ -49,6 +49,41 @@
 
 也就是说，当前阶段不去把 donor 改成“HTTP-only poker runtime”。
 
+### 2.4 ClawChain Phase 1 状态机冻结
+
+ClawChain 侧 Phase 1 只把 donor 当成 sidecar runtime，不把 donor 内部状态串直接升级为 ClawChain domain state。
+
+运行时状态机:
+
+```text
+scheduled -> start_requested -> sidecar_starting -> seating_ready -> running -> finalizing -> standings_ready -> completed
+```
+
+异常状态:
+
+```text
+failed_to_start
+cancelled
+void
+degraded
+manual_review
+```
+
+奖励和证据状态机:
+
+```text
+raw_ingested -> final_ranking_ready -> evidence_ready -> result_ready -> locked -> anchorable -> anchored
+```
+
+Phase 1 的硬约束:
+
+- `live_ranking` 只用于赛中观察和恢复，不进入 reward window
+- `final_ranking_ready` 必须来自 canonical standings，不直接等于 donor `FINISHED`
+- `result_ready` 不能只看 `evaluation_state=final`，还要有证据状态
+- `locked` 后才能进入日榜 / 周榜 reward window
+- `anchorable` 后才能进入 settlement batch anchor payload
+- post-anchor correction 只能 append / supersede，不能改旧 root
+
 ## 3. 证据基础
 
 本文档基于以下事实源：
