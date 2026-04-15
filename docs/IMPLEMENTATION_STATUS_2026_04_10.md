@@ -407,6 +407,12 @@ Implemented:
 - `poker_mtt_tournaments`, `poker_mtt_final_rankings`, and `poker_mtt_result_entries` service-side models
 - final ranking projection into `poker_mtt_result_entries`
 - evidence manifests for final ranking plus stubbed hidden-eval / HUD / hand-history evidence roots
+- `pokermtt/projector` payload builder for moving Go finalization rows across the Python projection boundary without donor room/session identity
+- Phase 1 HUD hot-store hook:
+  - disabled by default
+  - idempotent per hand checksum
+  - emits deterministic short-term HUD manifest roots
+  - full HUD/ELO scoring remains deferred
 - `poker_mtt_daily` / `poker_mtt_weekly` reward window projection artifacts
 - poker MTT settlement anchor payload hardening:
   - projection artifact is required before anchoring

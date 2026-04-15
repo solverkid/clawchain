@@ -173,12 +173,13 @@
 - 复用 settlement batch / anchor payload 链路
 - `poker_mtt_reward_windows_enabled` 控制自动日 / 周窗口生成
 - `poker_mtt_settlement_anchoring_enabled` 控制 poker MTT settlement batch 进入 anchor payload
+- `poker_mtt_hud` 只提供 disabled-by-default 的 hot-store / manifest hook，不在 Phase 1 计算完整 HUD/ELO reward weight
 
 它当前还没有做:
 
 - raw hand history ingest
 - MQ consumer
-- short-term HUD / long-term HUD projector
+- full short-term HUD / long-term HUD projector
 - ELO / public rating projector
 - `reputation_delta` 输出
 - final standings 的完整 canonicalization
