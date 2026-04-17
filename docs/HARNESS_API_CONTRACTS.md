@@ -848,6 +848,57 @@ Poker MTT Evidence Phase 2 的目标语义更严格：
 
 ---
 
+## 4.25 Poker MTT Phase 2 load / artifact contract
+
+Poker MTT 的万人 MTT 初期会出现约 2,000 桌并发完成手牌和 20k 级别 reward projection 行数。Phase 2 的 harness contract 是：
+
+- completed hand 一手结束后进入 hand-history ingest，不按单个 action 入库
+- `POST /admin/poker-mtt/reward-windows/build` 的正常响应不得返回 20k 条 `miner_reward_rows`
+- reward window 主 projection artifact 只保留：
+  - `projection_root`
+  - `miner_reward_rows_root`
+  - `artifact_page_count`
+  - `artifact_pages[]`，每个 page 只含 `page_index / row_count / page_root`
+- 每个 miner reward page 单独保存为 artifact：
+  - `kind = poker_mtt_reward_window_projection_page`
+  - `id = art:reward_window:{reward_window_id}:poker_mtt_projection:miner_rewards:{page_index}`
+  - `payload_json.miner_reward_rows[]` 是该页完整 rows
+- small window 可以保留 inline rows，但超过 configured page size 后必须转为 page refs
+
+`POST /admin/poker-mtt/reward-windows/build` 额外返回的 Phase 2 摘要字段：
+
+```json
+{
+  "artifact_page_count": 4,
+  "miner_reward_rows_root": "sha256:...",
+  "projection_artifact_id": "art:reward_window:rw_...:poker_mtt_projection"
+}
+```
+
+本地 load contract：
+
+```bash
+PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_load_contract.py
+bash scripts/poker_mtt/run_phase2_load_check.sh --players 30 --local
+```
+
+`run_phase2_load_check.sh --local` 是 offline synthetic check，不依赖 donor game server、Redis 或 WebSocket。它必须覆盖：
+
+- 30-player smoke MTT
+- 300-player medium field shape
+- 20k-player synthetic reward projection paging
+- 2,000-table early-stage hand-ingest burst shape
+
+最小 observability fields：
+
+```text
+poker_mtt.hand_ingest.count
+poker_mtt.hand_ingest.conflict_count
+poker_mtt.hud.project.duration_ms
+poker_mtt.reward_window.query.duration_ms
+poker_mtt.settlement_anchor.confirmation_state
+```
+
 ## 5. Public Write APIs
 
 ### Canonical signing payloads

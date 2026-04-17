@@ -27,6 +27,13 @@ POKER_MTT_PROJECTION_ROOT_FIELDS = (
     "multiplier_snapshot_root",
     "projection_root",
 )
+POKER_MTT_OBSERVABILITY_FIELDS = (
+    "poker_mtt.hand_ingest.count",
+    "poker_mtt.hand_ingest.conflict_count",
+    "poker_mtt.hud.project.duration_ms",
+    "poker_mtt.reward_window.query.duration_ms",
+    "poker_mtt.settlement_anchor.confirmation_state",
+)
 
 
 @dataclass(slots=True)
@@ -42,6 +49,7 @@ class ForecastSettings:
     poker_mtt_finalization_watermark_seconds: int = 21600
     poker_mtt_daily_policy_bundle_version: str = "poker_mtt_daily_policy_v1"
     poker_mtt_weekly_policy_bundle_version: str = "poker_mtt_weekly_policy_v1"
+    poker_mtt_projection_artifact_page_size: int = 5000
     baseline_pm_weight: float = 0.85
     baseline_bin_weight: float = 0.15
     min_p_yes_bps: int = 1500
@@ -413,6 +421,42 @@ def _build_anchor_job_id(settlement_batch_id: str, now: datetime) -> str:
 
 def _hash_sequence(items: list[dict] | list[str]) -> str:
     return _hash_payload({"items": items})
+
+
+def build_paged_poker_mtt_projection_payload(payload: dict, *, page_size: int = 5000) -> tuple[dict, list[dict]]:
+    if page_size <= 0:
+        raise ValueError("page_size must be positive")
+    projected = deepcopy(payload)
+    miner_reward_rows = list(projected.get("miner_reward_rows") or [])
+    miner_reward_rows_root = _hash_sequence(miner_reward_rows)
+    projected["miner_reward_rows_root"] = miner_reward_rows_root
+    if len(miner_reward_rows) <= page_size:
+        projected["artifact_page_count"] = 1
+        return projected, []
+
+    pages = []
+    page_refs = []
+    for page_index, start in enumerate(range(0, len(miner_reward_rows), page_size)):
+        rows = miner_reward_rows[start : start + page_size]
+        page_root = _hash_sequence(rows)
+        page = {
+            "page_index": page_index,
+            "row_count": len(rows),
+            "miner_reward_rows": rows,
+            "page_root": page_root,
+        }
+        pages.append(page)
+        page_refs.append(
+            {
+                "page_index": page_index,
+                "row_count": len(rows),
+                "page_root": page_root,
+            }
+        )
+    projected.pop("miner_reward_rows", None)
+    projected["artifact_page_count"] = len(pages)
+    projected["artifact_pages"] = page_refs
+    return projected, pages
 
 
 def _reward_window_payload(reward_window: dict) -> dict:
@@ -2765,14 +2809,21 @@ class ForecastMiningService:
             **(projection_metadata or {}),
         }
         projection_payload["projection_root"] = _hash_payload(projection_payload)
-        await self._upsert_poker_mtt_reward_window_projection_artifact(
+        projection_artifact = await self._upsert_poker_mtt_reward_window_projection_artifact(
             reward_window=saved,
             now=current,
             payload=projection_payload,
         )
         if has_positive_weight:
             await self._build_settlement_batches(current)
-        return await self.repo.get_reward_window(saved["id"]) or saved
+        returned = await self.repo.get_reward_window(saved["id"]) or saved
+        projection_artifact_payload = projection_artifact.get("payload_json") or {}
+        return {
+            **returned,
+            "artifact_page_count": projection_artifact_payload.get("artifact_page_count", 1),
+            "miner_reward_rows_root": projection_artifact_payload.get("miner_reward_rows_root"),
+            "projection_artifact_id": projection_artifact.get("id"),
+        }
 
     async def record_poker_mtt_correction(
         self,
@@ -3382,6 +3433,23 @@ class ForecastMiningService:
         now: datetime,
         payload: dict,
     ) -> dict:
+        payload, pages = build_paged_poker_mtt_projection_payload(
+            payload,
+            page_size=getattr(self.settings, "poker_mtt_projection_artifact_page_size", 5000),
+        )
+        for page in pages:
+            await self.repo.save_artifact(
+                {
+                    "id": f"art:reward_window:{reward_window['id']}:poker_mtt_projection:miner_rewards:{page['page_index']}",
+                    "kind": "poker_mtt_reward_window_projection_page",
+                    "entity_type": "reward_window",
+                    "entity_id": reward_window["id"],
+                    "payload_json": page,
+                    "payload_hash": page["page_root"],
+                    "created_at": isoformat_z(now),
+                    "updated_at": isoformat_z(now),
+                }
+            )
         artifact_id = f"art:reward_window:{reward_window['id']}:poker_mtt_projection"
         return await self.repo.save_artifact(
             {

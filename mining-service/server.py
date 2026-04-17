@@ -127,6 +127,7 @@ def _forecast_settings(settings: AppSettings) -> ForecastSettings:
         poker_mtt_finalization_watermark_seconds=getattr(settings, "poker_mtt_finalization_watermark_seconds", 21600),
         poker_mtt_daily_policy_bundle_version=getattr(settings, "poker_mtt_daily_policy_bundle_version", "poker_mtt_daily_policy_v1"),
         poker_mtt_weekly_policy_bundle_version=getattr(settings, "poker_mtt_weekly_policy_bundle_version", "poker_mtt_weekly_policy_v1"),
+        poker_mtt_projection_artifact_page_size=getattr(settings, "poker_mtt_projection_artifact_page_size", 5000),
         baseline_pm_weight=settings.baseline_pm_weight,
         baseline_bin_weight=settings.baseline_bin_weight,
         max_binance_snapshot_freshness_seconds=settings.max_binance_snapshot_freshness_seconds,

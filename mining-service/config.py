@@ -56,6 +56,9 @@ class AppSettings:
         "CLAWCHAIN_POKER_MTT_WEEKLY_POLICY_BUNDLE_VERSION",
         "poker_mtt_weekly_policy_v1",
     )
+    poker_mtt_projection_artifact_page_size: int = int(
+        os.getenv("CLAWCHAIN_POKER_MTT_PROJECTION_ARTIFACT_PAGE_SIZE", "5000")
+    )
     baseline_pm_weight: float = float(os.getenv("CLAWCHAIN_BASELINE_PM_WEIGHT", "0.85"))
     baseline_bin_weight: float = float(os.getenv("CLAWCHAIN_BASELINE_BIN_WEIGHT", "0.15"))
     max_binance_snapshot_freshness_seconds: int = int(
