@@ -11,6 +11,7 @@ from chain_adapter import build_anchor_tx_plan as build_chain_anchor_tx_plan
 from canonical import canonical_hash
 import poker_mtt_evidence
 import poker_mtt_history
+import poker_mtt_hud
 import poker_mtt_results
 from repository import MiningRepository
 
@@ -2230,7 +2231,41 @@ class ForecastMiningService:
                 generated_at=current,
             )
         ]
-        for kind in sorted(set(accepted_degraded_kinds or [])):
+        complete_kinds = {poker_mtt_evidence.FINAL_RANKING_MANIFEST_KIND}
+
+        hand_rows = await self.repo.list_poker_mtt_hand_events_for_tournament(tournament_id)
+        if hand_rows:
+            manifests.append(
+                poker_mtt_evidence.build_hand_history_manifest(
+                    tournament_id=tournament_id,
+                    rows=hand_rows,
+                    policy_bundle_version=policy_bundle_version,
+                    generated_at=current,
+                )
+            )
+            complete_kinds.add(poker_mtt_evidence.HAND_HISTORY_MANIFEST_KIND)
+
+        for hud_window, manifest_kind in (
+            ("short_term", poker_mtt_hud.SHORT_TERM_HUD_MANIFEST_KIND),
+            ("long_term", poker_mtt_hud.LONG_TERM_HUD_MANIFEST_KIND),
+        ):
+            hud_rows = await self.repo.list_poker_mtt_hud_snapshots(
+                tournament_id=tournament_id,
+                hud_window=hud_window,
+            )
+            if hud_rows:
+                manifests.append(
+                    poker_mtt_hud.build_hud_manifest(
+                        tournament_id=tournament_id,
+                        rows=hud_rows,
+                        policy_bundle_version=policy_bundle_version,
+                        generated_at=current,
+                        kind=manifest_kind,
+                    )
+                )
+                complete_kinds.add(manifest_kind)
+
+        for kind in sorted(set(accepted_degraded_kinds or []) - complete_kinds):
             manifests.append(
                 poker_mtt_evidence.build_stub_manifest(
                     kind=kind,
@@ -2268,6 +2303,11 @@ class ForecastMiningService:
         return {
             "tournament_id": tournament_id,
             "policy_bundle_version": policy_bundle_version,
+            "evidence_state": (
+                "accepted_degraded"
+                if any(manifest.get("evidence_state") == "accepted_degraded" for manifest in manifests)
+                else "complete"
+            ),
             "evidence_root": _hash_sequence(artifact_refs),
             "artifact_refs": artifact_refs,
             "generated_at": isoformat_z(current),

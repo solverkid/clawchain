@@ -14,6 +14,7 @@ if str(MINING_SERVICE_DIR) not in sys.path:
 import canonical
 import forecast_engine
 import poker_mtt_evidence
+import poker_mtt_history
 from repository import FakeRepository
 
 
@@ -207,6 +208,40 @@ def test_service_persists_stable_tournament_evidence_manifests():
     asyncio.run(scenario())
 
 
+def test_service_uses_real_hand_history_manifest_when_hand_events_exist():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await repo.save_poker_mtt_final_ranking(
+            {
+                "id": "poker_mtt_final_ranking:mtt-evidence-1:1:1",
+                **final_ranking_row("1:1", rank=1, chip=Decimal("7000.75")),
+            }
+        )
+        await repo.save_poker_mtt_hand_event(completed_hand_event("mtt-evidence-1", "table-1", 1))
+
+        result = await service.build_poker_mtt_evidence_manifests(
+            tournament_id="mtt-evidence-1",
+            policy_bundle_version="poker_mtt_v1",
+            accepted_degraded_kinds=[
+                "poker_mtt_hidden_eval_manifest",
+                "poker_mtt_short_term_hud_manifest",
+                "poker_mtt_long_term_hud_manifest",
+            ],
+            now=datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        artifacts = await repo.list_artifacts_for_entity("poker_mtt_tournament", "mtt-evidence-1")
+        hand_manifest = next(artifact for artifact in artifacts if artifact["kind"] == "poker_mtt_hand_history_manifest")
+
+        assert result["evidence_state"] == "accepted_degraded"
+        assert hand_manifest["payload_json"]["evidence_state"] == "complete"
+        assert hand_manifest["payload_json"]["row_count"] == 1
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def final_ranking_row(member_id: str, *, rank: int, chip: Decimal) -> dict:
     return {
         "tournament_id": "mtt-evidence-1",
@@ -222,3 +257,22 @@ def final_ranking_row(member_id: str, *, rank: int, chip: Decimal) -> dict:
         "zset_score": float(chip),
         "updated_at": "2026-04-10T12:00:00Z",
     }
+
+
+def completed_hand_event(tournament_id: str, table_id: str, hand_no: int) -> dict:
+    return poker_mtt_history.build_hand_completed_event(
+        tournament_id=tournament_id,
+        table_id=table_id,
+        hand_no=hand_no,
+        version=1,
+        payload={"pot": 120, "actions": [{"seat": 2, "type": "call"}]},
+        source={
+            "transport": "rocketmq",
+            "topic": "POKER_RECORD_TOPIC",
+            "message_id": f"msg-{tournament_id}-{table_id}-{hand_no}",
+            "biz_id": f"biz-{tournament_id}-{table_id}-{hand_no}",
+            "record_type": "recordType",
+            "source_mtt_id": tournament_id,
+            "source_room_id": table_id,
+        },
+    )
