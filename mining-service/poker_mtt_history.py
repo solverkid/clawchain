@@ -82,6 +82,27 @@ class InMemoryHandHistoryHotStore:
         return HandHistoryIngestResult(state="updated", event=deepcopy(event), previous_event=deepcopy(existing))
 
 
+class RepositoryHandHistoryStore:
+    def __init__(self, repo) -> None:
+        self.repo = repo
+
+    async def get(self, hand_id: str) -> dict | None:
+        return await self.repo.get_poker_mtt_hand_event(hand_id)
+
+    async def list_for_tournament(self, tournament_id: str) -> list[dict]:
+        return await self.repo.list_poker_mtt_hand_events_for_tournament(tournament_id)
+
+    async def ingest(self, event: dict) -> HandHistoryIngestResult:
+        _validate_hand_completed_event(event)
+        result = await self.repo.save_poker_mtt_hand_event(event)
+        return HandHistoryIngestResult(
+            state=result["state"],
+            event=deepcopy(result),
+            previous_event=deepcopy(result.get("previous_event")),
+            reason=result.get("conflict_reason"),
+        )
+
+
 def build_hand_completed_event(
     *,
     tournament_id: str,

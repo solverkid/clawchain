@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -9,6 +10,7 @@ from typing import Iterable
 from chain_adapter import build_anchor_tx_plan as build_chain_anchor_tx_plan
 from canonical import canonical_hash
 import poker_mtt_evidence
+import poker_mtt_history
 import poker_mtt_results
 from repository import MiningRepository
 
@@ -2269,6 +2271,25 @@ class ForecastMiningService:
             "evidence_root": _hash_sequence(artifact_refs),
             "artifact_refs": artifact_refs,
             "generated_at": isoformat_z(current),
+        }
+
+    async def ingest_poker_mtt_hand_event(
+        self,
+        event: dict,
+        *,
+        now: datetime | str | None = None,
+    ) -> dict:
+        current = as_utc_datetime(now or utc_now()).replace(microsecond=0)
+        event_payload = deepcopy(event)
+        event_payload.setdefault("created_at", isoformat_z(current))
+        event_payload["updated_at"] = isoformat_z(current)
+        store = poker_mtt_history.RepositoryHandHistoryStore(self.repo)
+        result = await store.ingest(event_payload)
+        return {
+            "state": result.state,
+            "event": result.event,
+            "previous_event": result.previous_event,
+            "reason": result.reason,
         }
 
     async def build_poker_mtt_reward_window(

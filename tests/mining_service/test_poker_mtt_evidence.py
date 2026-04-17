@@ -125,6 +125,34 @@ def test_accepted_degraded_stub_manifests_are_empty_and_hashable():
     assert manifest["manifest_root"].startswith("sha256:")
 
 
+def test_hand_history_manifest_uses_persisted_hand_event_rows():
+    generated_at = datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        {
+            "tournament_id": "mtt-evidence-1",
+            "hand_id": "mtt-evidence-1:table-2:9",
+            "table_id": "table-2",
+            "hand_no": 9,
+            "version": 1,
+            "checksum": "sha256:" + "a" * 64,
+            "ingest_state": "inserted",
+        }
+    ]
+
+    manifest = poker_mtt_evidence.build_hand_history_manifest(
+        tournament_id="mtt-evidence-1",
+        rows=rows,
+        policy_bundle_version="poker_mtt_v1",
+        generated_at=generated_at,
+    )
+
+    assert manifest["kind"] == "poker_mtt_hand_history_manifest"
+    assert manifest["evidence_state"] == "complete"
+    assert manifest["row_count"] == 1
+    assert manifest["row_sort_keys"] == ["tournament_id", "table_id", "hand_no", "hand_id"]
+    assert manifest["manifest_root"].startswith("sha256:")
+
+
 def test_service_persists_stable_tournament_evidence_manifests():
     async def scenario():
         repo = FakeRepository()

@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import forecast_engine
+import poker_mtt_history
 import server
 from config import AppSettings
 from setup import generate_wallet
@@ -1591,3 +1592,39 @@ def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
         assert submitted_batch["state"] == "anchor_submitted"
         assert anchor_jobs[0]["settlement_batch_id"] == settlement_batches[0]["id"]
         assert chain_tx_plan["future_msg"]["value"]["settlement_batch_id"] == settlement_batches[0]["id"]
+
+
+def test_admin_ingest_poker_mtt_hand_event_persists_completed_hand():
+    clock = FrozenClock(datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+    event = poker_mtt_history.build_hand_completed_event(
+        tournament_id="poker-mtt-hand-api-1",
+        table_id="table-1",
+        hand_no=42,
+        version=1,
+        payload={"pot": 120, "actions": [{"seat": 2, "type": "call"}]},
+        source={
+            "transport": "rocketmq",
+            "topic": "POKER_RECORD_TOPIC",
+            "message_id": "msg-api-hand-42",
+            "biz_id": "biz-api-hand-42",
+            "record_type": "recordType",
+            "source_mtt_id": "donor-mtt-api-1",
+            "source_room_id": "donor-room-api-1",
+        },
+    )
+
+    with TestClient(app) as client:
+        inserted = client.post("/admin/poker-mtt/hands/ingest", json=event)
+        duplicate = client.post("/admin/poker-mtt/hands/ingest", json=event)
+
+        assert inserted.status_code == 200
+        assert duplicate.status_code == 200
+        assert inserted.json()["state"] == "inserted"
+        assert duplicate.json()["state"] == "duplicate"
+        assert inserted.json()["event"]["hand_id"] == "poker-mtt-hand-api-1:table-1:42"
+        assert inserted.json()["event"]["payload_json"]["pot"] == 120

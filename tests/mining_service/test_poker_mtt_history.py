@@ -119,6 +119,24 @@ def test_postgres_repository_exposes_hand_event_methods():
     assert callable(getattr(PostgresRepository, "list_poker_mtt_hand_events_for_tournament"))
 
 
+def test_repository_backed_hand_history_store_ingests_and_lists_tournament_hands():
+    async def scenario():
+        from repository import FakeRepository
+
+        store = poker_mtt_history.RepositoryHandHistoryStore(FakeRepository())
+        first = await store.ingest(hand_event(version=1, pot_amount=120))
+        second = await store.ingest(hand_event(version=1, pot_amount=120))
+        rows = await store.list_for_tournament("mtt-history-1")
+
+        assert first.state == "inserted"
+        assert second.state == "duplicate"
+        assert [row["hand_id"] for row in rows] == ["mtt-history-1:table-1:42"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def hand_event(*, version: int | None, pot_amount: int, payload: dict | None = None) -> dict:
     payload = payload or {"pot": pot_amount, "actions": [{"seat": 2, "type": "call"}]}
     return poker_mtt_history.build_hand_completed_event(

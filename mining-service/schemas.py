@@ -78,6 +78,18 @@ class ApplyPokerMTTResultsRequest(BaseModel):
     results: list[PokerMTTResultItem]
 
 
+class PokerMTTHandCompletedEventRequest(BaseModel):
+    schema_version: str
+    event_type: str
+    event_id: str
+    source: dict = Field(default_factory=dict)
+    identity: dict
+    checksum: str
+    canonicalization: dict = Field(default_factory=dict)
+    payload: dict
+    version: int | None = None
+
+
 class PokerMTTFinalRankingRow(BaseModel):
     id: str
     tournament_id: str

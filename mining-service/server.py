@@ -26,6 +26,7 @@ from repository import FakeRepository
 from schemas import (
     ApplyArenaResultsRequest,
     ApplyPokerMTTFinalRankingProjectionRequest,
+    PokerMTTHandCompletedEventRequest,
     ApplyPokerMTTResultsRequest,
     BuildPokerMTTRewardWindowRequest,
     CommitRequest,
@@ -862,6 +863,16 @@ def create_app(
             status = 404 if "miner not found" in detail else 400
             raise HTTPException(status_code=status, detail=detail)
         return result
+
+    @app.post("/admin/poker-mtt/hands/ingest")
+    async def ingest_poker_mtt_hand(payload: PokerMTTHandCompletedEventRequest):
+        try:
+            return await service().ingest_poker_mtt_hand_event(
+                payload.model_dump(exclude_none=True),
+                now=now(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/admin/poker-mtt/results/apply")
     async def apply_poker_mtt_results(payload: ApplyPokerMTTResultsRequest):
