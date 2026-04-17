@@ -75,6 +75,14 @@ manual_review
 raw_ingested -> final_ranking_ready -> evidence_ready -> result_ready -> locked -> anchorable -> anchored
 ```
 
+Poker MTT Evidence Phase 2 统一把 evidence 子状态展开为:
+
+```text
+raw_ingested -> replay_ready -> hud_ready -> hidden_eval_ready -> final_ranking_ready -> result_ready -> locked -> anchorable -> anchored
+```
+
+这不是说 final ranking 必须等待所有 hand evidence 才能被保存；它只表示 **reward-ready / anchorable** 必须等 final ranking 与 evidence component roots 都满足 policy。执行计划见 `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`。
+
 Phase 1 的硬约束:
 
 - `live_ranking` 只用于赛中观察和恢复，不进入 reward window
@@ -671,6 +679,14 @@ phase 1 可以明确把“读 donor Redis”作为正式方案，而不是临时
 
 - **不要假设 donor 现在已经有一个干净的全量 standings HTTP API**
 - **phase 1 全量 standings 直接读 donor Redis**
+
+Phase 2 的补充约束：
+
+- 直接读 donor Redis 只能发生在 `pokermtt/ranking` 这类 versioned adapter / finalizer 边界里
+- domain 和 reward 层不能把 donor Redis key 当作隐式真相
+- finalizer 必须有 stable snapshot barrier / retry policy，避免 `rankingUserInfo`、alive zset、died list 在三次读取中漂移
+- final ranking 一旦 locked，后续修正只能 append / supersede，不能原地改旧 root
+- 20k entrant / 2k early tables 目标必须通过 finalizer memory/time、Redis key size、reward-window indexed query、paged projection artifact 的测试 gate 后再提高奖励额度
 
 ## 9. late join / reentry 的真实语义
 

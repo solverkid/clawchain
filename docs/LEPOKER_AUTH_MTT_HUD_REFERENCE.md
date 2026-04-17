@@ -719,6 +719,31 @@ auth 只是入口适配，不该成为 `poker mtt` 领域层的核心依赖。
 - 如果是在问“结果怎么存、榜怎么做、HUD 怎么算、auth 怎么接”
   - 先看 `lepoker-auth`
 
+### 13.0 Poker MTT Evidence Phase 2 borrow matrix
+
+2026-04-17 六 agent 复核后，Phase 2 对 donor 的借鉴边界进一步收窄为“借结构，不搬服务”：
+
+| donor concept | ClawChain target | Phase 2 简化方式 |
+|---|---|---|
+| `TokenValid` / user context | `authadapter/*`, `pokermtt/identity/*` | 只输出 `Principal`；Cognito/JWKS/admin token 留在 adapter，不进 domain |
+| `MttService` control plane | Go control/read model | 拆成 control、registration、scheduler、sidecar adapter；不搬 6000 行 Java service |
+| `saveMTTRankingInfo()` | `pokermtt/ranking.Finalizer` + `poker_mtt_final_rankings` | live Redis snapshot 只做 finalizer 输入；reward 只吃 canonical final ranking |
+| `RecordListener` / `RecordCalculateListener` | hand event ingest / consumer checkpoint | MQ 只是 transport；event idempotency、version、checksum 才是 ClawChain contract |
+| `HandHistoryService.upsertHandHistory()` | `poker_mtt_hand_events` / optional DynamoDB adapter | 一手完成后一条 durable write；same version checksum mismatch 进入 conflict |
+| `calculateCommonHUD()` | `short_term_hud` projector | 服务 hidden eval / risk，不直接发币 |
+| `calculateMTTSpecialHUD()` | `long_term_hud` / rating snapshot | 服务 consistency / public rating / multiplier 慢变量 |
+| donor ELO / leaderboard | `poker_mtt_public_rating` / `poker_mtt_public_rank` | 展示、匹配、风控辅助；不做正向 reward weight |
+| DynamoDB user history GSIs | hand evidence store read model | DynamoDB 是生产候选；ClawChain core 只依赖 storage interface |
+
+不要借：
+
+- wallet / ticket / clan / private-room / gold-coin 语义
+- dynamic prize pool / bounty / rebuy / add-on / late registration，除非后续单独立项
+- `MttService` 巨型业务中台形状
+- ELO 或 public leaderboard 直接发币
+- raw hand history 上链
+- MQ consumer 直接变 scoring engine
+
 ### 13.1 Phase 1 不要实现的东西
 
 Phase 1 只做 reference-driven adapter 和 projection，不做完整 donor control plane 迁移。

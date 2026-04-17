@@ -2,9 +2,10 @@
 
 **版本**: 0.1
 **日期**: 2026-04-10
-**状态**: Phase 1 设计 + 实现状态对齐
+**状态**: Phase 1 设计 + 实现状态对齐；2026-04-17 已补 Poker MTT Evidence Phase 2 计划入口
 **范围**: `poker mtt` 独立产品线，不混入现有 `arena / bluff arena` 语义
 **依赖前提**: `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
+**Phase 2 执行源头**: `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`
 
 ---
 
@@ -85,6 +86,23 @@
 13. controlled bot / shadow samples 属于 hidden evaluation evidence，不改变 public rated tournament 的 `human_only` 口径；如果 bot 进入公开对局，则该样本不得进入 human-only multiplier
 14. Go 版实现边界优先按仓库现有 `arena/*` 风格新开顶层 `pokermtt/*`，不要放进 `arena/*`，也不要把 donor Java structs 穿透进 ClawChain domain model
 15. Phase 1 reward / settlement 必须有显式 rollout gate：默认不自动打开 `poker_mtt_daily` / `poker_mtt_weekly` 发奖，也默认不把 poker MTT settlement batch 锚上链
+
+### 2.3.1 2026-04-17 Phase 2 综合评审后的新增冻结口径
+
+这轮 Phase 2 不是 ClawChain 产品总 Phase 2，也不是链上 reputation Phase 3。为了避免文档混淆，后续统一叫：
+
+**Poker MTT Evidence Phase 2**
+
+新增冻结口径：
+
+1. Phase 2 的主目标是 evidence-backed rewards beta：把 raw completed hand、HUD、hidden eval、rating / multiplier snapshot、reward projection root、settlement anchor verification 补成可审计链路
+2. Phase 2 先扩 `mining-service` 的 evidence / scoring / snapshot / settlement 合约；Go 侧优先补 durable finalization worker 和 typed handoff，不迁移奖励公式
+3. `poker_mtt_history.py` / `poker_mtt_hud.py` 当前是 in-memory / disabled-by-default 语义，不能被描述为生产 evidence store
+4. hidden eval 必须由服务端从 sealed inputs、hand history、HUD、baseline / control samples 生成；legacy/admin apply 不能凭请求字段提供 reward-ready hidden score
+5. DynamoDB 是 completed-hand hot store 的优先生产候选，但 ClawChain domain 只依赖 hand evidence store interface；本地和测试可以先用 Postgres / fake repository
+6. `x/settlement` 现在是 tamper-evident root registry，不是链上发奖执行器；Phase 2 必须补 anchor query 和 state-confirmation，不只看 tx code
+7. `x/reputation` 暂不进入 Phase 2 写路径；它要等 window-level reputation delta schema 和 correction policy 成熟后再接
+8. 10k-20k MTT 目标要求 indexed reward-window queries、paged artifacts、observability 和 staged load tests；不能长期依赖 all-result scans 或单 payload 装完整 miner rows
 
 ### 2.4 术语表
 
@@ -1267,20 +1285,22 @@ hidden eval 和 reputation 都不该单独承担反作弊结论。
 - 不碰链上 reputation 主逻辑
 - 不做复杂 hidden replay
 
-做法：
+原始设计里的“Phase 1 做法”包含 DynamoDB raw hand history 等内容。以 2026-04-17 实现状态为准，当前 Phase 1 已落地的是：
 
-1. 新增 DynamoDB `poker_mtt_hands`
-2. 新增 DynamoDB `poker_mtt_table_state`
-3. 新增 `poker_mtt_result_entries`
-4. 每场只写：
-   - `tournament_result_score`
-   - 简化版 `hidden_eval_score`
-   - `consistency_input_score`
-   - `total_score`
-5. 新增 `poker_mtt_multiplier`
-6. 按日 / 周生成 reward window
-7. 复用 settlement batch anchor 上链
-8. 默认关闭自动 reward window 和 poker settlement anchoring，等 final ranking / evidence / projection 测试通过后再按环境打开 gate
+1. 顶层 `authadapter/*` 和 `pokermtt/*`，不混入 `arena/*`
+2. donor sidecar HTTP / WS / Redis ranking adapter
+3. canonical final ranking finalizer 与 result apply payload builder
+4. `poker_mtt_tournaments`
+5. `poker_mtt_final_rankings`
+6. `poker_mtt_result_entries`
+7. `miners.poker_mtt_multiplier`
+8. final ranking -> reward-bearing result projection
+9. daily / weekly `poker_mtt_*` reward window builder
+10. settlement batch / anchor payload projection roots
+11. rollout gates:
+    - `CLAWCHAIN_POKER_MTT_REWARD_WINDOWS_ENABLED`
+    - `CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED`
+12. `x/settlement` authorized submitter whitelist
 
 Phase 1 不做：
 
@@ -1290,23 +1310,41 @@ Phase 1 不做：
 - Java monolith port
 - Cognito 强耦合
 - MQ consumer 直接变成 scoring engine
+- production completed-hand store
+- full short-term / long-term HUD projector
+- real hidden seed / bot / shadow eval pipeline
 
 ## 13.2 Phase 2
 
 目标：
 
-- 把 hidden eval 做深
-- 把 rating / consistency 做稳
+- 把 evidence 做成真实可重放链路
+- 把 hidden eval 做成服务端生成、可审计但不可公开逆推的评分输入
+- 把 rating / consistency / multiplier snapshot 做稳
+- 把 settlement anchor confirmation 从“tx 成功”提升到“链上 state 匹配”
+- 为 10k-20k MTT 和 2k early tables 做 indexed query、paged artifact、observability、load harness
 
 做法：
 
-1. 加 `hidden seed tables`
-2. 加 `baseline bot tables`
-3. 加 `poker_mtt_hidden_eval_entries`
-4. 加 `poker_mtt_rating_snapshots`
-5. 视成本再把历史 hand 做冷归档到 S3
-6. 补 short-term HUD / long-term HUD projector
-7. 补 public replay 与 evidence replay 的访问边界
+1. 加 persistent hand evidence store:
+   - `poker_mtt_hand_events`
+   - `poker_mtt_table_upload_states`
+   - `poker_mtt_consumer_checkpoints`
+2. 加 HUD / hidden eval / rating / multiplier snapshot:
+   - `poker_mtt_short_term_hud_snapshots`
+   - `poker_mtt_long_term_hud_snapshots`
+   - `poker_mtt_hidden_eval_entries`
+   - `poker_mtt_rating_snapshots`
+   - `poker_mtt_multiplier_snapshots`
+3. 补 Go finalization worker:
+   - stable Redis snapshot barrier
+   - canonical final rankings
+   - typed mining-service handoff
+4. 补 `x/settlement` anchor query 和 typed state confirmation
+5. 补 correction / supersession policy，anchored root 永不原地改
+6. 补 admin/auth protection、production identity binding、economic unit eligibility
+7. 补 load / scale / recovery / observability gates
+8. 详细执行步骤见 `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`
 
 ## 13.3 Phase 3
 

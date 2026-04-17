@@ -551,6 +551,26 @@ tournament result
 - final ranking 可能晚于比赛结束出现，因为 donor finish handling、hand history、hidden eval、evidence lock 都是异步链路
 - 公开侧使用 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived internal `total_score`
 
+2026-04-17 后续执行口径统一为 **Poker MTT Evidence Phase 2**。它不是 ClawChain 产品总 Phase 2，也不是链上 reputation 阶段，范围只包含：
+
+- completed-hand evidence ingest
+- final ranking durable handoff
+- short-term / long-term HUD projector
+- service-owned hidden eval
+- `poker_mtt_public_rank` / `poker_mtt_public_rating`
+- multiplier / rating snapshot
+- daily / weekly reward-window hardening
+- settlement anchor query / verification
+- 10k-20k MTT scale gate 和 abuse / recovery gate
+
+它明确不包含：
+
+- per-hand / per-game on-chain writes
+- public ELO 直接参与奖励权重
+- `x/reputation` 直接写入
+- donor Java monolith port
+- 高价值 mainnet 奖励默认开启
+
 面向用户只展示:
 
 - 当前 MTT 状态
@@ -567,7 +587,7 @@ tournament result
 - 风控阈值
 - 单场 multiplier 草算值
 
-详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md) 和 [docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md)。
+详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md)、[docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md) 和 [docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md)。
 
 ### 5.6 anti-abuse、review 与成熟度
 

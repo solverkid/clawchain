@@ -646,6 +646,13 @@ Alpha 当前最小 operator 查询面。
   - 保持 `anchor_submitted`
 - 每次确认都会在 artifact ledger 中写入 `chain_confirmation_receipt`
 
+Poker MTT Evidence Phase 2 的目标语义更严格：
+
+- typed `x/settlement` anchor 不能只靠 `tx code = 0` 标记完成
+- 服务端必须通过 settlement anchor query 验证 batch id、canonical root、anchor payload hash、lane、policy、window、reward roots 与本地计划一致
+- fallback memo tx 如果保留，只能标记为 fallback/memo confirmed，不能等同于 typed `x/settlement` anchored
+- 这个加强项落在 `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md` 的 settlement anchor query / verification 任务
+
 ## 4.21 `POST /admin/anchor-jobs/reconcile-chain`
 
 当前 runtime 的最小批量链确认 sweep 写面。

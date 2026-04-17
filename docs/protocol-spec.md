@@ -207,8 +207,11 @@ After each epoch is settled, the mining service computes a deterministic settlem
 
 ### Anchoring
 
-- **On-chain** (preferred): `clawchaind tx bank send ... --memo "anchor:epoch:{N}:{settlement_root}"`
-- **Local fallback**: Written to `data/anchors.json` when the chain is not reachable
+- **Typed settlement anchor** (current preferred path for reward windows): `clawchaind tx settlement anchor-batch ...`, which records the batch root through `x/settlement` and requires an authorized submitter.
+- **Memo fallback** (legacy / degraded fallback): `clawchaind tx bank send ... --memo "anchor:epoch:{N}:{settlement_root}"`. This can prove a memo tx exists, but it is not equivalent to typed `x/settlement` state.
+- **Local fallback**: Written to `data/anchors.json` when the chain is not reachable.
+
+Poker MTT Evidence Phase 2 must treat typed `x/settlement` anchoring as a state query problem, not only a tx-success problem: the service should confirm the stored batch id, canonical root, payload hash, policy, lane, and window fields before marking a batch as chain anchored.
 
 ### Verification
 
