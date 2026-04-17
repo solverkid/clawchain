@@ -25,6 +25,7 @@ from models import (
     poker_mtt_hidden_eval_entries,
     poker_mtt_rating_snapshots,
     poker_mtt_multiplier_snapshots,
+    poker_mtt_corrections,
     poker_mtt_final_rankings,
     poker_mtt_result_entries,
 )
@@ -263,6 +264,13 @@ def _poker_mtt_multiplier_snapshot_values(row: dict, *, created_at: datetime | s
     return values
 
 
+def _poker_mtt_correction_values(correction: dict) -> dict:
+    values = deepcopy(correction)
+    if "created_at" in values and values["created_at"] is not None:
+        values["created_at"] = _maybe_dt(values["created_at"])
+    return values
+
+
 def _poker_mtt_final_ranking_values(final_ranking: dict) -> dict:
     values = deepcopy(final_ranking)
     for field in ("locked_at", "anchorable_at", "created_at", "updated_at"):
@@ -430,6 +438,15 @@ def _poker_mtt_multiplier_snapshot_row_to_dict(row) -> dict | None:
     for field in ("created_at", "updated_at"):
         if field in data and isinstance(data[field], datetime):
             data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_correction_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    if "created_at" in data and isinstance(data["created_at"], datetime):
+        data["created_at"] = data["created_at"].isoformat().replace("+00:00", "Z")
     return data
 
 
@@ -651,6 +668,18 @@ class PostgresRepository:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_multiplier_source_result "
                     "ON poker_mtt_multiplier_snapshots (source_result_id)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_results_locked_reward_window "
+                    "ON poker_mtt_result_entries (locked_at, rated_or_practice, human_only, evaluation_state)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_corrections_target "
+                    "ON poker_mtt_corrections (target_entity_type, target_entity_id)"
                 )
             )
 
@@ -1365,3 +1394,70 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             rows = await conn.execute(query)
             return [_poker_mtt_result_row_to_dict(row) for row in rows.fetchall()]
+
+    async def list_poker_mtt_results_for_reward_window(
+        self,
+        *,
+        lane: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        include_provisional: bool,
+        policy_bundle_version: str,
+    ) -> list[dict]:
+        window_start = _maybe_dt(window_start_at)
+        window_end = _maybe_dt(window_end_at)
+        query = (
+            select(poker_mtt_result_entries)
+            .where(poker_mtt_result_entries.c.locked_at.is_not(None))
+            .where(poker_mtt_result_entries.c.locked_at >= window_start)
+            .where(poker_mtt_result_entries.c.locked_at < window_end)
+            .where(poker_mtt_result_entries.c.rated_or_practice == "rated")
+            .where(poker_mtt_result_entries.c.human_only.is_(True))
+            .where(poker_mtt_result_entries.c.evaluation_state == "final")
+            .where(poker_mtt_result_entries.c.evaluation_version.is_not(None))
+            .where(poker_mtt_result_entries.c.evidence_state.in_(["complete", "accepted_degraded"]))
+            .where(poker_mtt_result_entries.c.final_ranking_id.is_not(None))
+            .where(poker_mtt_result_entries.c.standing_snapshot_id.is_not(None))
+            .where(poker_mtt_result_entries.c.evidence_root.is_not(None))
+            .where(poker_mtt_result_entries.c.rank_state == "ranked")
+            .where(poker_mtt_result_entries.c.no_multiplier_reason.is_(None))
+            .where(poker_mtt_result_entries.c.eligible_for_multiplier.is_(True))
+            .order_by(poker_mtt_result_entries.c.locked_at.asc(), poker_mtt_result_entries.c.id.asc())
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_result_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_correction(self, correction: dict) -> dict:
+        values = _poker_mtt_correction_values(correction)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(
+                select(poker_mtt_corrections.c.id).where(poker_mtt_corrections.c.id == correction["id"])
+            )
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_corrections)
+                    .where(poker_mtt_corrections.c.id == correction["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_corrections).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_corrections).where(poker_mtt_corrections.c.id == correction["id"]))
+            return _poker_mtt_correction_row_to_dict(row.first()) or values
+
+    async def list_poker_mtt_corrections(
+        self,
+        *,
+        target_entity_type: str | None = None,
+        target_entity_id: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_corrections)
+        if target_entity_type is not None:
+            query = query.where(poker_mtt_corrections.c.target_entity_type == target_entity_type)
+        if target_entity_id is not None:
+            query = query.where(poker_mtt_corrections.c.target_entity_id == target_entity_id)
+        query = query.order_by(poker_mtt_corrections.c.created_at.asc(), poker_mtt_corrections.c.id.asc())
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_correction_row_to_dict(row) for row in rows.fetchall()]

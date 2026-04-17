@@ -375,6 +375,21 @@ poker_mtt_multiplier_snapshots = Table(
 )
 
 
+poker_mtt_corrections = Table(
+    "poker_mtt_corrections",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("target_entity_type", String, nullable=False),
+    Column("target_entity_id", String, nullable=False),
+    Column("previous_root", String, nullable=False),
+    Column("corrected_root", String, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("operator_id", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_corrections_target", "target_entity_type", "target_entity_id"),
+)
+
+
 poker_mtt_final_rankings = Table(
     "poker_mtt_final_rankings",
     metadata,
@@ -457,6 +472,7 @@ poker_mtt_result_entries = Table(
     Column("no_multiplier_reason", String, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_results_locked_reward_window", "locked_at", "rated_or_practice", "human_only", "evaluation_state"),
     UniqueConstraint("tournament_id", "miner_address", name="uq_poker_mtt_result_tournament_miner"),
 )
 
@@ -479,6 +495,7 @@ TABLES = {
     "poker_mtt_hidden_eval_entries": poker_mtt_hidden_eval_entries,
     "poker_mtt_rating_snapshots": poker_mtt_rating_snapshots,
     "poker_mtt_multiplier_snapshots": poker_mtt_multiplier_snapshots,
+    "poker_mtt_corrections": poker_mtt_corrections,
     "poker_mtt_final_rankings": poker_mtt_final_rankings,
     "poker_mtt_result_entries": poker_mtt_result_entries,
 }

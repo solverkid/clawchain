@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Protocol
 
 
@@ -91,6 +92,22 @@ class MiningRepository(Protocol):
         eligible_only: bool = False,
         limit: int | None = None,
     ) -> list[dict]: ...
+    async def list_poker_mtt_results_for_reward_window(
+        self,
+        *,
+        lane: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        include_provisional: bool,
+        policy_bundle_version: str,
+    ) -> list[dict]: ...
+    async def save_poker_mtt_correction(self, correction: dict) -> dict: ...
+    async def list_poker_mtt_corrections(
+        self,
+        *,
+        target_entity_type: str | None = None,
+        target_entity_id: str | None = None,
+    ) -> list[dict]: ...
 
 
 class FakeRepository:
@@ -113,6 +130,7 @@ class FakeRepository:
         self._poker_mtt_multiplier_snapshots: dict[str, dict] = {}
         self._poker_mtt_final_rankings: dict[str, dict] = {}
         self._poker_mtt_results: dict[str, dict] = {}
+        self._poker_mtt_corrections: dict[str, dict] = {}
         self._request_index: dict[str, dict] = {}
 
     async def register_miner(self, miner: dict) -> dict:
@@ -589,6 +607,64 @@ class FakeRepository:
             items = items[:limit]
         return items
 
+    async def list_poker_mtt_results_for_reward_window(
+        self,
+        *,
+        lane: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        include_provisional: bool,
+        policy_bundle_version: str,
+    ) -> list[dict]:
+        window_start = _utc_iso(window_start_at)
+        window_end = _utc_iso(window_end_at)
+        items = []
+        for entry in self._poker_mtt_results.values():
+            locked_at = entry.get("locked_at")
+            if not locked_at or not (window_start <= _utc_iso(locked_at) < window_end):
+                continue
+            if entry.get("rated_or_practice") != "rated":
+                continue
+            if entry.get("human_only") is not True:
+                continue
+            if entry.get("evaluation_state") != "final":
+                continue
+            if not entry.get("evaluation_version"):
+                continue
+            if entry.get("evidence_state") not in {"complete", "accepted_degraded"}:
+                continue
+            if not entry.get("final_ranking_id") or not entry.get("standing_snapshot_id") or not entry.get("evidence_root"):
+                continue
+            if entry.get("rank_state") != "ranked":
+                continue
+            if entry.get("no_multiplier_reason") is not None:
+                continue
+            if entry.get("eligible_for_multiplier") is not True:
+                continue
+            items.append(deepcopy(entry))
+        items.sort(key=lambda item: (_utc_iso(item.get("locked_at")), item.get("id") or ""))
+        return items
+
+    async def save_poker_mtt_correction(self, correction: dict) -> dict:
+        current = deepcopy(self._poker_mtt_corrections.get(correction["id"], {}))
+        current.update(deepcopy(correction))
+        self._poker_mtt_corrections[correction["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_corrections(
+        self,
+        *,
+        target_entity_type: str | None = None,
+        target_entity_id: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(correction) for correction in self._poker_mtt_corrections.values()]
+        if target_entity_type is not None:
+            items = [item for item in items if item.get("target_entity_type") == target_entity_type]
+        if target_entity_id is not None:
+            items = [item for item in items if item.get("target_entity_id") == target_entity_id]
+        items.sort(key=lambda item: (item.get("created_at") or "", item.get("id") or ""))
+        return items
+
 
 def _normalize_poker_mtt_hand_event(event: dict) -> dict:
     identity = event.get("identity") or {}
@@ -612,6 +688,12 @@ def _normalize_poker_mtt_hand_event(event: dict) -> dict:
         if field in event:
             row[field] = deepcopy(event[field])
     return row
+
+
+def _utc_iso(value) -> str:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return str(value)
 
 
 def _normalize_poker_mtt_hud_snapshot(row: dict) -> dict:

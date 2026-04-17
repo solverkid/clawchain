@@ -15,6 +15,57 @@ import forecast_engine
 from repository import FakeRepository
 
 
+def test_poker_mtt_reward_window_uses_indexed_locked_range_query():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_poker_mtt_result(locked_result("mtt-in", "claw1in", locked_at="2026-04-10T10:00:00Z"))
+        await repo.save_poker_mtt_result(locked_result("mtt-out", "claw1out", locked_at="2026-04-09T10:00:00Z"))
+
+        rows = await repo.list_poker_mtt_results_for_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, tzinfo=timezone.utc),
+            include_provisional=False,
+            policy_bundle_version="poker_mtt_v1",
+        )
+
+        assert [row["tournament_id"] for row in rows] == ["mtt-in"]
+
+    asyncio.run(scenario())
+
+
+def test_poker_mtt_correction_appends_record_without_mutating_anchored_result():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        anchored = {
+            **locked_result("mtt-correction", "claw1corrected", locked_at="2026-04-10T10:00:00Z"),
+            "anchor_state": "anchored",
+            "anchor_payload_hash": "sha256:anchored",
+        }
+        await repo.save_poker_mtt_result(anchored)
+
+        correction = await service.record_poker_mtt_correction(
+            target_entity_type="poker_mtt_result",
+            target_entity_id=anchored["id"],
+            corrected_payload={**anchored, "total_score": 0.1},
+            reason="late donor ranking correction",
+            operator_id="operator-1",
+            now=datetime(2026, 4, 12, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        stored = (await repo.list_poker_mtt_results_for_miner("claw1corrected"))[0]
+        corrections = await repo.list_poker_mtt_corrections(target_entity_id=anchored["id"])
+
+        assert stored["total_score"] == anchored["total_score"]
+        assert stored["anchor_state"] == "anchored"
+        assert corrections == [correction]
+        assert correction["previous_root"].startswith("sha256:")
+        assert correction["corrected_root"].startswith("sha256:")
+        assert correction["previous_root"] != correction["corrected_root"]
+
+    asyncio.run(scenario())
+
+
 def test_final_ranking_projection_does_not_lock_incomplete_evidence():
     async def scenario():
         repo = FakeRepository()
@@ -631,4 +682,45 @@ def final_ranking_row(
         "zset_score": 9000.0,
         "created_at": created_at,
         "updated_at": created_at,
+    }
+
+
+def locked_result(tournament_id: str, miner_address: str, *, locked_at: str) -> dict:
+    return {
+        "id": f"poker_mtt:{tournament_id}:{miner_address}",
+        "tournament_id": tournament_id,
+        "miner_address": miner_address,
+        "economic_unit_id": miner_address,
+        "rated_or_practice": "rated",
+        "human_only": True,
+        "field_size": 30,
+        "final_rank": 1,
+        "entry_number": 1,
+        "reentry_count": 1,
+        "finish_percentile": 1.0,
+        "tournament_result_score": 0.9,
+        "hidden_eval_score": 0.0,
+        "consistency_input_score": 0.2,
+        "total_score": 0.535,
+        "eligible_for_multiplier": True,
+        "rolling_score": None,
+        "multiplier_before": 1.0,
+        "multiplier_after": 1.0,
+        "evaluation_state": "final",
+        "evaluation_version": "poker_mtt_v1",
+        "rank_state": "ranked",
+        "chip_delta": 6000.0,
+        "final_ranking_id": f"poker_mtt_final_ranking:{tournament_id}:{miner_address}",
+        "standing_snapshot_id": f"poker_mtt_standing_snapshot:{tournament_id}:abc",
+        "standing_snapshot_hash": "sha256:abc",
+        "evidence_root": "sha256:evidence",
+        "evidence_state": "complete",
+        "locked_at": locked_at,
+        "anchorable_at": locked_at,
+        "anchor_state": "unanchored",
+        "anchor_payload_hash": None,
+        "risk_flags": [],
+        "no_multiplier_reason": None,
+        "created_at": locked_at,
+        "updated_at": locked_at,
     }

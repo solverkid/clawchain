@@ -2557,33 +2557,16 @@ class ForecastMiningService:
 
         current = now or utc_now()
         selected_results = []
-        for result in await self.repo.list_poker_mtt_results():
+        for result in await self.repo.list_poker_mtt_results_for_reward_window(
+            lane=lane,
+            window_start_at=window_start,
+            window_end_at=window_end,
+            include_provisional=include_provisional,
+            policy_bundle_version=policy_bundle_version or _default_poker_mtt_policy_bundle_version(self.settings, lane),
+        ):
             locked_at = result.get("locked_at")
-            if not locked_at:
-                continue
-            locked_at_dt = as_utc_datetime(locked_at)
-            if not (window_start <= locked_at_dt < window_end):
-                continue
-            if result.get("rated_or_practice") != "rated":
-                continue
-            if result.get("human_only") is not True:
-                continue
-            if result.get("evaluation_state") != "final":
-                continue
-            if not result.get("evaluation_version"):
-                continue
-            if result.get("evidence_state") not in poker_mtt_results.REWARD_READY_EVIDENCE_STATES:
-                continue
-            if not result.get("final_ranking_id") or not result.get("standing_snapshot_id") or not result.get("evidence_root"):
-                continue
-            if result.get("rank_state") != "ranked":
-                continue
             anchorable_at = result.get("anchorable_at") or locked_at
             if not anchorable_at or as_utc_datetime(anchorable_at) > current:
-                continue
-            if result.get("no_multiplier_reason") is not None:
-                continue
-            if result.get("eligible_for_multiplier") is not True:
                 continue
             try:
                 final_rank = int(result.get("final_rank"))
@@ -2790,6 +2773,42 @@ class ForecastMiningService:
         if has_positive_weight:
             await self._build_settlement_batches(current)
         return await self.repo.get_reward_window(saved["id"]) or saved
+
+    async def record_poker_mtt_correction(
+        self,
+        *,
+        target_entity_type: str,
+        target_entity_id: str,
+        corrected_payload: dict,
+        reason: str,
+        operator_id: str,
+        now: datetime,
+    ) -> dict:
+        if target_entity_type != "poker_mtt_result":
+            raise ValueError("unsupported poker mtt correction target")
+        current_rows = await self.repo.list_poker_mtt_results()
+        previous = next((row for row in current_rows if row.get("id") == target_entity_id), None)
+        if previous is None:
+            raise ValueError("poker mtt correction target not found")
+
+        previous_root = _hash_payload({"target_entity_type": target_entity_type, "target_entity_id": target_entity_id, "payload": previous})
+        corrected_root = _hash_payload(
+            {"target_entity_type": target_entity_type, "target_entity_id": target_entity_id, "payload": corrected_payload}
+        )
+        current = as_utc_datetime(now).replace(microsecond=0)
+        correction_id = f"poker_mtt_correction:{target_entity_type}:{target_entity_id}:{corrected_root.removeprefix('sha256:')[:16]}"
+        return await self.repo.save_poker_mtt_correction(
+            {
+                "id": correction_id,
+                "target_entity_type": target_entity_type,
+                "target_entity_id": target_entity_id,
+                "previous_root": previous_root,
+                "corrected_root": corrected_root,
+                "reason": reason,
+                "operator_id": operator_id,
+                "created_at": isoformat_z(current),
+            }
+        )
 
     async def apply_arena_results(
         self,
