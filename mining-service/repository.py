@@ -52,6 +52,9 @@ class MiningRepository(Protocol):
     ) -> list[dict]: ...
     async def save_poker_mtt_tournament(self, tournament: dict) -> dict: ...
     async def get_poker_mtt_tournament(self, tournament_id: str) -> dict | None: ...
+    async def save_poker_mtt_hand_event(self, event: dict) -> dict: ...
+    async def get_poker_mtt_hand_event(self, hand_id: str) -> dict | None: ...
+    async def list_poker_mtt_hand_events_for_tournament(self, tournament_id: str) -> list[dict]: ...
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict: ...
     async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None: ...
     async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]: ...
@@ -80,6 +83,7 @@ class FakeRepository:
         self._risk_cases: dict[str, dict] = {}
         self._arena_results: dict[str, dict] = {}
         self._poker_mtt_tournaments: dict[str, dict] = {}
+        self._poker_mtt_hand_events: dict[str, dict] = {}
         self._poker_mtt_final_rankings: dict[str, dict] = {}
         self._poker_mtt_results: dict[str, dict] = {}
         self._request_index: dict[str, dict] = {}
@@ -357,6 +361,64 @@ class FakeRepository:
         tournament = self._poker_mtt_tournaments.get(tournament_id)
         return deepcopy(tournament) if tournament else None
 
+    async def save_poker_mtt_hand_event(self, event: dict) -> dict:
+        row = _normalize_poker_mtt_hand_event(event)
+        existing = self._poker_mtt_hand_events.get(row["hand_id"])
+        if existing is None:
+            if row.get("version") is None:
+                return {
+                    **deepcopy(row),
+                    "state": "conflict",
+                    "ingest_state": "conflict",
+                    "conflict_reason": "missing_version_without_existing_event",
+                }
+            self._poker_mtt_hand_events[row["hand_id"]] = deepcopy(row)
+            return {**deepcopy(row), "state": "inserted"}
+
+        version = row.get("version")
+        if version is None:
+            if row["checksum"] == existing.get("checksum"):
+                return {**deepcopy(existing), "state": "duplicate"}
+            return {
+                **deepcopy(row),
+                "state": "conflict",
+                "ingest_state": "conflict",
+                "conflict_reason": "missing_version_checksum_mismatch",
+                "previous_event": deepcopy(existing),
+            }
+
+        existing_version = existing.get("version")
+        if existing_version is not None and version < existing_version:
+            return {**deepcopy(row), "state": "stale", "previous_event": deepcopy(existing)}
+        if existing_version == version:
+            if row["checksum"] == existing.get("checksum"):
+                return {**deepcopy(existing), "state": "duplicate"}
+            return {
+                **deepcopy(row),
+                "state": "conflict",
+                "ingest_state": "conflict",
+                "conflict_reason": "same_version_checksum_mismatch",
+                "previous_event": deepcopy(existing),
+            }
+
+        updated = deepcopy(row)
+        updated["created_at"] = existing.get("created_at") or updated.get("created_at")
+        self._poker_mtt_hand_events[row["hand_id"]] = updated
+        return {**deepcopy(updated), "state": "updated", "previous_event": deepcopy(existing)}
+
+    async def get_poker_mtt_hand_event(self, hand_id: str) -> dict | None:
+        event = self._poker_mtt_hand_events.get(hand_id)
+        return deepcopy(event) if event else None
+
+    async def list_poker_mtt_hand_events_for_tournament(self, tournament_id: str) -> list[dict]:
+        items = [
+            deepcopy(event)
+            for event in self._poker_mtt_hand_events.values()
+            if event.get("tournament_id") == tournament_id
+        ]
+        items.sort(key=lambda item: (item.get("table_id") or "", item.get("hand_no") or 0, item.get("hand_id") or ""))
+        return items
+
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         current = deepcopy(self._poker_mtt_final_rankings.get(final_ranking["id"], {}))
         current.update(deepcopy(final_ranking))
@@ -420,3 +482,27 @@ class FakeRepository:
         if limit is not None:
             items = items[:limit]
         return items
+
+
+def _normalize_poker_mtt_hand_event(event: dict) -> dict:
+    identity = event.get("identity") or {}
+    hand_id = identity.get("hand_id") or event.get("hand_id")
+    if not hand_id:
+        raise ValueError("missing poker mtt hand_id")
+    row = {
+        "hand_id": hand_id,
+        "tournament_id": identity.get("tournament_id") or event.get("tournament_id"),
+        "table_id": identity.get("table_id") or event.get("table_id"),
+        "hand_no": identity.get("hand_no") if identity.get("hand_no") is not None else event.get("hand_no"),
+        "version": event.get("version"),
+        "checksum": event["checksum"],
+        "event_id": event.get("event_id"),
+        "source_json": deepcopy(event.get("source_json") or event.get("source") or {}),
+        "payload_json": deepcopy(event.get("payload_json") or event.get("payload") or {}),
+        "ingest_state": event.get("ingest_state") or "inserted",
+        "conflict_reason": event.get("conflict_reason"),
+    }
+    for field in ("created_at", "updated_at"):
+        if field in event:
+            row[field] = deepcopy(event[field])
+    return row

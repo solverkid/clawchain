@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import insert, select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -19,6 +19,7 @@ from models import (
     risk_review_cases,
     arena_result_entries,
     poker_mtt_tournaments,
+    poker_mtt_hand_events,
     poker_mtt_final_rankings,
     poker_mtt_result_entries,
 )
@@ -108,6 +109,31 @@ def _poker_mtt_tournament_values(tournament: dict) -> dict:
     for field in ("started_at", "completed_at", "created_at", "updated_at"):
         if field in values and values[field] is not None:
             values[field] = _maybe_dt(values[field])
+    return values
+
+
+def _poker_mtt_hand_event_values(event: dict, *, created_at: datetime | str | None = None) -> dict:
+    identity = event.get("identity") or {}
+    now = datetime.now(timezone.utc)
+    values = {
+        "hand_id": identity.get("hand_id") or event.get("hand_id"),
+        "tournament_id": identity.get("tournament_id") or event.get("tournament_id"),
+        "table_id": identity.get("table_id") or event.get("table_id"),
+        "hand_no": identity.get("hand_no") if identity.get("hand_no") is not None else event.get("hand_no"),
+        "version": event.get("version"),
+        "checksum": event["checksum"],
+        "event_id": event.get("event_id"),
+        "source_json": deepcopy(event.get("source_json") or event.get("source") or {}),
+        "payload_json": deepcopy(event.get("payload_json") or event.get("payload") or {}),
+        "ingest_state": event.get("ingest_state") or "inserted",
+        "conflict_reason": event.get("conflict_reason"),
+        "created_at": created_at or event.get("created_at") or now,
+        "updated_at": event.get("updated_at") or now,
+    }
+    if not values["hand_id"]:
+        raise ValueError("missing poker mtt hand_id")
+    for field in ("created_at", "updated_at"):
+        values[field] = _maybe_dt(values[field])
     return values
 
 
@@ -226,6 +252,16 @@ def _poker_mtt_tournament_row_to_dict(row) -> dict | None:
         return None
     data["tournament_id"] = data.pop("id")
     for field in ("started_at", "completed_at", "created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_hand_event_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("created_at", "updated_at"):
         if field in data and isinstance(data[field], datetime):
             data[field] = data[field].isoformat().replace("+00:00", "Z")
     return data
@@ -379,6 +415,24 @@ class PostgresRepository:
             )
             await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL"))
             await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS anchorable_at TIMESTAMPTZ NULL"))
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hand_events_tournament_hand_no "
+                    "ON poker_mtt_hand_events (tournament_id, hand_no)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hand_events_tournament_ingest_state "
+                    "ON poker_mtt_hand_events (tournament_id, ingest_state)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hand_events_table_hand_no "
+                    "ON poker_mtt_hand_events (table_id, hand_no)"
+                )
+            )
 
     async def register_miner(self, miner: dict) -> dict:
         values = _miner_values(miner)
@@ -768,6 +822,77 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             row = await conn.execute(select(poker_mtt_tournaments).where(poker_mtt_tournaments.c.id == tournament_id))
             return _poker_mtt_tournament_row_to_dict(row.first())
+
+    async def save_poker_mtt_hand_event(self, event: dict) -> dict:
+        values = _poker_mtt_hand_event_values(event)
+        existing = await self.get_poker_mtt_hand_event(values["hand_id"])
+        if existing is None:
+            if values.get("version") is None:
+                return {
+                    **values,
+                    "state": "conflict",
+                    "ingest_state": "conflict",
+                    "conflict_reason": "missing_version_without_existing_event",
+                }
+            async with self.engine.begin() as conn:
+                await conn.execute(insert(poker_mtt_hand_events).values(**values))
+            saved = await self.get_poker_mtt_hand_event(values["hand_id"])
+            return {**(saved or values), "state": "inserted"}
+
+        version = values.get("version")
+        if version is None:
+            if values["checksum"] == existing.get("checksum"):
+                return {**existing, "state": "duplicate"}
+            return {
+                **values,
+                "state": "conflict",
+                "ingest_state": "conflict",
+                "conflict_reason": "missing_version_checksum_mismatch",
+                "previous_event": existing,
+            }
+
+        existing_version = existing.get("version")
+        if existing_version is not None and version < existing_version:
+            return {**values, "state": "stale", "previous_event": existing}
+        if existing_version == version:
+            if values["checksum"] == existing.get("checksum"):
+                return {**existing, "state": "duplicate"}
+            return {
+                **values,
+                "state": "conflict",
+                "ingest_state": "conflict",
+                "conflict_reason": "same_version_checksum_mismatch",
+                "previous_event": existing,
+            }
+
+        values["created_at"] = _maybe_dt(existing.get("created_at")) if existing.get("created_at") else values["created_at"]
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(poker_mtt_hand_events)
+                .where(poker_mtt_hand_events.c.hand_id == values["hand_id"])
+                .values(**values)
+            )
+        saved = await self.get_poker_mtt_hand_event(values["hand_id"])
+        return {**(saved or values), "state": "updated", "previous_event": existing}
+
+    async def get_poker_mtt_hand_event(self, hand_id: str) -> dict | None:
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_hand_events).where(poker_mtt_hand_events.c.hand_id == hand_id))
+            return _poker_mtt_hand_event_row_to_dict(row.first())
+
+    async def list_poker_mtt_hand_events_for_tournament(self, tournament_id: str) -> list[dict]:
+        query = (
+            select(poker_mtt_hand_events)
+            .where(poker_mtt_hand_events.c.tournament_id == tournament_id)
+            .order_by(
+                poker_mtt_hand_events.c.table_id.asc(),
+                poker_mtt_hand_events.c.hand_no.asc(),
+                poker_mtt_hand_events.c.hand_id.asc(),
+            )
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_hand_event_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         values = _poker_mtt_final_ranking_values(final_ranking)

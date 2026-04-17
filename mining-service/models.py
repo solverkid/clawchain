@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     Text,
     DateTime,
+    Index,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -258,6 +259,28 @@ poker_mtt_tournaments = Table(
 )
 
 
+poker_mtt_hand_events = Table(
+    "poker_mtt_hand_events",
+    metadata,
+    Column("hand_id", String, primary_key=True),
+    Column("tournament_id", String, nullable=False),
+    Column("table_id", String, nullable=False),
+    Column("hand_no", Integer, nullable=False),
+    Column("version", Integer, nullable=True),
+    Column("checksum", String, nullable=False),
+    Column("event_id", String, nullable=False),
+    Column("source_json", JSONB, nullable=False),
+    Column("payload_json", JSONB, nullable=False),
+    Column("ingest_state", String, nullable=False, default="inserted"),
+    Column("conflict_reason", String, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_hand_events_tournament_hand_no", "tournament_id", "hand_no"),
+    Index("ix_poker_mtt_hand_events_tournament_ingest_state", "tournament_id", "ingest_state"),
+    Index("ix_poker_mtt_hand_events_table_hand_no", "table_id", "hand_no"),
+)
+
+
 poker_mtt_final_rankings = Table(
     "poker_mtt_final_rankings",
     metadata,
@@ -356,6 +379,7 @@ TABLES = {
     "risk_review_cases": risk_review_cases,
     "arena_result_entries": arena_result_entries,
     "poker_mtt_tournaments": poker_mtt_tournaments,
+    "poker_mtt_hand_events": poker_mtt_hand_events,
     "poker_mtt_final_rankings": poker_mtt_final_rankings,
     "poker_mtt_result_entries": poker_mtt_result_entries,
 }

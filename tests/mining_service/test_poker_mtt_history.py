@@ -61,6 +61,64 @@ def test_hand_completed_event_id_is_deterministic_from_canonical_payload():
     assert first["event_id"] == second["event_id"]
 
 
+def test_repository_persists_hand_event_by_hand_id_version_and_checksum():
+    async def scenario():
+        from repository import FakeRepository
+
+        repo = FakeRepository()
+        event = hand_event(version=1, pot_amount=120)
+
+        inserted = await repo.save_poker_mtt_hand_event(event)
+        duplicate = await repo.save_poker_mtt_hand_event(hand_event(version=1, pot_amount=120))
+        loaded = await repo.get_poker_mtt_hand_event("mtt-history-1:table-1:42")
+
+        assert inserted["state"] == "inserted"
+        assert duplicate["state"] == "duplicate"
+        assert loaded["hand_id"] == "mtt-history-1:table-1:42"
+        assert loaded["version"] == 1
+        assert loaded["checksum"] == event["checksum"]
+        assert loaded["payload_json"]["pot"] == 120
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_hand_event_table_has_operational_indexes():
+    from models import TABLES
+
+    table = TABLES["poker_mtt_hand_events"]
+    columns = set(table.c.keys())
+    indexes = {index.name: tuple(column.name for column in index.columns) for index in table.indexes}
+
+    assert {
+        "hand_id",
+        "tournament_id",
+        "table_id",
+        "hand_no",
+        "version",
+        "checksum",
+        "event_id",
+        "source_json",
+        "payload_json",
+        "ingest_state",
+        "conflict_reason",
+        "created_at",
+        "updated_at",
+    }.issubset(columns)
+    assert indexes["ix_poker_mtt_hand_events_tournament_hand_no"] == ("tournament_id", "hand_no")
+    assert indexes["ix_poker_mtt_hand_events_tournament_ingest_state"] == ("tournament_id", "ingest_state")
+    assert indexes["ix_poker_mtt_hand_events_table_hand_no"] == ("table_id", "hand_no")
+
+
+def test_postgres_repository_exposes_hand_event_methods():
+    from pg_repository import PostgresRepository
+
+    assert callable(getattr(PostgresRepository, "save_poker_mtt_hand_event"))
+    assert callable(getattr(PostgresRepository, "get_poker_mtt_hand_event"))
+    assert callable(getattr(PostgresRepository, "list_poker_mtt_hand_events_for_tournament"))
+
+
 def hand_event(*, version: int | None, pot_amount: int, payload: dict | None = None) -> dict:
     payload = payload or {"pot": pot_amount, "actions": [{"seat": 2, "type": "call"}]}
     return poker_mtt_history.build_hand_completed_event(
