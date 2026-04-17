@@ -25,6 +25,7 @@ POKER_MTT_PROJECTION_ROOT_FIELDS = (
     "final_ranking_root",
     "evidence_root",
     "multiplier_snapshot_root",
+    "miner_reward_rows_root",
     "projection_root",
 )
 POKER_MTT_OBSERVABILITY_FIELDS = (
@@ -457,6 +458,45 @@ def build_paged_poker_mtt_projection_payload(payload: dict, *, page_size: int = 
     projected["artifact_page_count"] = len(pages)
     projected["artifact_pages"] = page_refs
     return projected, pages
+
+
+def resolve_poker_mtt_projection_reward_rows(payload: dict, artifacts: list[dict]) -> list[dict]:
+    inline_rows = list(payload.get("miner_reward_rows") or [])
+    if inline_rows:
+        expected_root = payload.get("miner_reward_rows_root")
+        if expected_root and _hash_sequence(inline_rows) != expected_root:
+            raise ValueError("poker mtt projection miner reward rows root mismatch")
+        return inline_rows
+
+    page_refs = list(payload.get("artifact_pages") or [])
+    if not page_refs:
+        return []
+
+    pages_by_index = {}
+    for artifact in artifacts:
+        if artifact.get("kind") != "poker_mtt_reward_window_projection_page":
+            continue
+        page_payload = artifact.get("payload_json") or {}
+        pages_by_index[page_payload.get("page_index")] = page_payload
+
+    rows = []
+    for page_ref in sorted(page_refs, key=lambda item: item["page_index"]):
+        page_index = page_ref["page_index"]
+        page_payload = pages_by_index.get(page_index)
+        if page_payload is None:
+            raise ValueError("poker mtt projection page artifact missing")
+        page_rows = list(page_payload.get("miner_reward_rows") or [])
+        page_root = _hash_sequence(page_rows)
+        if page_root != page_ref.get("page_root") or page_root != page_payload.get("page_root"):
+            raise ValueError("poker mtt projection page root mismatch")
+        if len(page_rows) != int(page_ref.get("row_count", 0) or 0):
+            raise ValueError("poker mtt projection page row count mismatch")
+        rows.extend(page_rows)
+
+    expected_root = payload.get("miner_reward_rows_root")
+    if expected_root and _hash_sequence(rows) != expected_root:
+        raise ValueError("poker mtt projection miner reward rows root mismatch")
+    return rows
 
 
 def _reward_window_payload(reward_window: dict) -> dict:
@@ -1322,7 +1362,7 @@ class ForecastMiningService:
                     poker_projection_roots.append(
                         _poker_mtt_projection_roots(projection_payload, reward_window_id=reward_window_id)
                     )
-                    for reward_row in projection_payload.get("miner_reward_rows", []):
+                    for reward_row in resolve_poker_mtt_projection_reward_rows(projection_payload, projection_artifacts):
                         current_total = miner_totals.setdefault(
                             reward_row["miner_address"],
                             {

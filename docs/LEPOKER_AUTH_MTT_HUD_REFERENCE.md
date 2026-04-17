@@ -768,6 +768,27 @@ Phase 1 只做 reference-driven adapter 和 projection，不做完整 donor cont
 - hand history 采用“一手完成后及时异步上传”的事件口径，不按每个 action 写永久存储
 - HUD / ELO / public rating 先作为后续 projector 输入，不直接参与 Phase 1 正向奖励权重
 - settlement 只锚窗口 root；projection artifact 保存 final ranking / evidence / multiplier roots
+
+### 13.3 Phase 2 beta gate 已固化的 donor 借鉴
+
+Phase 2 已把 donor 里线上跑稳的几个结构转成 ClawChain 自己的 Go/Python 合同，而不是搬 Java service：
+
+| donor 稳定路径 | ClawChain Phase 2 beta gate |
+|---|---|
+| `RecordListener` 一手后发 MQ | `poker_mtt_hand_events` 以 `hand_id + version + checksum` 幂等 ingest |
+| `HandHistoryService.upsertHandHistory()` | completed-hand evidence manifest，可重放但不上链原文 |
+| `calculateCommonHUD()` | short-term HUD snapshot / manifest，服务 hidden eval 和风险观察 |
+| `calculateMTTSpecialHUD()` / ELO | long-term HUD、rating snapshot、multiplier snapshot，慢变量化，不做直接 reward weight |
+| `saveMTTRankingInfo()` | canonical final ranking handoff，reward 只吃 locked final ranking projection |
+| Redis live ranking | Go finalizer 的 stable snapshot 输入，不直接进 reward window |
+| DynamoDB raw history | 生产候选 adapter；当前 core 只依赖 hand evidence store contract |
+
+新增约束：
+
+- 大 reward projection 必须分页，主 artifact 只放 `miner_reward_rows_root` 和 page refs
+- settlement materialization 会读取 page artifact 并校验 page root / full rows root
+- typed `x/settlement` confirmation 必须查链上 stored state；fallback memo 只能作为 degraded proof
+- `x/reputation` 仍不接 donor ELO，也不接单场 hidden eval；等窗口级 reputation delta 设计成熟后再接
 - rollout 上默认关闭 poker MTT 自动 reward window 和 settlement anchoring，等 final ranking / evidence / projection 测试稳定后按环境打开
 - 链上 settlement anchor submitter 采用显式白名单，避免任何账户提交同一 `settlement_batch_id` 的抢先或冲突 root
 

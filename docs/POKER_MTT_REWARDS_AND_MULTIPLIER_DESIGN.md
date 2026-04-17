@@ -2,7 +2,7 @@
 
 **版本**: 0.1
 **日期**: 2026-04-10
-**状态**: Phase 1 设计 + 实现状态对齐；2026-04-17 已补 Poker MTT Evidence Phase 2 计划入口
+**状态**: Phase 1 设计 + 实现状态对齐；2026-04-17 已补 Poker MTT Evidence Phase 2 beta gate 实现口径
 **范围**: `poker mtt` 独立产品线，不混入现有 `arena / bluff arena` 语义
 **依赖前提**: `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
 **Phase 2 执行源头**: `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`
@@ -1346,6 +1346,30 @@ Phase 1 不做：
 6. 补 admin/auth protection、production identity binding、economic unit eligibility
 7. 补 load / scale / recovery / observability gates
 8. 详细执行步骤见 `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`
+
+### 13.2.1 2026-04-17 beta gate 落地状态
+
+当前 Phase 2 已形成一条本地可回归的 evidence-to-anchor beta path：
+
+1. completed hand event 以 `hand_id + version + checksum` 幂等入 `poker_mtt_hand_events`
+2. hand-history manifest、short-term HUD、long-term HUD、hidden eval manifest 进入 artifact ledger
+3. hidden eval 只从 service-owned `poker_mtt_hidden_eval_entries` 进入 reward-ready projection，legacy/admin payload 不能自带 hidden 分数解锁奖励
+4. final ranking handoff 使用 canonical `poker_mtt_final_rankings`，未锁定、证据不完整、缺 hidden eval 的结果不进最终 reward window
+5. `poker_mtt_rating_snapshots` 和 `poker_mtt_multiplier_snapshots` 已与 forecast `public_elo` / `arena_multiplier` 分离
+6. reward window membership 使用 indexed locked/evidence-ready query；anchored correction 走 append-only correction record
+7. 大字段 projection 已分页：主 artifact 保留 `miner_reward_rows_root` 和 page refs，page artifact 保存实际 rows；settlement materialization 会校验每页 root 和全量 rows root
+8. typed `x/settlement` anchor plan 已接入 state-query confirmation 语义；fallback memo 不能等同 typed anchored state
+9. admin mutation APIs 有本地 token gate，reward eligibility 有 synthetic/local identity guard
+10. 本地 beta gate 测试覆盖：
+    - hand ingest -> hand-history manifest -> HUD -> hidden eval -> final ranking projection -> reward window -> settlement batch -> typed tx plan -> query confirmation
+    - 30-player smoke、300-player medium shape、20k-player projection paging、2,000-table early burst shape
+
+仍然保持关闭的 rollout gate：
+
+- `CLAWCHAIN_POKER_MTT_REWARD_WINDOWS_ENABLED` 默认关闭自动日/周窗口
+- `CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED` 默认关闭 poker MTT lane 上链锚定
+- `x/reputation` 不在 Phase 2 写路径中
+- production DynamoDB hand-history adapter、真实 MQ consumer、真实 hidden seed/bot/shadow eval pipeline 仍是后续任务
 
 ## 13.3 Phase 3
 

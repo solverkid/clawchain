@@ -213,6 +213,17 @@ After each epoch is settled, the mining service computes a deterministic settlem
 
 Poker MTT Evidence Phase 2 must treat typed `x/settlement` anchoring as a state query problem, not only a tx-success problem: the service should confirm the stored batch id, canonical root, payload hash, policy, lane, and window fields before marking a batch as chain anchored.
 
+Poker MTT reward windows add one more protocol-level evidence layer:
+
+1. `poker_mtt_final_rankings` are projected into locked `poker_mtt_result_entries`
+2. `reward_window` membership is by locked/evidence-ready rows, not live ranking or provisional rows
+3. main projection artifact stores `projection_root`, `miner_reward_rows_root`, and page refs
+4. page artifacts store the actual `miner_reward_rows`
+5. settlement materialization validates page roots and the full `miner_reward_rows_root`
+6. typed `MsgAnchorSettlementBatch` commits only roots and payload hashes; raw hand history, HUD rows, and hidden-eval samples remain off-chain evidence
+
+`x/reputation` is intentionally outside this Phase 2 write path. Public rating / ELO, hidden eval, and HUD-derived consistency can inform future window-level reputation deltas, but they do not become direct on-chain reputation updates in the current protocol.
+
 ### Verification
 
 Anyone can verify settlement integrity:

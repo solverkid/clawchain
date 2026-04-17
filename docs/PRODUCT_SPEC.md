@@ -571,6 +571,16 @@ tournament result
 - donor Java monolith port
 - 高价值 mainnet 奖励默认开启
 
+截至 2026-04-17，Poker MTT Evidence Phase 2 的 beta gate 已经可以在本地回归：
+
+- 一手完成后写 completed-hand evidence，不按 action 永久写入
+- final ranking、hand-history manifest、HUD、hidden eval、rating / multiplier snapshot 都进入可审计链路
+- daily / weekly reward window 只吃 locked、evidence-ready 的 `poker_mtt_result_entries`
+- 20k-player reward projection 不返回整包 rows，主 artifact 保存 root/page refs，page artifact 保存 rows
+- settlement batch 通过 typed `x/settlement` state query 确认 root/hash，不只看 tx success
+
+产品上仍然按 beta / internal rollout 处理：自动发奖和 poker settlement anchoring 默认关闭，公开页面只展示 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived `total_score`。
+
 面向用户只展示:
 
 - 当前 MTT 状态
