@@ -67,6 +67,42 @@ def test_final_ranking_projection_does_not_lock_incomplete_evidence():
     asyncio.run(scenario())
 
 
+def test_final_ranking_projection_requires_service_hidden_eval_for_complete_evidence():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1missinghidden",
+            name="missing-hidden",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await repo.save_poker_mtt_final_ranking(
+            final_ranking_row(
+                tournament_id="mtt-missing-hidden",
+                miner_address="claw1missinghidden",
+                evidence_state="complete",
+            )
+        )
+
+        projection = await service.project_poker_mtt_final_rankings(
+            tournament_id="mtt-missing-hidden",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            locked_at=datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        stored = (await repo.list_poker_mtt_results_for_miner("claw1missinghidden"))[0]
+
+        assert projection["items"][0]["eligible_for_multiplier"] is False
+        assert stored["no_multiplier_reason"] == "missing_hidden_eval"
+        assert stored["hidden_eval_score"] == 0.0
+        assert stored["locked_at"] is None
+
+    asyncio.run(scenario())
+
+
 def test_reward_window_membership_uses_locked_at_not_created_at():
     async def scenario():
         repo = FakeRepository()
@@ -84,6 +120,12 @@ def test_reward_window_membership_uses_locked_at_not_created_at():
                 created_at="2026-04-08T09:00:00Z",
                 evidence_state="complete",
             )
+        )
+        await finalize_hidden_eval(
+            service,
+            tournament_id="mtt-locked",
+            miner_address="claw1lockedpoker",
+            final_ranking_id="poker_mtt_final_ranking:mtt-locked:claw1lockedpoker",
         )
 
         await service.project_poker_mtt_final_rankings(
@@ -164,6 +206,12 @@ def test_final_ranking_projection_folds_duplicate_reentries_to_canonical_row():
                 reentry_count=2,
                 evidence_state="complete",
             )
+        )
+        await finalize_hidden_eval(
+            service,
+            tournament_id="mtt-reentry",
+            miner_address="claw1reentry",
+            final_ranking_id="poker_mtt_final_ranking:mtt-reentry:7:2",
         )
 
         projection = await service.project_poker_mtt_final_rankings(
@@ -248,6 +296,47 @@ def test_poker_mtt_reward_window_never_settles_provisional_rows():
             assert str(exc) == "no poker mtt results found for reward window"
         else:
             raise AssertionError("provisional poker mtt rows must never settle")
+
+    asyncio.run(scenario())
+
+
+def test_legacy_apply_caller_hidden_score_does_not_unlock_reward_readiness():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1hidden",
+            name="hidden",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+
+        applied = await service.apply_poker_mtt_results(
+            tournament_id="mtt-hidden",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1hidden",
+                    "final_rank": 1,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 0.9,
+                    "consistency_input_score": 0.2,
+                    "evaluation_state": "final",
+                    "evidence_state": "complete",
+                    "evidence_root": "sha256:evidence",
+                    "locked_at": "2026-04-10T10:00:00Z",
+                }
+            ],
+            completed_at=datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        stored = applied["items"][0]
+
+        assert stored["hidden_eval_score"] == 0.0
+        assert stored["eligible_for_multiplier"] is False
+        assert stored["no_multiplier_reason"] in {"missing_hidden_eval", "missing_final_ranking_ref"}
 
     asyncio.run(scenario())
 
@@ -463,6 +552,32 @@ def test_legacy_apply_rejects_mismatched_final_ranking_ref_before_multiplier():
         assert stored["no_multiplier_reason"] == "canonical_final_ranking_mismatch"
 
     asyncio.run(scenario())
+
+
+async def finalize_hidden_eval(
+    service: forecast_engine.ForecastMiningService,
+    *,
+    tournament_id: str,
+    miner_address: str,
+    final_ranking_id: str,
+    hidden_eval_score: float = 0.0,
+) -> None:
+    await service.finalize_poker_mtt_hidden_eval(
+        tournament_id=tournament_id,
+        policy_bundle_version="poker_mtt_v1",
+        seed_assignment_id=f"hidden-seed:{tournament_id}",
+        baseline_sample_id=None,
+        entries=[
+            {
+                "miner_address": miner_address,
+                "final_ranking_id": final_ranking_id,
+                "hidden_eval_score": hidden_eval_score,
+                "score_components_json": {"test_fixture": True},
+                "evidence_root": "sha256:hidden_eval",
+            }
+        ],
+        now=datetime(2026, 4, 10, 9, 30, 0, tzinfo=timezone.utc),
+    )
 
 
 def final_ranking_row(

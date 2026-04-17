@@ -1177,10 +1177,11 @@ def test_poker_mtt_practice_results_do_not_change_multiplier_and_compute_total_s
         stored = await repo.list_poker_mtt_results_for_miner("claw1pokermttpractice")
 
         assert result["items"][0]["eligible_for_multiplier"] is False
-        assert result["items"][0]["total_score"] == 0.58
+        assert result["items"][0]["hidden_eval_score"] == 0.0
+        assert result["items"][0]["total_score"] == 0.48
         assert miner["poker_mtt_multiplier"] == 1.0
         assert stored[0]["final_rank"] == 3
-        assert stored[0]["total_score"] == 0.58
+        assert stored[0]["total_score"] == 0.48
 
     import asyncio
 

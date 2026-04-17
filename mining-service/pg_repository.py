@@ -22,6 +22,7 @@ from models import (
     poker_mtt_hand_events,
     poker_mtt_short_term_hud_snapshots,
     poker_mtt_long_term_hud_snapshots,
+    poker_mtt_hidden_eval_entries,
     poker_mtt_final_rankings,
     poker_mtt_result_entries,
 )
@@ -187,6 +188,38 @@ def _poker_mtt_hud_snapshot_table(hud_window: str):
     return poker_mtt_short_term_hud_snapshots
 
 
+def _poker_mtt_hidden_eval_entry_values(row: dict, *, created_at: datetime | str | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    tournament_id = row.get("tournament_id")
+    miner_address = row.get("miner_address")
+    final_ranking_id = row.get("final_ranking_id")
+    if not tournament_id:
+        raise ValueError("missing poker mtt hidden eval tournament_id")
+    if not miner_address:
+        raise ValueError("missing poker mtt hidden eval miner_address")
+    if not final_ranking_id:
+        raise ValueError("missing poker mtt hidden eval final_ranking_id")
+    values = {
+        "id": row.get("id") or f"poker_mtt_hidden_eval:{tournament_id}:{miner_address}:{final_ranking_id}",
+        "tournament_id": tournament_id,
+        "miner_address": miner_address,
+        "final_ranking_id": final_ranking_id,
+        "seed_assignment_id": row.get("seed_assignment_id"),
+        "baseline_sample_id": row.get("baseline_sample_id"),
+        "hidden_eval_score": float(row.get("hidden_eval_score") or 0.0),
+        "score_components_json": deepcopy(row.get("score_components_json") or {}),
+        "evidence_root": row.get("evidence_root"),
+        "manifest_root": row.get("manifest_root"),
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "visibility_state": row.get("visibility_state") or "service_internal",
+        "created_at": created_at or row.get("created_at") or now,
+        "updated_at": row.get("updated_at") or now,
+    }
+    for field in ("created_at", "updated_at"):
+        values[field] = _maybe_dt(values[field])
+    return values
+
+
 def _poker_mtt_final_ranking_values(final_ranking: dict) -> dict:
     values = deepcopy(final_ranking)
     for field in ("locked_at", "anchorable_at", "created_at", "updated_at"):
@@ -318,6 +351,16 @@ def _poker_mtt_hand_event_row_to_dict(row) -> dict | None:
 
 
 def _poker_mtt_hud_snapshot_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_hidden_eval_entry_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
@@ -515,6 +558,18 @@ class PostgresRepository:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_long_hud_miner_updated "
                     "ON poker_mtt_long_term_hud_snapshots (miner_address, updated_at)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hidden_eval_tournament_miner "
+                    "ON poker_mtt_hidden_eval_entries (tournament_id, miner_address)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hidden_eval_final_ranking "
+                    "ON poker_mtt_hidden_eval_entries (final_ranking_id)"
                 )
             )
 
@@ -1014,6 +1069,35 @@ class PostgresRepository:
                 rows = await conn.execute(query.order_by(table.c.updated_at.desc(), table.c.id.desc()))
                 items.extend(_poker_mtt_hud_snapshot_row_to_dict(row) for row in rows.fetchall())
         return [item for item in items if item is not None]
+
+    async def save_poker_mtt_hidden_eval_entry(self, row: dict) -> dict:
+        values = _poker_mtt_hidden_eval_entry_values(row)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(poker_mtt_hidden_eval_entries.c.id).where(poker_mtt_hidden_eval_entries.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_hidden_eval_entries)
+                    .where(poker_mtt_hidden_eval_entries.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_hidden_eval_entries).values(**values))
+        async with self.engine.connect() as conn:
+            saved = await conn.execute(select(poker_mtt_hidden_eval_entries).where(poker_mtt_hidden_eval_entries.c.id == values["id"]))
+            return _poker_mtt_hidden_eval_entry_row_to_dict(saved.first()) or values
+
+    async def list_poker_mtt_hidden_eval_entries_for_tournament(self, tournament_id: str) -> list[dict]:
+        query = (
+            select(poker_mtt_hidden_eval_entries)
+            .where(poker_mtt_hidden_eval_entries.c.tournament_id == tournament_id)
+            .order_by(
+                poker_mtt_hidden_eval_entries.c.miner_address.asc(),
+                poker_mtt_hidden_eval_entries.c.final_ranking_id.asc(),
+            )
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_hidden_eval_entry_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         values = _poker_mtt_final_ranking_values(final_ranking)

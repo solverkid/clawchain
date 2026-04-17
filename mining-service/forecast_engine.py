@@ -1932,7 +1932,7 @@ class ForecastMiningService:
                 raise ValueError("final_rank out of range")
 
             tournament_result_score = clamp(float(result["tournament_result_score"]), -1.0, 1.0)
-            hidden_eval_score = clamp(float(result.get("hidden_eval_score", 0.0)), -1.0, 1.0)
+            hidden_eval_score = 0.0
             consistency_input_score = clamp(float(result.get("consistency_input_score", 0.0)), -1.0, 1.0)
             total_score = round(
                 clamp(
@@ -2069,6 +2069,7 @@ class ForecastMiningService:
                     "total_score": total_score,
                     "poker_mtt_multiplier": multiplier_after,
                     "rolling_score": rolling_score,
+                    "no_multiplier_reason": no_multiplier_reason,
                 }
             )
 
@@ -2103,6 +2104,10 @@ class ForecastMiningService:
         if not rows:
             raise ValueError("no poker mtt final rankings found")
         rows = _canonical_poker_mtt_projection_rows(rows)
+        hidden_eval_by_final_ranking_id = {
+            row["final_ranking_id"]: row
+            for row in await self.repo.list_poker_mtt_hidden_eval_entries_for_tournament(tournament_id)
+        }
 
         await self.repo.save_poker_mtt_tournament(
             {
@@ -2136,6 +2141,29 @@ class ForecastMiningService:
                 policy_bundle_version=policy_bundle_version,
                 locked_at=locked_at_utc,
             )
+            hidden_eval_entry = hidden_eval_by_final_ranking_id.get(row.get("id"))
+            if projected["evidence_state"] == "complete":
+                if hidden_eval_entry is None:
+                    risk_flags = list(projected.get("risk_flags") or [])
+                    if "missing_hidden_eval" not in risk_flags:
+                        risk_flags.append("missing_hidden_eval")
+                    projected.update(
+                        {
+                            "eligible_for_multiplier": False,
+                            "locked_at": None,
+                            "anchorable_at": None,
+                            "no_multiplier_reason": "missing_hidden_eval",
+                            "risk_flags": risk_flags,
+                        }
+                    )
+                else:
+                    hidden_eval_score = clamp(float(hidden_eval_entry.get("hidden_eval_score", 0.0)), -1.0, 1.0)
+                    projected["hidden_eval_score"] = hidden_eval_score
+                    projected["total_score"] = poker_mtt_results.total_score(
+                        tournament_score=projected["tournament_result_score"],
+                        hidden_eval_score=hidden_eval_score,
+                        consistency_input_score=projected.get("consistency_input_score") or 0.0,
+                    )
             multiplier_before = float(miner.get("poker_mtt_multiplier", 1.0))
             multiplier_after = multiplier_before
             rolling_score = None
@@ -2265,6 +2293,18 @@ class ForecastMiningService:
                 )
                 complete_kinds.add(manifest_kind)
 
+        hidden_eval_rows = await self.repo.list_poker_mtt_hidden_eval_entries_for_tournament(tournament_id)
+        if hidden_eval_rows:
+            manifests.append(
+                poker_mtt_evidence.build_hidden_eval_manifest(
+                    tournament_id=tournament_id,
+                    rows=hidden_eval_rows,
+                    policy_bundle_version=policy_bundle_version,
+                    generated_at=current,
+                )
+            )
+            complete_kinds.add(poker_mtt_evidence.HIDDEN_EVAL_MANIFEST_KIND)
+
         for kind in sorted(set(accepted_degraded_kinds or []) - complete_kinds):
             manifests.append(
                 poker_mtt_evidence.build_stub_manifest(
@@ -2330,6 +2370,87 @@ class ForecastMiningService:
             "event": result.event,
             "previous_event": result.previous_event,
             "reason": result.reason,
+        }
+
+    async def finalize_poker_mtt_hidden_eval(
+        self,
+        *,
+        tournament_id: str,
+        policy_bundle_version: str,
+        seed_assignment_id: str,
+        baseline_sample_id: str | None,
+        entries: list[dict],
+        now: datetime | str | None = None,
+    ) -> dict:
+        if not policy_bundle_version:
+            raise ValueError("policy_bundle_version is required")
+        if not seed_assignment_id:
+            raise ValueError("seed_assignment_id is required")
+        if not entries:
+            raise ValueError("hidden eval entries are required")
+        current = as_utc_datetime(now or utc_now()).replace(microsecond=0)
+        rows = []
+        for entry in entries:
+            miner_address = entry.get("miner_address")
+            final_ranking_id = entry.get("final_ranking_id")
+            evidence_root = entry.get("evidence_root")
+            if not miner_address:
+                raise ValueError("hidden eval entry missing miner_address")
+            if not final_ranking_id:
+                raise ValueError("hidden eval entry missing final_ranking_id")
+            if not evidence_root:
+                raise ValueError("hidden eval entry missing evidence_root")
+            rows.append(
+                {
+                    "id": entry.get("id") or f"poker_mtt_hidden_eval:{tournament_id}:{miner_address}:{final_ranking_id}",
+                    "tournament_id": tournament_id,
+                    "miner_address": miner_address,
+                    "final_ranking_id": final_ranking_id,
+                    "seed_assignment_id": entry.get("seed_assignment_id") or seed_assignment_id,
+                    "baseline_sample_id": entry.get("baseline_sample_id") or baseline_sample_id,
+                    "hidden_eval_score": clamp(float(entry.get("hidden_eval_score", 0.0)), -1.0, 1.0),
+                    "score_components_json": deepcopy(entry.get("score_components_json") or {}),
+                    "evidence_root": evidence_root,
+                    "manifest_root": "",
+                    "policy_bundle_version": policy_bundle_version,
+                    "visibility_state": entry.get("visibility_state") or "service_internal",
+                    "created_at": isoformat_z(current),
+                    "updated_at": isoformat_z(current),
+                }
+            )
+
+        manifest = poker_mtt_evidence.build_hidden_eval_manifest(
+            tournament_id=tournament_id,
+            rows=rows,
+            policy_bundle_version=policy_bundle_version,
+            generated_at=current,
+        )
+        saved_rows = []
+        for row in rows:
+            saved_rows.append(await self.repo.save_poker_mtt_hidden_eval_entry({**row, "manifest_root": manifest["manifest_root"]}))
+
+        artifact = await self.repo.save_artifact(
+            {
+                "id": f"art:poker_mtt_tournament:{tournament_id}:{manifest['kind']}",
+                "kind": manifest["kind"],
+                "entity_type": "poker_mtt_tournament",
+                "entity_id": tournament_id,
+                "payload_json": manifest,
+                "payload_hash": manifest["manifest_root"],
+                "created_at": isoformat_z(current),
+                "updated_at": isoformat_z(current),
+            }
+        )
+        return {
+            "tournament_id": tournament_id,
+            "policy_bundle_version": policy_bundle_version,
+            "manifest": manifest,
+            "artifact_ref": {
+                "kind": artifact["kind"],
+                "artifact_id": artifact["id"],
+                "payload_hash": artifact["payload_hash"],
+            },
+            "entries": saved_rows,
         }
 
     async def build_poker_mtt_reward_window(

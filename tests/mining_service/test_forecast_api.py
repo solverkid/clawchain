@@ -1431,7 +1431,7 @@ def poker_mtt_reward_ready_refs(
         "standing_snapshot_id": f"poker_mtt_standing_snapshot:{tournament_id}:abc",
         "standing_snapshot_hash": f"sha256:{tournament_id}",
         "evidence_root": f"sha256:evidence:{tournament_id}:{miner_address}",
-        "evidence_state": "complete",
+        "evidence_state": "accepted_degraded",
         "locked_at": locked_at,
     }
 
@@ -1628,3 +1628,37 @@ def test_admin_ingest_poker_mtt_hand_event_persists_completed_hand():
         assert duplicate.json()["state"] == "duplicate"
         assert inserted.json()["event"]["hand_id"] == "poker-mtt-hand-api-1:table-1:42"
         assert inserted.json()["event"]["payload_json"]["pot"] == 120
+
+
+def test_admin_finalize_poker_mtt_hidden_eval_persists_manifest():
+    clock = FrozenClock(datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/poker-mtt/hidden-eval/finalize",
+            json={
+                "tournament_id": "poker-mtt-hidden-api-1",
+                "policy_bundle_version": "poker_mtt_v1",
+                "seed_assignment_id": "hidden-seed-api-1",
+                "baseline_sample_id": None,
+                "entries": [
+                    {
+                        "miner_address": "claw1hiddenapi",
+                        "final_ranking_id": "poker_mtt_final_ranking:poker-mtt-hidden-api-1:1:1",
+                        "hidden_eval_score": -1.4,
+                        "score_components_json": {"baseline_delta": -1.4},
+                        "evidence_root": "sha256:" + "c" * 64,
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["manifest"]["kind"] == "poker_mtt_hidden_eval_manifest"
+        assert body["entries"][0]["hidden_eval_score"] == -1.0

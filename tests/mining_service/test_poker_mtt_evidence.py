@@ -242,6 +242,41 @@ def test_service_uses_real_hand_history_manifest_when_hand_events_exist():
     asyncio.run(scenario())
 
 
+def test_service_finalizes_hidden_eval_entries_with_clamped_scores_and_manifest():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        result = await service.finalize_poker_mtt_hidden_eval(
+            tournament_id="mtt-hidden-eval-1",
+            policy_bundle_version="poker_mtt_v1",
+            seed_assignment_id="hidden-seed-1",
+            baseline_sample_id="baseline-1",
+            entries=[
+                {
+                    "miner_address": "claw1hiddeneval",
+                    "final_ranking_id": "poker_mtt_final_ranking:mtt-hidden-eval-1:1:1",
+                    "hidden_eval_score": 1.8,
+                    "score_components_json": {"baseline_delta": 1.8},
+                    "evidence_root": "sha256:" + "b" * 64,
+                }
+            ],
+            now=datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        stored = await repo.list_poker_mtt_hidden_eval_entries_for_tournament("mtt-hidden-eval-1")
+
+        assert result["manifest"]["kind"] == "poker_mtt_hidden_eval_manifest"
+        assert result["manifest"]["evidence_state"] == "complete"
+        assert result["manifest"]["row_count"] == 1
+        assert stored[0]["hidden_eval_score"] == 1.0
+        assert stored[0]["manifest_root"] == result["manifest"]["manifest_root"]
+        assert stored[0]["visibility_state"] == "service_internal"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def final_ranking_row(member_id: str, *, rank: int, chip: Decimal) -> dict:
     return {
         "tournament_id": "mtt-evidence-1",

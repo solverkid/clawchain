@@ -319,6 +319,28 @@ poker_mtt_long_term_hud_snapshots = Table(
 )
 
 
+poker_mtt_hidden_eval_entries = Table(
+    "poker_mtt_hidden_eval_entries",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=False),
+    Column("miner_address", String, nullable=False),
+    Column("final_ranking_id", String, nullable=False),
+    Column("seed_assignment_id", String, nullable=False),
+    Column("baseline_sample_id", String, nullable=True),
+    Column("hidden_eval_score", Float, nullable=False, default=0.0),
+    Column("score_components_json", JSONB, nullable=False, default=dict),
+    Column("evidence_root", String, nullable=False),
+    Column("manifest_root", String, nullable=False),
+    Column("policy_bundle_version", String, nullable=False),
+    Column("visibility_state", String, nullable=False, default="service_internal"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_hidden_eval_tournament_miner", "tournament_id", "miner_address"),
+    Index("ix_poker_mtt_hidden_eval_final_ranking", "final_ranking_id"),
+)
+
+
 poker_mtt_final_rankings = Table(
     "poker_mtt_final_rankings",
     metadata,
@@ -420,6 +442,7 @@ TABLES = {
     "poker_mtt_hand_events": poker_mtt_hand_events,
     "poker_mtt_short_term_hud_snapshots": poker_mtt_short_term_hud_snapshots,
     "poker_mtt_long_term_hud_snapshots": poker_mtt_long_term_hud_snapshots,
+    "poker_mtt_hidden_eval_entries": poker_mtt_hidden_eval_entries,
     "poker_mtt_final_rankings": poker_mtt_final_rankings,
     "poker_mtt_result_entries": poker_mtt_result_entries,
 }

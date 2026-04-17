@@ -63,6 +63,8 @@ class MiningRepository(Protocol):
         miner_address: str | None = None,
         hud_window: str | None = None,
     ) -> list[dict]: ...
+    async def save_poker_mtt_hidden_eval_entry(self, row: dict) -> dict: ...
+    async def list_poker_mtt_hidden_eval_entries_for_tournament(self, tournament_id: str) -> list[dict]: ...
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict: ...
     async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None: ...
     async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]: ...
@@ -93,6 +95,7 @@ class FakeRepository:
         self._poker_mtt_tournaments: dict[str, dict] = {}
         self._poker_mtt_hand_events: dict[str, dict] = {}
         self._poker_mtt_hud_snapshots: dict[str, dict] = {}
+        self._poker_mtt_hidden_eval_entries: dict[str, dict] = {}
         self._poker_mtt_final_rankings: dict[str, dict] = {}
         self._poker_mtt_results: dict[str, dict] = {}
         self._request_index: dict[str, dict] = {}
@@ -452,6 +455,22 @@ class FakeRepository:
         items.sort(key=lambda item: (item.get("updated_at") or "", item.get("id") or ""), reverse=True)
         return items
 
+    async def save_poker_mtt_hidden_eval_entry(self, row: dict) -> dict:
+        entry = _normalize_poker_mtt_hidden_eval_entry(row)
+        current = deepcopy(self._poker_mtt_hidden_eval_entries.get(entry["id"], {}))
+        current.update(deepcopy(entry))
+        self._poker_mtt_hidden_eval_entries[entry["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_hidden_eval_entries_for_tournament(self, tournament_id: str) -> list[dict]:
+        items = [
+            deepcopy(entry)
+            for entry in self._poker_mtt_hidden_eval_entries.values()
+            if entry.get("tournament_id") == tournament_id
+        ]
+        items.sort(key=lambda item: (item.get("miner_address") or "", item.get("final_ranking_id") or ""))
+        return items
+
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         current = deepcopy(self._poker_mtt_final_rankings.get(final_ranking["id"], {}))
         current.update(deepcopy(final_ranking))
@@ -575,6 +594,34 @@ def _normalize_poker_mtt_hud_snapshot(row: dict) -> dict:
         "metrics_json": metrics,
         "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
         "manifest_root": row.get("manifest_root"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _normalize_poker_mtt_hidden_eval_entry(row: dict) -> dict:
+    tournament_id = row.get("tournament_id")
+    miner_address = row.get("miner_address")
+    final_ranking_id = row.get("final_ranking_id")
+    if not tournament_id:
+        raise ValueError("missing poker mtt hidden eval tournament_id")
+    if not miner_address:
+        raise ValueError("missing poker mtt hidden eval miner_address")
+    if not final_ranking_id:
+        raise ValueError("missing poker mtt hidden eval final_ranking_id")
+    return {
+        "id": row.get("id") or f"poker_mtt_hidden_eval:{tournament_id}:{miner_address}:{final_ranking_id}",
+        "tournament_id": tournament_id,
+        "miner_address": miner_address,
+        "final_ranking_id": final_ranking_id,
+        "seed_assignment_id": row.get("seed_assignment_id"),
+        "baseline_sample_id": row.get("baseline_sample_id"),
+        "hidden_eval_score": float(row.get("hidden_eval_score") or 0.0),
+        "score_components_json": deepcopy(row.get("score_components_json") or {}),
+        "evidence_root": row.get("evidence_root"),
+        "manifest_root": row.get("manifest_root"),
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "visibility_state": row.get("visibility_state") or "service_internal",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }

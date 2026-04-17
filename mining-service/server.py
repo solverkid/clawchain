@@ -26,6 +26,7 @@ from repository import FakeRepository
 from schemas import (
     ApplyArenaResultsRequest,
     ApplyPokerMTTFinalRankingProjectionRequest,
+    FinalizePokerMTTHiddenEvalRequest,
     PokerMTTHandCompletedEventRequest,
     ApplyPokerMTTResultsRequest,
     BuildPokerMTTRewardWindowRequest,
@@ -869,6 +870,20 @@ def create_app(
         try:
             return await service().ingest_poker_mtt_hand_event(
                 payload.model_dump(exclude_none=True),
+                now=now(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/admin/poker-mtt/hidden-eval/finalize")
+    async def finalize_poker_mtt_hidden_eval(payload: FinalizePokerMTTHiddenEvalRequest):
+        try:
+            return await service().finalize_poker_mtt_hidden_eval(
+                tournament_id=payload.tournament_id,
+                policy_bundle_version=payload.policy_bundle_version,
+                seed_assignment_id=payload.seed_assignment_id,
+                baseline_sample_id=payload.baseline_sample_id,
+                entries=[entry.model_dump(exclude_none=True) for entry in payload.entries],
                 now=now(),
             )
         except ValueError as exc:

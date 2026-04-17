@@ -90,6 +90,25 @@ class PokerMTTHandCompletedEventRequest(BaseModel):
     version: int | None = None
 
 
+class PokerMTTHiddenEvalEntry(BaseModel):
+    miner_address: str
+    final_ranking_id: str
+    hidden_eval_score: float = Field(ge=-10.0, le=10.0)
+    score_components_json: dict = Field(default_factory=dict)
+    evidence_root: str
+    seed_assignment_id: str | None = None
+    baseline_sample_id: str | None = None
+    visibility_state: str | None = None
+
+
+class FinalizePokerMTTHiddenEvalRequest(BaseModel):
+    tournament_id: str
+    policy_bundle_version: str = "poker_mtt_v1"
+    seed_assignment_id: str
+    baseline_sample_id: str | None = None
+    entries: list[PokerMTTHiddenEvalEntry]
+
+
 class PokerMTTFinalRankingRow(BaseModel):
     id: str
     tournament_id: str
