@@ -281,6 +281,44 @@ poker_mtt_hand_events = Table(
 )
 
 
+poker_mtt_short_term_hud_snapshots = Table(
+    "poker_mtt_short_term_hud_snapshots",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=False),
+    Column("miner_address", String, nullable=False),
+    Column("source_user_id", String, nullable=True),
+    Column("hud_window", String, nullable=False, default="short_term"),
+    Column("hands_seen", Integer, nullable=False, default=0),
+    Column("metrics_json", JSONB, nullable=False, default=dict),
+    Column("policy_bundle_version", String, nullable=False),
+    Column("manifest_root", String, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_short_hud_tournament_miner", "tournament_id", "miner_address"),
+    Index("ix_poker_mtt_short_hud_miner_updated", "miner_address", "updated_at"),
+)
+
+
+poker_mtt_long_term_hud_snapshots = Table(
+    "poker_mtt_long_term_hud_snapshots",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=False),
+    Column("miner_address", String, nullable=False),
+    Column("source_user_id", String, nullable=True),
+    Column("hud_window", String, nullable=False, default="long_term"),
+    Column("hands_seen", Integer, nullable=False, default=0),
+    Column("metrics_json", JSONB, nullable=False, default=dict),
+    Column("policy_bundle_version", String, nullable=False),
+    Column("manifest_root", String, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_long_hud_tournament_miner", "tournament_id", "miner_address"),
+    Index("ix_poker_mtt_long_hud_miner_updated", "miner_address", "updated_at"),
+)
+
+
 poker_mtt_final_rankings = Table(
     "poker_mtt_final_rankings",
     metadata,
@@ -380,6 +418,8 @@ TABLES = {
     "arena_result_entries": arena_result_entries,
     "poker_mtt_tournaments": poker_mtt_tournaments,
     "poker_mtt_hand_events": poker_mtt_hand_events,
+    "poker_mtt_short_term_hud_snapshots": poker_mtt_short_term_hud_snapshots,
+    "poker_mtt_long_term_hud_snapshots": poker_mtt_long_term_hud_snapshots,
     "poker_mtt_final_rankings": poker_mtt_final_rankings,
     "poker_mtt_result_entries": poker_mtt_result_entries,
 }

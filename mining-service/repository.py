@@ -55,6 +55,14 @@ class MiningRepository(Protocol):
     async def save_poker_mtt_hand_event(self, event: dict) -> dict: ...
     async def get_poker_mtt_hand_event(self, hand_id: str) -> dict | None: ...
     async def list_poker_mtt_hand_events_for_tournament(self, tournament_id: str) -> list[dict]: ...
+    async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict: ...
+    async def list_poker_mtt_hud_snapshots(
+        self,
+        *,
+        tournament_id: str | None = None,
+        miner_address: str | None = None,
+        hud_window: str | None = None,
+    ) -> list[dict]: ...
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict: ...
     async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None: ...
     async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]: ...
@@ -84,6 +92,7 @@ class FakeRepository:
         self._arena_results: dict[str, dict] = {}
         self._poker_mtt_tournaments: dict[str, dict] = {}
         self._poker_mtt_hand_events: dict[str, dict] = {}
+        self._poker_mtt_hud_snapshots: dict[str, dict] = {}
         self._poker_mtt_final_rankings: dict[str, dict] = {}
         self._poker_mtt_results: dict[str, dict] = {}
         self._request_index: dict[str, dict] = {}
@@ -419,6 +428,30 @@ class FakeRepository:
         items.sort(key=lambda item: (item.get("table_id") or "", item.get("hand_no") or 0, item.get("hand_id") or ""))
         return items
 
+    async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict:
+        snapshot = _normalize_poker_mtt_hud_snapshot(row)
+        current = deepcopy(self._poker_mtt_hud_snapshots.get(snapshot["id"], {}))
+        current.update(deepcopy(snapshot))
+        self._poker_mtt_hud_snapshots[snapshot["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_hud_snapshots(
+        self,
+        *,
+        tournament_id: str | None = None,
+        miner_address: str | None = None,
+        hud_window: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(snapshot) for snapshot in self._poker_mtt_hud_snapshots.values()]
+        if tournament_id is not None:
+            items = [item for item in items if item.get("tournament_id") == tournament_id]
+        if miner_address is not None:
+            items = [item for item in items if item.get("miner_address") == miner_address]
+        if hud_window is not None:
+            items = [item for item in items if item.get("hud_window") == hud_window]
+        items.sort(key=lambda item: (item.get("updated_at") or "", item.get("id") or ""), reverse=True)
+        return items
+
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         current = deepcopy(self._poker_mtt_final_rankings.get(final_ranking["id"], {}))
         current.update(deepcopy(final_ranking))
@@ -506,3 +539,42 @@ def _normalize_poker_mtt_hand_event(event: dict) -> dict:
         if field in event:
             row[field] = deepcopy(event[field])
     return row
+
+
+def _normalize_poker_mtt_hud_snapshot(row: dict) -> dict:
+    hud_window = row.get("hud_window") or "short_term"
+    tournament_id = row.get("tournament_id") or ""
+    miner_address = row.get("miner_address")
+    if not miner_address:
+        raise ValueError("missing poker mtt hud miner_address")
+    snapshot_id = row.get("id") or f"poker_mtt_hud:{hud_window}:{tournament_id}:{miner_address}"
+    base_fields = {
+        "id",
+        "tournament_id",
+        "miner_address",
+        "source_user_id",
+        "hud_window",
+        "hands_seen",
+        "metrics_json",
+        "policy_bundle_version",
+        "manifest_root",
+        "created_at",
+        "updated_at",
+    }
+    metrics = deepcopy(row.get("metrics_json") or {})
+    for key, value in row.items():
+        if key not in base_fields:
+            metrics[key] = deepcopy(value)
+    return {
+        "id": snapshot_id,
+        "tournament_id": tournament_id,
+        "miner_address": miner_address,
+        "source_user_id": row.get("source_user_id"),
+        "hud_window": hud_window,
+        "hands_seen": int(row.get("hands_seen") or metrics.get("hands_seen") or 0),
+        "metrics_json": metrics,
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "manifest_root": row.get("manifest_root"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }

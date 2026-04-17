@@ -10,6 +10,7 @@ from canonical import canonical_hash, canonicalize, rows_root
 
 HUD_MANIFEST_SCHEMA_VERSION = "poker_mtt.hud_manifest.v1"
 SHORT_TERM_HUD_MANIFEST_KIND = "poker_mtt_short_term_hud_manifest"
+LONG_TERM_HUD_MANIFEST_KIND = "poker_mtt_long_term_hud_manifest"
 HUD_ROW_SORT_KEYS = ("tournament_id", "miner_address")
 
 
@@ -49,6 +50,8 @@ class InMemoryHUDHotStore:
 
         players = _players_from_event(event)
         preflop_actions = _preflop_actions_from_event(event)
+        flop_actions = _street_actions_from_event(event, "flop")
+        showdown_results = _showdown_results_from_event(event)
         for miner_address, source_user_id in players.items():
             row = self._rows_by_tournament_and_miner.setdefault(
                 (tournament_id, miner_address),
@@ -61,16 +64,29 @@ class InMemoryHUDHotStore:
                     "vpip_count": 0,
                     "pfr_count": 0,
                     "three_bet_count": 0,
+                    "cbet_count": 0,
+                    "went_to_showdown_count": 0,
+                    "won_showdown_count": 0,
+                    "unknown_hand_count": 0,
                 },
             )
             row["hands_seen"] += 1
             player_preflop_actions = preflop_actions.get(miner_address, [])
+            player_flop_actions = flop_actions.get(miner_address, [])
             if any(_action_name(action) in {"bet", "call", "raise"} for action in player_preflop_actions):
                 row["vpip_count"] += 1
             if any(_action_name(action) == "raise" and int(action.get("raise_number", 1) or 1) == 1 for action in player_preflop_actions):
                 row["pfr_count"] += 1
             if any(_action_name(action) == "raise" and int(action.get("raise_number", 0) or 0) >= 3 for action in player_preflop_actions):
                 row["three_bet_count"] += 1
+            if any(_action_name(action) == "raise" for action in player_preflop_actions) and any(
+                _action_name(action) in {"bet", "raise"} for action in player_flop_actions
+            ):
+                row["cbet_count"] += 1
+            if miner_address in showdown_results:
+                row["went_to_showdown_count"] += 1
+                if showdown_results[miner_address] is True:
+                    row["won_showdown_count"] += 1
 
         self._projected_hand_checksums[hand_id] = checksum
         return HUDProjectionResult(state="projected", projected_rows=self.snapshot_rows(tournament_id=tournament_id))
@@ -121,9 +137,13 @@ def _players_from_event(event: dict) -> dict[str, str | None]:
 
 
 def _preflop_actions_from_event(event: dict) -> dict[str, list[dict]]:
+    return _street_actions_from_event(event, "preflop")
+
+
+def _street_actions_from_event(event: dict, street: str) -> dict[str, list[dict]]:
     actions_by_miner: dict[str, list[dict]] = {}
     for action in event.get("payload", {}).get("actions", []):
-        if str(action.get("street", "")).lower() != "preflop":
+        if str(action.get("street", "")).lower() != street:
             continue
         miner_address = action.get("miner_address")
         if not miner_address:
@@ -134,3 +154,12 @@ def _preflop_actions_from_event(event: dict) -> dict[str, list[dict]]:
 
 def _action_name(action: dict) -> str:
     return str(action.get("action") or action.get("type") or "").lower()
+
+
+def _showdown_results_from_event(event: dict) -> dict[str, bool]:
+    results = {}
+    for showdown in event.get("payload", {}).get("showdown", []):
+        miner_address = showdown.get("miner_address")
+        if miner_address:
+            results[miner_address] = bool(showdown.get("won"))
+    return results

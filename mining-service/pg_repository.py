@@ -20,6 +20,8 @@ from models import (
     arena_result_entries,
     poker_mtt_tournaments,
     poker_mtt_hand_events,
+    poker_mtt_short_term_hud_snapshots,
+    poker_mtt_long_term_hud_snapshots,
     poker_mtt_final_rankings,
     poker_mtt_result_entries,
 )
@@ -135,6 +137,54 @@ def _poker_mtt_hand_event_values(event: dict, *, created_at: datetime | str | No
     for field in ("created_at", "updated_at"):
         values[field] = _maybe_dt(values[field])
     return values
+
+
+def _poker_mtt_hud_snapshot_values(row: dict, *, created_at: datetime | str | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    hud_window = row.get("hud_window") or "short_term"
+    tournament_id = row.get("tournament_id") or ""
+    miner_address = row.get("miner_address")
+    if not miner_address:
+        raise ValueError("missing poker mtt hud miner_address")
+    base_fields = {
+        "id",
+        "tournament_id",
+        "miner_address",
+        "source_user_id",
+        "hud_window",
+        "hands_seen",
+        "metrics_json",
+        "policy_bundle_version",
+        "manifest_root",
+        "created_at",
+        "updated_at",
+    }
+    metrics = deepcopy(row.get("metrics_json") or {})
+    for key, value in row.items():
+        if key not in base_fields:
+            metrics[key] = deepcopy(value)
+    values = {
+        "id": row.get("id") or f"poker_mtt_hud:{hud_window}:{tournament_id}:{miner_address}",
+        "tournament_id": tournament_id,
+        "miner_address": miner_address,
+        "source_user_id": row.get("source_user_id"),
+        "hud_window": hud_window,
+        "hands_seen": int(row.get("hands_seen") or metrics.get("hands_seen") or 0),
+        "metrics_json": metrics,
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "manifest_root": row.get("manifest_root"),
+        "created_at": created_at or row.get("created_at") or now,
+        "updated_at": row.get("updated_at") or now,
+    }
+    for field in ("created_at", "updated_at"):
+        values[field] = _maybe_dt(values[field])
+    return values
+
+
+def _poker_mtt_hud_snapshot_table(hud_window: str):
+    if hud_window == "long_term":
+        return poker_mtt_long_term_hud_snapshots
+    return poker_mtt_short_term_hud_snapshots
 
 
 def _poker_mtt_final_ranking_values(final_ranking: dict) -> dict:
@@ -258,6 +308,16 @@ def _poker_mtt_tournament_row_to_dict(row) -> dict | None:
 
 
 def _poker_mtt_hand_event_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_hud_snapshot_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
@@ -431,6 +491,30 @@ class PostgresRepository:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hand_events_table_hand_no "
                     "ON poker_mtt_hand_events (table_id, hand_no)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_short_hud_tournament_miner "
+                    "ON poker_mtt_short_term_hud_snapshots (tournament_id, miner_address)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_short_hud_miner_updated "
+                    "ON poker_mtt_short_term_hud_snapshots (miner_address, updated_at)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_long_hud_tournament_miner "
+                    "ON poker_mtt_long_term_hud_snapshots (tournament_id, miner_address)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_long_hud_miner_updated "
+                    "ON poker_mtt_long_term_hud_snapshots (miner_address, updated_at)"
                 )
             )
 
@@ -893,6 +977,43 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             rows = await conn.execute(query)
             return [_poker_mtt_hand_event_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict:
+        values = _poker_mtt_hud_snapshot_values(row)
+        table = _poker_mtt_hud_snapshot_table(values["hud_window"])
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(table.c.id).where(table.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(update(table).where(table.c.id == values["id"]).values(**values))
+            else:
+                await conn.execute(insert(table).values(**values))
+        async with self.engine.connect() as conn:
+            saved = await conn.execute(select(table).where(table.c.id == values["id"]))
+            return _poker_mtt_hud_snapshot_row_to_dict(saved.first()) or values
+
+    async def list_poker_mtt_hud_snapshots(
+        self,
+        *,
+        tournament_id: str | None = None,
+        miner_address: str | None = None,
+        hud_window: str | None = None,
+    ) -> list[dict]:
+        tables = (
+            [_poker_mtt_hud_snapshot_table(hud_window)]
+            if hud_window in {"short_term", "long_term"}
+            else [poker_mtt_short_term_hud_snapshots, poker_mtt_long_term_hud_snapshots]
+        )
+        items: list[dict] = []
+        async with self.engine.connect() as conn:
+            for table in tables:
+                query = select(table)
+                if tournament_id is not None:
+                    query = query.where(table.c.tournament_id == tournament_id)
+                if miner_address is not None:
+                    query = query.where(table.c.miner_address == miner_address)
+                rows = await conn.execute(query.order_by(table.c.updated_at.desc(), table.c.id.desc()))
+                items.extend(_poker_mtt_hud_snapshot_row_to_dict(row) for row in rows.fetchall())
+        return [item for item in items if item is not None]
 
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         values = _poker_mtt_final_ranking_values(final_ranking)
