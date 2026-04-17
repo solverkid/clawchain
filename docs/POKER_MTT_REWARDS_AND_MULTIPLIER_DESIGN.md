@@ -1360,7 +1360,7 @@ Phase 1 不做：
 6. reward window membership 有 indexed locked/evidence-ready query 形状；production gate 仍需证明 policy isolation、bounded query count 和 no N+1
 7. 大字段 projection 已分页：主 artifact 保留 `miner_reward_rows_root` 和 page refs，page artifact 保存实际 rows；production gate 仍需通过 Postgres-backed 20k service path
 8. typed `x/settlement` anchor plan 已有 state-query confirmation 语义；2026-04-17 closeout 已补 tx-only 不等于 anchored、full-field typed confirmation、duplicate metadata drift rejection。production gate 仍需外部 gRPC/gateway/CLI query wiring
-9. admin APIs 和 projector auth 已补本地 harness gate：`/admin/*` auth enabled 时统一 bearer 保护，非本地默认打开 admin auth，projector client 可带 bearer token 并对 401/403 非重试。production gate 仍需 durable reward-bound miner identity
+9. admin APIs 和 projector auth 已补本地 harness gate：`/admin/*` auth enabled 时统一 bearer 保护，projector client 可带 bearer token 并对 401/403 非重试。production gate 仍需非本地/shared runtime fail-closed startup gate 和 durable reward-bound miner identity
 10. 本地 beta slice 测试覆盖：
     - hand ingest -> hand-history manifest -> HUD -> hidden eval -> final ranking projection -> reward window -> settlement batch -> typed tx plan -> query confirmation
     - 30-player smoke、300-player medium shape、20k-player synthetic projection paging、2,000-table early burst shape
@@ -1383,18 +1383,51 @@ Phase 1 不做：
 - `x/reputation` 不在 Phase 2 写路径中
 - production DynamoDB hand-history adapter、真实 MQ consumer、真实 hidden seed/bot/shadow eval pipeline 仍是后续任务
 
-## 13.3 Phase 3
+## 13.3 Phase 3 - production readiness，不是直接 reward rollout
 
-目标：
+2026-04-17 六个 `gpt-5.4 xhigh` review agents 复核后，Phase 3 口径从“把长期信誉和链上资格层并上来”收敛为 **Poker MTT Production Readiness**。
 
-- 把长期信誉和链上资格层并上来
+Canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 
-做法：
+Execution plan: `docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md`
 
-1. 定义窗口级 `reputation_delta`
-2. 由授权 controller 把长期信誉变化写入 `x/reputation`
-3. 保持 `reputation` 只接长期结果，不接原始比赛分
-4. reputation 纠错采用 append-only compensating delta，不原地改历史 raw reputation
+Phase 3 的目标:
+
+- 把 Go finalizer / projector 与 FastAPI final ranking schema 锁成跨语言 contract
+- 补 registration / waitlist / no-show donor parity，Redis live ranking 不能单独作为 final archive
+- 把 hand history / HUD / hidden eval / MQ checkpoint 做成 policy-owned evidence readiness
+- 把 admin auth、projector auth、durable reward-bound identity 做成 fail-closed production gate
+- 把 20k reward-window 从 offline shape test 提升到 Postgres-backed service path
+- 把 reward budget、window aggregation、multiplier effective-window 做成版本化经济合同
+- 把 `x/settlement` 从 keeper/local proof 提升到 external gRPC/gateway/CLI query proof
+- 只产出 window-level `reputation_delta` draft，不直接写 `x/reputation`
+
+Phase 3 的明确 non-goals:
+
+- 不打开 high-value mainnet rewards
+- 不把 public ELO 或 public rating 放进正向 reward weight
+- 不把 raw hand history、单场 total score、hidden eval 原始分或 HUD 指标直接写 `x/reputation`
+- 不把 donor Java `MttService` / `HandHistoryService` monolith 搬进 ClawChain
+- 不做 per-hand / per-game on-chain writes
+
+Phase 3 完成前，仍保持:
+
+- `CLAWCHAIN_POKER_MTT_REWARD_WINDOWS_ENABLED=false`
+- `CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED=false`
+- public surface 只展示 final ranking、public rating、provisional/locked/anchored 状态
+- hidden eval、shadow/bot seed、risk thresholds、单场 multiplier 草算值不公开
+
+### 13.3.1 Phase 3 P0 gates
+
+1. **Final ranking contract**: Go payload 必须通过 Python schema golden test；projection 用 `projection_id` / `final_ranking_root` 幂等；同 root 可重放，不同 root 冲突。
+2. **Donor parity**: finalizer 必须合并 Redis live ranking 与 registration/waitlist/no-show source，waiting/no-show 进入 archive 但不 reward-bearing。
+3. **Evidence / MQ**: checkpoint、lag、DLQ、conflict、replay root 进入 evidence policy；缺 hand/HUD/checkpoint/hidden eval 不能靠 caller allowlist 变成 `complete`。
+4. **Auth / identity**: non-local/shared runtime fail closed；donor token 只证明 user，不证明 reward-bound miner；`claw1local-*` 和 synthetic identity 不能进 reward window。
+5. **20k DB path**: `POST /admin/poker-mtt/reward-windows/build` 真实 Postgres path under 30 SQL statements，response under 256 KB，20k rows 通过 4 个 5,000-row page artifacts 重建 root。
+6. **Budget / aggregation / multiplier**: daily/weekly payout 受同一 emission slice 约束；window aggregation policy 版本化；multiplier 只能按后续窗口生效。
+7. **Settlement query**: external query 比对 batch id、root/hash、lane、policy、window、page roots、amount/count、submitter、correction lineage；tx success 不等于 anchored。
+8. **Ops gate**: 30-player non-mock WS explicit join/action-to-finish 是 hard gate；2,000-table burst 必须生成 completed-hand/finalizer inputs；observability 必须真实 emit。
+9. **Reputation delta**: 只做窗口级 dry-run artifact root。`x/reputation` 写入等 settlement、identity、budget、correction gates 稳定后再单独 review。
 
 ---
 
@@ -1418,18 +1451,18 @@ Phase 1 不做：
 
 ## 15. 下一步实现建议
 
-按工程优先级，下一步最合理的是：
+按 2026-04-17 Phase 3 review 后的工程优先级，下一步最合理的是：
 
-1. 定义 `poker_mtt_result_entries` / `poker_mtt_multiplier` 数据模型
-2. 定义 DynamoDB `poker_mtt_hands` / `poker_mtt_table_state` 模型与键设计
-3. 写“一手结束后及时异步上传”的 uploader
-4. 写 `poker mtt` 专用结果应用接口，不复用现有 `arena` 命名
-5. 接日榜 / 周榜 reward window 聚合
-6. 接 settlement anchor
-7. 补 short-term HUD / long-term HUD projector
-8. 补 `poker_mtt_public_rating` / ELO projector
-9. 最后再把 `reputation` 作为长期层接入
+1. 锁 Go finalizer/projector 与 FastAPI final ranking schema 的跨语言 contract
+2. 补 registration / waitlist / no-show final archive parity
+3. 补 admin fail-closed、resolved admin principal、durable reward-bound identity
+4. 补 MQ checkpoint / replay / DLQ / lag 和 policy-owned evidence readiness
+5. 把 20k reward-window 验收迁到真实 Postgres service path，并消掉 N+1 / full historical scan
+6. 补 settlement external query、bounded anchor artifacts、terminal mismatch states
+7. 冻结 budget ledger、aggregation policy、multiplier effective-window
+8. 把 sidecar retry、30-player finish gate、2,000-table burst、real observability 做成 CI/manual gates
+9. 最后再做 window-level `reputation_delta` dry-run；`x/reputation` 写入另起 release review
 
 一句话总结：
 
-**先把 `poker mtt` 做成“Dynamo 承接每手 raw hand history、Postgres 承接赛果/HUD/rating/结算、链上只锚定窗口 root”的系统，再把 `reputation` 作为长期信誉层补进去。**
+**先把 `poker mtt` 做成“donor runtime 外接、Go final ranking contract 稳定、evidence/reward/settlement 可重放、20k DB path 可证明、链上只锚定窗口 root”的系统，再把 `reputation` 作为长期信誉层补进去。**

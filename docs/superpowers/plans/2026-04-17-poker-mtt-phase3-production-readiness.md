@@ -1,0 +1,385 @@
+# Poker MTT Phase 3 Production Readiness Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Turn the Poker MTT local beta into a production-readiness gated system for final ranking, evidence, identity, 20k reward windows, settlement proof, and later reputation deltas.
+
+**Architecture:** Keep donor gameserver/auth as external references. ClawChain owns a Go sidecar/finalizer/projector contract, a Python mining-service evidence/reward pipeline, and Cosmos `x/settlement` root anchoring. Phase 3 does not enable high-value production rewards by default; it closes the gates required before reward-bearing rollout.
+
+**Tech Stack:** Go sidecar/authadapter/pokermtt packages, Python FastAPI mining service, SQLAlchemy/Postgres repository, pytest, Go tests, Cosmos SDK module tests, GitNexus for graph orientation.
+
+---
+
+## File Structure
+
+- Modify `pokermtt/projector/result_payload.go`: cross-language final ranking payload fields and idempotency key.
+- Modify `pokermtt/projector/client.go`: retry semantics and auth failure handling.
+- Modify `pokermtt/ranking/*`: registration/waitlist/no-show handoff and stable finalization invariants.
+- Modify `pokermtt/sidecar/*`: idempotent operation retry policy and donor error propagation.
+- Modify `authadapter/*`: donor token timeout and non-local missing miner binding behavior.
+- Modify `mining-service/schemas.py`: final ranking projection contract additions.
+- Modify `mining-service/server.py`: projection idempotency, admin principal audit, fail-closed config checks.
+- Modify `mining-service/forecast_engine.py`: reward identity enforcement, policy-owned evidence readiness, bulk reward-window path, multiplier effective-window logic, anchor confirmation states.
+- Modify `mining-service/repository.py` and `mining-service/pg_repository.py`: new repository APIs for MQ checkpoint/conflict/DLQ, bulk final rankings/rating snapshots, reward identity, correction supersession.
+- Modify `mining-service/models.py`: new tables/indexes for reward identity, MQ checkpoint/conflict/DLQ, budget ledger, immutable artifacts if needed.
+- Modify `x/settlement/**` and `proto/clawchain/settlement/v1/**`: generated query path, CLI/gateway wiring, expanded proof fields or artifact-hash proof contract.
+- Add tests under `tests/mining_service/`, `pokermtt/**`, `authadapter/**`, and `x/settlement/**`.
+- Update docs under `docs/` after each wave.
+
+---
+
+### Task 1: Lock Final Ranking Projection Contract
+
+**Files:**
+- Modify: `pokermtt/projector/result_payload.go`
+- Modify: `mining-service/schemas.py`
+- Modify: `mining-service/server.py`
+- Test: `pokermtt/projector/*_test.go`
+- Test: `tests/mining_service/test_poker_mtt_final_ranking_contract.py`
+
+- [ ] **Step 1: Write the failing cross-language fixture test**
+
+Create a Go-produced JSON fixture for one finished entrant, one busted entrant, and one waiting/no-show entrant. Validate the fixture with Python `ApplyPokerMTTFinalRankingProjectionRequest`.
+
+- [ ] **Step 2: Run the test and confirm schema mismatch**
+
+Run: `go test ./pokermtt/projector -run FinalRankingPayload -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_final_ranking_contract.py`
+
+Expected: Python validation fails on missing required fields or ignored top-level canonical fields.
+
+- [ ] **Step 3: Add projection identity fields**
+
+Add `projection_id`, `final_ranking_root`, `standing_snapshot_id`, `standing_snapshot_hash`, and payload `locked_at` to the accepted schema. Either make server-generated row fields explicit or have Go populate required row fields.
+
+- [ ] **Step 4: Make projection idempotent**
+
+Same `projection_id` plus same root returns the existing projection. Same `projection_id` plus changed root returns 409. Use payload `locked_at` after validation.
+
+- [ ] **Step 5: Verify and commit**
+
+Run: `go test ./pokermtt/projector -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_final_ranking_contract.py tests/mining_service/test_poker_mtt_final_ranking.py`
+
+Commit: `git commit -m "feat(pokermtt): lock final ranking projection contract"`
+
+### Task 2: Add Registration/Waitlist Finalizer Parity
+
+**Files:**
+- Modify: `pokermtt/ranking/finalizer.go`
+- Modify: `pokermtt/ranking/redis_store.go`
+- Add/modify tests: `pokermtt/ranking/*_test.go`
+- Update docs: `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
+
+- [ ] **Step 1: Write failing finalizer tests**
+
+Cover registered no-show absent from Redis, waiting user present only in registration snapshot, stale composite Redis snapshot, and chip/count invariant drift.
+
+- [ ] **Step 2: Add finalization input source**
+
+Introduce a registration/waitlist snapshot interface that can be backed by donor auth, local fixtures, or future DB adapters.
+
+- [ ] **Step 3: Merge archive-only rows**
+
+Final archive must include no-show/waiting users with reward-ineligible rank states. Runtime Redis live ranking remains insufficient by itself.
+
+- [ ] **Step 4: Add barrier invariants**
+
+Require terminal state or quiet-period watermark plus stable repeated reads, count checks, alive/died/waiting checks, and total chip drift tolerance.
+
+- [ ] **Step 5: Verify and commit**
+
+Run: `go test ./pokermtt/ranking -v`
+
+Commit: `git commit -m "feat(pokermtt): merge waitlist into final rankings"`
+
+### Task 3: Fail Closed On Admin/Auth And Reward Identity
+
+**Files:**
+- Modify: `mining-service/config.py`
+- Modify: `mining-service/server.py`
+- Modify: `authadapter/donor_tokenverify.go`
+- Modify: `authadapter/principal.go`
+- Modify: `mining-service/models.py`
+- Modify: `mining-service/forecast_engine.py`
+- Test: `tests/mining_service/test_forecast_api.py`
+- Test: `tests/mining_service/test_poker_mtt_reward_identity.py`
+- Test: `authadapter/*_test.go`
+
+- [ ] **Step 1: Write failing tests**
+
+Unset `CLAWCHAIN_ENV` with external bind should not silently expose admin routes. Donor token without miner binding must not become reward-bound in non-local mode. `claw1local-*` should be able to join harness but fail reward projection/window selection.
+
+- [ ] **Step 2: Add startup validation**
+
+Non-local/shared runtime requires admin auth enabled and token configured. Local/test can disable auth only explicitly.
+
+- [ ] **Step 3: Add durable reward identity**
+
+Persist miner/user/economic-unit binding with source, expiry, revocation, synthetic flag, and reward-bound flag.
+
+- [ ] **Step 4: Enforce reward identity**
+
+Final projection and reward-window selection reject missing, synthetic, expired, revoked, or donor-only identities.
+
+- [ ] **Step 5: Add admin principal audit**
+
+Replace self-attested operator fields with resolved admin principal and role for mutation endpoints.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `go test ./authadapter -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_forecast_api.py tests/mining_service/test_poker_mtt_reward_identity.py`
+
+Commit: `git commit -m "feat(pokermtt): enforce reward-bound identity"`
+
+### Task 4: Build MQ Checkpoint, Conflict, DLQ, And Policy-Owned Evidence
+
+**Files:**
+- Modify: `mining-service/models.py`
+- Modify: `mining-service/repository.py`
+- Modify: `mining-service/pg_repository.py`
+- Modify: `mining-service/forecast_engine.py`
+- Test: `tests/mining_service/test_poker_mtt_mq_recovery.py`
+- Test: `tests/mining_service/test_poker_mtt_evidence.py`
+
+- [ ] **Step 1: Write failing MQ recovery tests**
+
+Cover duplicate message, lower stale version, higher version supersession, same-version checksum conflict persisted, malformed payload DLQ, crash after hand/HUD write before checkpoint, deterministic replay root, lag/watermark blocking reward readiness.
+
+- [ ] **Step 2: Add checkpoint/conflict/DLQ models**
+
+Model topic/queue, consumer group, offset, donor `bizId`, message ID, replay root, lag, conflict reason, and DLQ reason.
+
+- [ ] **Step 3: Persist checksum conflicts**
+
+Same hand/version with checksum drift must create durable conflict/manual-review state and block reward readiness.
+
+- [ ] **Step 4: Make evidence readiness policy-owned**
+
+Required components and degraded allowlist come from policy, not caller convenience. Missing required roots cannot return `complete`.
+
+- [ ] **Step 5: Version evidence artifacts**
+
+Use content-addressed or versioned artifact IDs so old roots remain retrievable after rebuilds.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_mq_recovery.py tests/mining_service/test_poker_mtt_evidence.py tests/mining_service/test_poker_mtt_reward_gating.py`
+
+Commit: `git commit -m "feat(pokermtt): add mq recovery evidence gates"`
+
+### Task 5: Prove 20k DB-Backed Reward Window Path
+
+**Files:**
+- Modify: `mining-service/pg_repository.py`
+- Modify: `mining-service/repository.py`
+- Modify: `mining-service/forecast_engine.py`
+- Modify: `mining-service/models.py`
+- Add: `scripts/poker_mtt/run_phase3_db_load_check.sh`
+- Test: `tests/mining_service/test_poker_mtt_phase3_db_load.py`
+
+- [ ] **Step 1: Write failing Postgres-backed load tests**
+
+Seed 300 and 20k reward-ready rows, call `POST /admin/poker-mtt/reward-windows/build`, and assert response size, page count, root reconstruction, SQL count, idempotent rebuild, and RSS delta.
+
+- [ ] **Step 2: Add bulk repository methods**
+
+Bulk final rankings by ID, latest rating snapshots by miner set, bulk artifact upsert, and bounded closed-window candidate query.
+
+- [ ] **Step 3: Replace N+1 reward-window logic**
+
+Remove per-result final-ranking lookups and per-miner rating snapshot queries from the main build path.
+
+- [ ] **Step 4: Replace automatic full scan**
+
+Automatic reconcile must use indexed closed-window query, not `list_poker_mtt_results()`.
+
+- [ ] **Step 5: Add indexes and EXPLAIN assertions**
+
+Cover locked/evidence-ready results, artifacts by entity/kind/id, rating snapshots by miner/window, and final ranking IDs.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_phase3_db_load.py`
+
+Commit: `git commit -m "perf(pokermtt): prove db backed reward window scale"`
+
+### Task 6: Wire External Settlement Query And Bounded Anchor Payloads
+
+**Files:**
+- Modify: `proto/clawchain/settlement/v1/query.proto`
+- Modify: `proto/clawchain/settlement/v1/tx.proto`
+- Modify: `x/settlement/types/*`
+- Modify: `x/settlement/keeper/*`
+- Modify: `x/settlement/client/cli/query.go`
+- Modify: `x/settlement/module/module.go`
+- Modify: `mining-service/chain_adapter.py`
+- Modify: `mining-service/forecast_engine.py`
+- Test: `x/settlement/keeper/*_test.go`
+- Test: `tests/mining_service/test_chain_adapter.py`
+- Test: `tests/mining_service/test_forecast_engine.py`
+
+- [ ] **Step 1: Write failing external query tests**
+
+Test gRPC/gateway/CLI query returns stored anchor state and mining-service confirmation refuses tx-only success.
+
+- [ ] **Step 2: Generate/wire query path**
+
+Replace placeholder query registration and stub CLI with real query server and client.
+
+- [ ] **Step 3: Expand confirmation fields or artifact proof**
+
+Either add first-class fields or require artifact retrieval/hash proof for window, page roots, budget, submitter, policy, counts, and correction lineage.
+
+- [ ] **Step 4: Bound anchor payloads**
+
+Settlement batches and admin list endpoints return summaries/page refs for 20k rows, not inline full rows.
+
+- [ ] **Step 5: Add terminal mismatch states**
+
+Persist `typed_state_missing`, `root_mismatch`, `metadata_mismatch`, `fallback_memo_only`, and `confirmed` distinctly.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `go test ./x/settlement/... -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_chain_adapter.py tests/mining_service/test_forecast_engine.py`
+
+Commit: `git commit -m "feat(settlement): confirm anchors through external query"`
+
+### Task 7: Harden Reward Economics And Multiplier Timing
+
+**Files:**
+- Modify: `mining-service/models.py`
+- Modify: `mining-service/repository.py`
+- Modify: `mining-service/pg_repository.py`
+- Modify: `mining-service/forecast_engine.py`
+- Test: `tests/mining_service/test_poker_mtt_reward_economics.py`
+
+- [ ] **Step 1: Write failing economics tests**
+
+Budget source missing/oversized rejects; daily plus weekly cannot exceed same emission slice; stable performer versus lucky spike behaves according to versioned aggregation policy; multiplier cannot affect same-window payout.
+
+- [ ] **Step 2: Add budget ledger**
+
+Track `budget_source_id`, emission epoch/range, lane caps, daily/weekly split, unused/forfeited/rolled amount, and budget root.
+
+- [ ] **Step 3: Freeze aggregation policy**
+
+Replace implicit unversioned `max()` with explicit policy, preferably capped top-K or trimmed mean unless product freezes best-of-window.
+
+- [ ] **Step 4: Add effective-window multiplier**
+
+Store before/after/effective window snapshots. Reward windows use prior finalized multiplier snapshots only.
+
+- [ ] **Step 5: Verify and commit**
+
+Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_reward_economics.py tests/mining_service/test_poker_mtt_reward_gating.py`
+
+Commit: `git commit -m "feat(pokermtt): harden reward economics"`
+
+### Task 8: Promote Sidecar Finish And Observability Gates
+
+**Files:**
+- Modify: `pokermtt/sidecar/client.go`
+- Modify: `pokermtt/sidecar/ws.go`
+- Modify: `scripts/poker_mtt/non_mock_play_harness.py`
+- Modify: `scripts/poker_mtt/generate_hand_history_load.py`
+- Modify: `Makefile`
+- Test: `pokermtt/sidecar/*_test.go`
+- Test: `tests/mining_service/test_poker_mtt_load_contract.py`
+
+- [ ] **Step 1: Write failing retry and harness tests**
+
+Cover 503-then-OK, timeout-then-OK, non-retryable 400/401, donor error body propagation, 30-player finish hard assertions, and 2,000-table completed-hand ingest shape.
+
+- [ ] **Step 2: Add sidecar retry policy**
+
+Retry idempotent orchestration calls only. Never retry betting/action calls.
+
+- [ ] **Step 3: Make finish harness a hard gate**
+
+Require 30 joined, 30 ranking, 30 users sent actions, 1 survivor, 29 finished/eliminated, 0 pending, and only allowed WS close reasons.
+
+- [ ] **Step 4: Emit real metrics/log events**
+
+Test metrics/log sink receives hand ingest, conflict, HUD duration, reward-window query, selected/omitted counts, page count, MQ lag, DLQ count, and settlement confirmation state.
+
+- [ ] **Step 5: Verify and commit**
+
+Run: `go test ./pokermtt/sidecar -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_load_contract.py && bash scripts/poker_mtt/run_phase3_db_load_check.sh --players 300 --local`
+
+Commit: `git commit -m "test(pokermtt): add phase3 ops gates"`
+
+### Task 9: Draft Window-Level Reputation Delta Only
+
+**Files:**
+- Modify: `docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md`
+- Modify: `x/reputation/**` only if wiring is explicitly scoped after settlement gates pass
+- Add/modify tests: `tests/mining_service/test_poker_mtt_reputation_delta.py`
+
+- [ ] **Step 1: Write dry-run reputation delta tests**
+
+Window-level delta rows include window id, settlement batch id, policy, prior score ref, cap, reason, and correction lineage. No single tournament can write directly.
+
+- [ ] **Step 2: Produce delta artifact root**
+
+Add `reputation_delta_rows_root` to reward/settlement artifacts only as dry-run output.
+
+- [ ] **Step 3: Keep chain writes disabled**
+
+Do not add direct `x/reputation` writes until external settlement query, identity, budget, and correction gates have passed.
+
+- [ ] **Step 4: Verify and commit**
+
+Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_reputation_delta.py`
+
+Commit: `git commit -m "feat(pokermtt): draft window reputation deltas"`
+
+### Task 10: Documentation, CI Targets, And Release Review
+
+**Files:**
+- Modify: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
+- Modify: `docs/HARNESS_API_CONTRACTS.md`
+- Modify: `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
+- Modify: `docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md`
+- Modify: `Makefile`
+
+- [ ] **Step 1: Add fast and heavy gates**
+
+Fast gate covers unit/contracts. Heavy/manual gate covers Postgres 20k, sidecar 30-player finish, and settlement local chain query proof.
+
+- [ ] **Step 2: Add artifact locations**
+
+Document where load result JSON, SQL counts, RSS samples, EXPLAIN plans, replay roots, and settlement receipts are written.
+
+- [ ] **Step 3: Add production release checklist**
+
+Rollout remains disabled until a separate release review approves budget source, operator roles, chain submitter, monitoring, and rollback.
+
+- [ ] **Step 4: Verify and commit**
+
+Run: `git diff --check && rg -n "Phase 3|POKER_MTT_PHASE3|reward-bound|settlement query|20k" docs`
+
+Commit: `git commit -m "docs(pokermtt): finalize phase3 readiness plan"`
+
+---
+
+## Final Verification Before Rollout Consideration
+
+Run:
+
+```bash
+pytest tests/mining_service -q
+go test ./authadapter ./pokermtt/... ./x/settlement/... ./x/reputation/... -v
+bash scripts/poker_mtt/run_phase3_db_load_check.sh --players 20000 --postgres "$CLAWCHAIN_DATABASE_URL"
+python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30
+git diff --check
+```
+
+Expected:
+
+- all unit and integration tests pass
+- 20k reward-window response under 256 KB
+- exactly 4 reward row page artifacts at page size 5,000
+- root reconstruction covers 20k rows
+- SQL count and RSS thresholds pass
+- external settlement query confirms typed anchor state
+- reward-bound identity rejects local/synthetic donor-only identities
+- no direct `x/reputation` writes from single tournament results

@@ -803,6 +803,19 @@ Phase 2 已把 donor 里线上跑稳的几个结构转成 ClawChain 自己的 Go
 - per-hand S3 冷归档与 full replay bundle
 - `x/reputation` 直接接收单场 total score 或 raw HUD
 
+### 13.4 Phase 3 donor parity 更新
+
+2026-04-17 Phase 3 review 后，`lepoker-auth` 的参考口径进一步收紧：
+
+- `rankingWaitingUserNum` 或 Redis live ranking 只能说明 runtime 视角，不足以构成 ClawChain final archive parity。
+- Go finalizer 必须显式接入 registration / waitlist / no-show source，确保 registered-but-never-joined 用户也进入 canonical archive。
+- waiting/no-show rows 进入 final ranking archive，但默认 reward-ineligible，不能靠缺席样本拿 reward。
+- `RecordListener` / `RecordCalculateListener` -> `HandHistoryService` 仍是确认过的 donor raw hand path；DynamoDB user history 继续作为 production/read-model candidate，不能过度宣称是已确认 MTT raw ingest 主路径。
+- Donor MQ 的关键参考不是 RocketMQ 本身，而是 `bizId` idempotency、checkpoint/replay、DLQ/conflict、lag/watermark 这些 production semantics。
+- Donor auth token verifies user identity only。ClawChain reward-bound miner/economic-unit identity 必须由本项目自己的 durable binding 决定。
+
+对应 ClawChain Phase 3 spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
+
 ---
 
 ## 14. 最后结论

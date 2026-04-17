@@ -551,7 +551,7 @@ tournament result
 - final ranking 可能晚于比赛结束出现，因为 donor finish handling、hand history、hidden eval、evidence lock 都是异步链路
 - 公开侧使用 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived internal `total_score`
 
-2026-04-17 后续执行口径统一为 **Poker MTT Evidence Phase 2**。它不是 ClawChain 产品总 Phase 2，也不是链上 reputation 阶段，范围只包含：
+2026-04-17 Phase 2 执行口径统一为 **Poker MTT Evidence Phase 2**。它不是 ClawChain 产品总 Phase 2，也不是链上 reputation 阶段，范围只包含：
 
 - completed-hand evidence ingest
 - final ranking durable handoff
@@ -581,6 +581,16 @@ tournament result
 
 产品上仍然按 beta / internal rollout 处理：自动发奖和 poker settlement anchoring 默认关闭，公开页面只展示 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived `total_score`。
 
+2026-04-17 Phase 3 统一定义为 **Poker MTT Production Readiness**，不是 high-value reward launch。Phase 3 的目标是关闭这些闸门：
+
+- Go finalizer/projector 与 FastAPI final ranking contract
+- registration / waitlist / no-show donor parity
+- MQ checkpoint / replay / DLQ / lag 与 policy-owned evidence readiness
+- admin fail-closed、resolved admin principal、durable reward-bound identity
+- Postgres-backed 20k reward-window service path、budget ledger、aggregation policy、multiplier effective-window
+- external `x/settlement` query proof 和 bounded anchor artifacts
+- window-level `reputation_delta` dry-run，仍不直接写 `x/reputation`
+
 面向用户只展示:
 
 - 当前 MTT 状态
@@ -597,7 +607,7 @@ tournament result
 - 风控阈值
 - 单场 multiplier 草算值
 
-详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md)、[docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md)、[docs/POKER_MTT_PHASE2_HARNESS_SPECS.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE2_HARNESS_SPECS.md) 和 [docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md)。
+详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md)、[docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md)、[docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md)、[docs/POKER_MTT_PHASE2_HARNESS_SPECS.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE2_HARNESS_SPECS.md)、[docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md) 和 [docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md)。
 
 ### 5.6 anti-abuse、review 与成熟度
 
@@ -862,6 +872,8 @@ Claw Points:
 - [ ] 文档与 onboarding 同步更新
 
 ### Phase 3: 主网上线与增长策略
+
+Poker MTT 不直接进入本节的增长策略。它先走 `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md` 的 production readiness gates；所有 P0 gates 通过前，只允许 internal/staging/provisional reward 展示，不作为 high-value mainnet reward 增长手段。
 
 **从 100 到 1000 矿工：**
 

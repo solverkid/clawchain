@@ -893,6 +893,17 @@ bash scripts/poker_mtt/run_phase2_load_check.sh --players 30 --local
 
 这个 local check 只证明 projection/page contract 的形状，不证明 production reward-window path。Phase 2 production harness 还必须单独覆盖 DB-backed `POST /admin/poker-mtt/reward-windows/build`、bounded query count、no N+1 final-ranking/rating lookup、真实 metric/log emission，以及 donor sidecar 30-player non-mock play-to-finish gate。
 
+Phase 3 production-readiness 进一步要求：
+
+- 20k check 必须走真实 Postgres-backed admin endpoint，不再只走 offline helper。
+- reward-window build 主路径 SQL statements under 30；unchanged rebuild under 5 and no artifact rewrites。
+- automatic reconcile 必须走 bounded closed-window query，不能调用全量 `list_poker_mtt_results()` 后内存分组。
+- settlement batch/admin response 不能通过 `anchor_payload_json` 重新内联 20k `miner_reward_rows`；默认只返回 summary/root/page refs。
+- external settlement query 必须能通过 gRPC/gateway/CLI 读取 stored anchor state，并让 mining-service 完成 typed full-field confirmation。
+- 30-player non-mock sidecar gate 必须成为 hard assertion，不再只记录 smoke summary。
+
+Canonical Phase 3 spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
+
 最小 observability fields：
 
 ```text

@@ -8,7 +8,9 @@
 - `docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md`
 - `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
 - `docs/HARNESS_API_CONTRACTS.md`
+- `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 - `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`
+- `docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md`
 
 ---
 
@@ -30,7 +32,7 @@
 - legacy/admin apply 不能靠 caller-provided hidden / consistency / spoofed economic unit 进入 reward-ready path
 - reward-window selection 按 locked range、evidence、eligibility、policy/evaluation version 过滤
 - settlement confirmation 区分 tx-only 和 typed state；adapter / keeper 拒绝 full-field metadata drift
-- `/admin/*` 在 auth enabled 时统一 bearer 保护；非本地默认打开 admin auth
+- `/admin/*` 在 auth enabled 时统一 bearer 保护；Phase 3 还必须补非本地/shared runtime fail-closed startup gate
 - Go final-ranking projector client 支持 bearer token、retryable backoff，并把 401/403 视为非重试配置错误
 
 但当前仍不能称为 reward-bearing production ready。Phase 2 之后还缺少几类 production 硬门槛:
@@ -39,6 +41,7 @@
 - MQ checkpoint / replay / DLQ / lag 还只是设计，不是实现
 - donor `lepoker-auth` 的 MTT finalization / scheduler / hand history parity 不能过度宣称
 - durable reward-bound miner identity / local mock identity 非奖励化还需要 production adapter 证明
+- Phase 3 的 canonical 生产闸门见 `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 
 因此本文件的最终口径是:
 
@@ -334,7 +337,26 @@ Pass criteria:
 
 ---
 
-## 7. Implementation Order
+## 7. Phase 3 Handoff
+
+Phase 2 closeout 后，下一阶段统一命名为 **Poker MTT Phase 3 Production Readiness**。
+
+Phase 3 不等同于 high-value reward rollout。它的职责是把本文件列出的 residual production gaps 做成可执行、可测、可审计的 gates:
+
+- Go finalizer/projector 与 FastAPI final ranking contract 对齐，并保证 projection idempotency
+- registration / waitlist / no-show donor parity
+- MQ checkpoint / replay / DLQ / lag 与 policy-owned evidence readiness
+- admin fail-closed、resolved admin principal、durable reward-bound identity
+- Postgres-backed 20k reward-window service path、budget ledger、aggregation policy、multiplier effective-window
+- external `x/settlement` gRPC/gateway/CLI query confirmation 与 bounded settlement artifacts
+- sidecar retry、30-player non-mock finish hard gate、2,000-table completed-hand burst、real observability
+- window-level `reputation_delta` draft only，仍不直接写 `x/reputation`
+
+Canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
+
+Execution plan: `docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md`
+
+## 8. Implementation Order
 
 Recommended next execution order:
 
@@ -367,7 +389,7 @@ Recommended next execution order:
 
 ---
 
-## 8. Rollout Rule
+## 9. Rollout Rule
 
 Before all P1 gates pass:
 
@@ -384,7 +406,7 @@ After all P1 gates pass:
 
 ---
 
-## 9. Final Product Alignment
+## 10. Final Product Alignment
 
 This spec keeps the original product design intact:
 

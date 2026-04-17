@@ -1192,7 +1192,21 @@ python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-
 - 测试期间 RocketMQ publish 有 `create grpc conn failed, err=context deadline exceeded` 类日志，但比赛启动、join、行动、ranking 和完赛不被阻断
 - donor 进程在 agent 非交互后台 `nohup` 场景下仍可能刚 listen 后退出；以前台方式运行 donor 时 30 人测试可跑到完赛
 
-### 18.7 Git 排除口径
+### 18.7 Phase 3 finalizer / projector / sidecar contract
+
+Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
+
+- Redis ranking snapshot 必须叠加 registration / waitlist / no-show source，不能只读 `rankingUserInfo` / alive zset / died list。
+- finalizer 必须等待 terminal donor state 或 quiet-period watermark，并校验 alive/died/waiting count、snapshot count、total chip drift。
+- projector request 必须包含 `projection_id`、`final_ranking_root`、`standing_snapshot_id`、`standing_snapshot_hash`、payload `locked_at` 和 policy version。
+- `/admin/poker-mtt/final-rankings/project` 必须幂等：同 projection/root 重放返回 existing，不同 root 冲突。
+- sidecar HTTP 的 start/get-room/join/reentry/cancel 可以按 idempotency key retry；bet/action 类调用不能自动 retry。
+- non-mock 30-player gate 需要硬断言：30 joined、30 ranking、30 users sent actions、1 survivor、29 finished/eliminated、0 pending，且 WS errors 只允许 bust/kick 后的已知 close reason。
+- donor token verify 缺 miner binding 时只能生成 local harness identity，不得进入 reward-bound path。
+
+对应 canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
+
+### 18.8 Git 排除口径
 
 `lepoker-gameserver` 是独立 donor repo，不随 ClawChain 提交。
 
