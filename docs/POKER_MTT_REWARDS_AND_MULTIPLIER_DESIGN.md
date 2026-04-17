@@ -1434,7 +1434,12 @@ Phase 3 完成前，仍保持:
 - Final ranking contract gate 的 projector/schema/API 幂等部分已落地。
 - `projection_id`、`final_ranking_root`、standing snapshot refs、policy version、payload `locked_at` 是 FastAPI request schema 的必需字段。
 - Mining-service projection response 会回传 canonical metadata；同一 `projection_id`/root replay 返回 artifact 中保存的 existing result，同一 `projection_id` 搭配不同 root 返回 409。
-- 剩余 G1 blocker 是 donor parity finalizer：registration/waitlist/no-show snapshot merge 和 terminal/watermark invariants。
+
+2026-04-18 Task 2 closeout:
+
+- Donor parity finalizer gate 已补 registration/waitlist/no-show snapshot merge。
+- Registration-only waiting/no-show 用户进入 final ranking archive，但因 `rank_state=waiting_no_show` / `status=pending` 不会成为 reward-bearing result。
+- Optional finalization barriers 覆盖 terminal-or-quiet、entrant count、alive/died/waiting count 和 total chip drift tolerance。
 
 ---
 

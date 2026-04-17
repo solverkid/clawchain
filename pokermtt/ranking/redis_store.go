@@ -25,9 +25,14 @@ type RedisClient interface {
 	LRange(ctx context.Context, key string, start int64, stop int64) ([]string, error)
 }
 
+type RegistrationSource interface {
+	ReadRegistrationSnapshot(ctx context.Context, tournamentID string) (RegistrationSnapshot, error)
+}
+
 type RedisStore struct {
-	Client   RedisClient
-	GameType string
+	Client             RedisClient
+	GameType           string
+	RegistrationSource RegistrationSource
 }
 
 func (s RedisStore) ReadLiveSnapshot(ctx context.Context, tournamentID string) (LiveSnapshot, error) {
@@ -97,6 +102,31 @@ func (s RedisStore) ReadStableLiveSnapshot(ctx context.Context, tournamentID str
 		}
 	}
 	return LiveSnapshot{}, fmt.Errorf("%w after %d attempts", ErrUnstableLiveSnapshot, maxAttempts)
+}
+
+func (s RedisStore) ReadStableFinalizationInput(
+	ctx context.Context,
+	tournamentID string,
+	policy StableSnapshotPolicy,
+) (LiveSnapshot, RegistrationSnapshot, error) {
+	live, err := s.ReadStableLiveSnapshot(ctx, tournamentID, policy)
+	if err != nil {
+		return LiveSnapshot{}, RegistrationSnapshot{}, err
+	}
+	if s.RegistrationSource == nil {
+		return live, RegistrationSnapshot{TournamentID: live.TournamentID, SourceMTTID: live.SourceMTTID}, nil
+	}
+	registration, err := s.RegistrationSource.ReadRegistrationSnapshot(ctx, tournamentID)
+	if err != nil {
+		return LiveSnapshot{}, RegistrationSnapshot{}, err
+	}
+	if registration.TournamentID == "" {
+		registration.TournamentID = live.TournamentID
+	}
+	if registration.SourceMTTID == "" {
+		registration.SourceMTTID = live.SourceMTTID
+	}
+	return live, registration, nil
 }
 
 func hashLiveSnapshot(snapshot LiveSnapshot) (string, error) {

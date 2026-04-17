@@ -68,6 +68,60 @@ func TestRedisStoreReadStableSnapshotRejectsDrift(t *testing.T) {
 	require.Contains(t, err.Error(), "unstable poker mtt live ranking snapshot")
 }
 
+func TestRedisStoreReadStableFinalizationInputIncludesRegistrationSource(t *testing.T) {
+	ctx := context.Background()
+	redis := newFakeRedis()
+	redis.hashes[model.RankingUserInfoKey(model.GameTypeMTT, "mtt-finalization-input")] = map[string]string{
+		"7:1": mustJSON(t, map[string]any{
+			"userID":       "7",
+			"entryNumber":  1,
+			"minerAddress": "claw1miner7",
+			"endChip":      4500,
+		}),
+	}
+	redis.zsets[model.RankingAliveScoreKey(model.GameTypeMTT, "mtt-finalization-input")] = []ranking.ZMember{
+		{Member: "7:1", Score: 4500},
+	}
+	registrationSource := fakeRegistrationSource{
+		snapshot: ranking.RegistrationSnapshot{
+			TournamentID: "mtt-finalization-input",
+			UserInfo: map[string]string{
+				"8:1": mustJSON(t, map[string]any{
+					"userID":        "8",
+					"entryNumber":   1,
+					"minerAddress":  "claw1miner8",
+					"standUpStatus": "no_show",
+					"startChip":     3000,
+					"endChip":       3000,
+				}),
+			},
+		},
+	}
+	store := ranking.RedisStore{
+		Client:             redis,
+		GameType:           model.GameTypeMTT,
+		RegistrationSource: &registrationSource,
+	}
+
+	live, registration, err := store.ReadStableFinalizationInput(
+		ctx,
+		"mtt-finalization-input",
+		ranking.StableSnapshotPolicy{MaxAttempts: 2},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "7", mustDecode(t, live.UserInfo["7:1"])["userID"])
+	require.Equal(t, "8", mustDecode(t, registration.UserInfo["8:1"])["userID"])
+	require.Equal(t, []string{
+		model.RankingUserInfoKey(model.GameTypeMTT, "mtt-finalization-input"),
+		model.RankingAliveScoreKey(model.GameTypeMTT, "mtt-finalization-input"),
+		model.RankingDiedInfoKey(model.GameTypeMTT, "mtt-finalization-input"),
+		model.RankingUserInfoKey(model.GameTypeMTT, "mtt-finalization-input"),
+		model.RankingAliveScoreKey(model.GameTypeMTT, "mtt-finalization-input"),
+		model.RankingDiedInfoKey(model.GameTypeMTT, "mtt-finalization-input"),
+	}, redis.calls)
+	require.Equal(t, []string{"mtt-finalization-input"}, registrationSource.calls)
+}
+
 func TestFinalizerCanonicalizesLiveSnapshotEdges(t *testing.T) {
 	snapshot := ranking.LiveSnapshot{
 		TournamentID: "mtt-edges",
@@ -219,6 +273,172 @@ func TestFinalizerCollapsesDuplicateReentriesByEconomicUnit(t *testing.T) {
 	require.Equal(t, ranking.RankStateDuplicateEntryCollapsed, rows["42:1"].RankState)
 	require.Equal(t, 1, rankValue(t, rows["42:2"]))
 	require.Equal(t, 2, rankValue(t, rows["42:1"]))
+}
+
+func TestFinalizerMergesRegistrationNoShowAbsentFromRedis(t *testing.T) {
+	snapshot := ranking.LiveSnapshot{
+		TournamentID: "mtt-registration-no-show",
+		GameType:     model.GameTypeMTT,
+		UserInfo: map[string]string{
+			"7:1": mustJSON(t, map[string]any{
+				"userID":       "7",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner7",
+				"startChip":    3000,
+				"endChip":      6000,
+			}),
+		},
+		Alive: []ranking.ZMember{{Member: "7:1", Score: 6000}},
+	}
+	registration := ranking.RegistrationSnapshot{
+		TournamentID: "mtt-registration-no-show",
+		UserInfo: map[string]string{
+			"8:1": mustJSON(t, map[string]any{
+				"userID":         "8",
+				"entryNumber":    1,
+				"minerAddress":   "claw1miner8",
+				"economicUnitID": "eu:8",
+				"playerName":     "miner 8",
+				"standUpStatus":  "no_show",
+				"startChip":      3000,
+				"endChip":        3000,
+			}),
+		},
+	}
+
+	finalized, err := (ranking.Finalizer{PolicyBundleVersion: "poker-mtt-phase3-test"}).
+		FinalizeWithRegistration(snapshot, registration)
+	require.NoError(t, err)
+
+	rows := rowsByMember(finalized.Rows)
+	require.Len(t, rows, 2)
+	require.Equal(t, ranking.RankStateWaitingNoShow, rows["8:1"].RankState)
+	require.Equal(t, ranking.StandingStatusPending, rows["8:1"].Status)
+	require.False(t, rows["8:1"].SnapshotFound)
+	require.True(t, rows["8:1"].WaitingOrNoShow)
+	require.Equal(t, "claw1miner8", rows["8:1"].MinerAddress)
+	require.Equal(t, "eu:8", rows["8:1"].EconomicUnitID)
+	require.Nil(t, rows["8:1"].Rank)
+}
+
+func TestFinalizerMergesRegistrationWaitingUserAbsentFromRedis(t *testing.T) {
+	snapshot := ranking.LiveSnapshot{
+		TournamentID: "mtt-registration-waiting",
+		GameType:     model.GameTypeMTT,
+		UserInfo: map[string]string{
+			"7:1": mustJSON(t, map[string]any{
+				"userID":       "7",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner7",
+				"startChip":    3000,
+				"endChip":      3000,
+			}),
+		},
+		Alive: []ranking.ZMember{{Member: "7:1", Score: 3000}},
+	}
+	registration := ranking.RegistrationSnapshot{
+		TournamentID: "mtt-registration-waiting",
+		UserInfo: map[string]string{
+			"9:1": mustJSON(t, map[string]any{
+				"userID":       "9",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner9",
+				"status":       "WAITING",
+				"startChip":    3000,
+				"endChip":      3000,
+			}),
+		},
+	}
+
+	finalized, err := (ranking.Finalizer{PolicyBundleVersion: "poker-mtt-phase3-test"}).
+		FinalizeWithRegistration(snapshot, registration)
+	require.NoError(t, err)
+
+	rows := rowsByMember(finalized.Rows)
+	require.Equal(t, ranking.RankStateWaitingNoShow, rows["9:1"].RankState)
+	require.False(t, rows["9:1"].SnapshotFound)
+	require.True(t, rows["9:1"].WaitingOrNoShow)
+	require.Equal(t, "WAITING", rows["9:1"].StandUpStatus)
+}
+
+func TestFinalizerRequiresTerminalStateOrQuietBarrierWhenConfigured(t *testing.T) {
+	snapshot := ranking.LiveSnapshot{
+		TournamentID: "mtt-barrier",
+		RuntimeState: "running",
+		UserInfo: map[string]string{
+			"7:1": mustJSON(t, map[string]any{
+				"userID":       "7",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner7",
+				"startChip":    3000,
+				"endChip":      3000,
+			}),
+		},
+		Alive: []ranking.ZMember{{Member: "7:1", Score: 3000}},
+	}
+
+	_, err := (ranking.Finalizer{
+		PolicyBundleVersion:    "poker-mtt-phase3-test",
+		RequireTerminalOrQuiet: true,
+	}).Finalize(snapshot)
+	require.ErrorIs(t, err, ranking.ErrFinalizationBarrier)
+
+	snapshot.QuietPeriodSatisfied = true
+	finalized, err := (ranking.Finalizer{
+		PolicyBundleVersion:    "poker-mtt-phase3-test",
+		RequireTerminalOrQuiet: true,
+	}).Finalize(snapshot)
+	require.NoError(t, err)
+	require.Len(t, finalized.Rows, 1)
+}
+
+func TestFinalizerRejectsEntrantCountAndChipDriftWhenConfigured(t *testing.T) {
+	snapshot := ranking.LiveSnapshot{
+		TournamentID: "mtt-invariants",
+		RuntimeState: "finished",
+		UserInfo:     map[string]string{},
+		Alive:        []ranking.ZMember{{Member: "7:1", Score: 9000}},
+	}
+
+	_, err := (ranking.Finalizer{
+		PolicyBundleVersion: "poker-mtt-phase3-test",
+		ExpectedEntrants:    2,
+	}).Finalize(snapshot)
+	require.ErrorIs(t, err, ranking.ErrFinalizationBarrier)
+	require.Contains(t, err.Error(), "entrant count")
+
+	_, err = (ranking.Finalizer{
+		PolicyBundleVersion:     "poker-mtt-phase3-test",
+		ExpectedTotalChip:       6000,
+		TotalChipDriftTolerance: 0,
+	}).Finalize(snapshot)
+	require.ErrorIs(t, err, ranking.ErrFinalizationBarrier)
+	require.Contains(t, err.Error(), "total chip drift")
+}
+
+func TestFinalizerRejectsAliveDiedWaitingCountDriftWhenConfigured(t *testing.T) {
+	expectedAlive := 0
+	snapshot := ranking.LiveSnapshot{
+		TournamentID: "mtt-status-counts",
+		RuntimeState: "finished",
+		UserInfo: map[string]string{
+			"7:1": mustJSON(t, map[string]any{
+				"userID":       "7",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner7",
+				"startChip":    3000,
+				"endChip":      3000,
+			}),
+		},
+		Alive: []ranking.ZMember{{Member: "7:1", Score: 3000}},
+	}
+
+	_, err := (ranking.Finalizer{
+		PolicyBundleVersion: "poker-mtt-phase3-test",
+		ExpectedAlive:       &expectedAlive,
+	}).Finalize(snapshot)
+	require.ErrorIs(t, err, ranking.ErrFinalizationBarrier)
+	require.Contains(t, err.Error(), "alive count")
 }
 
 func TestFinalizerCanonicalizesEqualAliveScoreTiesByMemberID(t *testing.T) {
@@ -381,6 +601,19 @@ type fakeRedis struct {
 
 type driftingRedisClient struct {
 	hgetCalls int
+}
+
+type fakeRegistrationSource struct {
+	snapshot ranking.RegistrationSnapshot
+	calls    []string
+}
+
+func (s *fakeRegistrationSource) ReadRegistrationSnapshot(ctx context.Context, tournamentID string) (ranking.RegistrationSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return ranking.RegistrationSnapshot{}, err
+	}
+	s.calls = append(s.calls, tournamentID)
+	return s.snapshot, nil
 }
 
 func (r *driftingRedisClient) HGetAll(ctx context.Context, key string) (map[string]string, error) {

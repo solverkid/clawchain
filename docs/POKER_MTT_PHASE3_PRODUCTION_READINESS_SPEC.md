@@ -100,6 +100,7 @@ Completed on 2026-04-18:
 - The projection contract requires `schema_version`, `projection_id`, `source_mtt_id`, `standing_snapshot_id`, `standing_snapshot_hash`, `final_ranking_root`, and payload `locked_at`.
 - Go projector carries donor final-ranking row fields needed by mining-service: snapshot status, standing status, player name, start chip, stand-up status, source rank metadata, zset score, and row create/update timestamps.
 - `/admin/poker-mtt/final-rankings/project` uses payload `locked_at`, writes a `poker_mtt_final_ranking_projection` artifact marker, returns the existing projection for same `projection_id` and root, and returns 409 for same `projection_id` with a changed root.
+- Go finalizer now accepts a separate registration/waitlist snapshot source, archives registration-only waiting/no-show users as reward-ineligible final-ranking rows, and exposes optional terminal/quiet, entrant count, alive/died/waiting count, and total chip drift barriers.
 
 Acceptance:
 

@@ -1212,6 +1212,12 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 - Mining-service final-ranking projection endpoint 已按 `projection_id` 写 artifact marker；同 root replay 返回已存在结果，不同 root 返回 409。
 - Projection 锁定时间来自 payload `locked_at`，不会因 admin request 到达时间漂移。
 
+2026-04-18 已落地的 finalizer donor-parity 部分:
+
+- `RedisStore.ReadStableFinalizationInput` 会读取 stable Redis live ranking，并可选叠加 registration/waitlist source。
+- `Finalizer.FinalizeWithRegistration` 会把 registration-only waiting/no-show 用户写入 final archive，标记为 `waiting_no_show` / `pending` / `snapshot_found=false`，但不进入 reward-bearing rank。
+- Finalizer 支持可选 terminal-or-quiet barrier、expected entrant count、alive/died/waiting count 和 total chip drift tolerance。
+
 ### 18.8 Git 排除口径
 
 `lepoker-gameserver` 是独立 donor repo，不随 ClawChain 提交。

@@ -77,27 +77,35 @@ Commit: `git commit -m "feat(pokermtt): lock final ranking projection contract"`
 - Add/modify tests: `pokermtt/ranking/*_test.go`
 - Update docs: `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
 
-- [ ] **Step 1: Write failing finalizer tests**
+- [x] **Step 1: Write failing finalizer tests**
 
 Cover registered no-show absent from Redis, waiting user present only in registration snapshot, stale composite Redis snapshot, and chip/count invariant drift.
 
-- [ ] **Step 2: Add finalization input source**
+- [x] **Step 2: Add finalization input source**
 
 Introduce a registration/waitlist snapshot interface that can be backed by donor auth, local fixtures, or future DB adapters.
 
-- [ ] **Step 3: Merge archive-only rows**
+- [x] **Step 3: Merge archive-only rows**
 
 Final archive must include no-show/waiting users with reward-ineligible rank states. Runtime Redis live ranking remains insufficient by itself.
 
-- [ ] **Step 4: Add barrier invariants**
+- [x] **Step 4: Add barrier invariants**
 
 Require terminal state or quiet-period watermark plus stable repeated reads, count checks, alive/died/waiting checks, and total chip drift tolerance.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify**
 
 Run: `go test ./pokermtt/ranking -v`
 
 Commit: `git commit -m "feat(pokermtt): merge waitlist into final rankings"`
+
+2026-04-18 implementation note:
+
+- Added `RegistrationSource` / `RegistrationSnapshot` and `RedisStore.ReadStableFinalizationInput` so donor auth/local fixture/future DB registration adapters can feed finalization without pretending the data came from Redis ranking keys.
+- Added `Finalizer.FinalizeWithRegistration`; legacy `Finalize(snapshot)` still works.
+- Registration-only waiting/no-show users are archived as `rank_state=waiting_no_show`, `status=pending`, `snapshot_found=false`, and reward-ineligible rows.
+- Optional readiness barriers now cover terminal-or-quiet gating, expected entrant count, and total chip drift tolerance.
+- Existing stable Redis snapshot retry remains the stale composite snapshot guard.
 
 ### Task 3: Fail Closed On Admin/Auth And Reward Identity
 
