@@ -41,6 +41,10 @@ func (AppModuleBasic) GetTxCmd() *cobra.Command {
 	return settlementcli.NewTxCmd()
 }
 
+func (AppModuleBasic) GetQueryCmd() *cobra.Command {
+	return settlementcli.NewQueryCmd()
+}
+
 func (AppModuleBasic) DefaultGenesis(_ codec.JSONCodec) json.RawMessage {
 	gs := types.DefaultGenesis()
 	bz, _ := json.Marshal(gs)
@@ -66,6 +70,7 @@ func NewAppModule(k keeper.Keeper) AppModule {
 
 func (am AppModule) RegisterServices(cfg module.Configurator) {
 	types.RegisterMsgServer(cfg.MsgServer(), keeper.NewMsgServerImpl(am.keeper))
+	types.RegisterQueryServer(cfg.QueryServer(), keeper.NewQueryServerImpl(am.keeper))
 }
 
 func (am AppModule) InitGenesis(ctx sdk.Context, _ codec.JSONCodec, data json.RawMessage) {

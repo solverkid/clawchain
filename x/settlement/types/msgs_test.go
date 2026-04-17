@@ -2,6 +2,7 @@ package types_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -18,11 +19,11 @@ func TestMsgAnchorSettlementBatchValidateBasic(t *testing.T) {
 		Lane:                "fast",
 		SchemaVersion:       "settlement.v1",
 		PolicyBundleVersion: "policy.v1",
-		CanonicalRoot:       "sha256:canonical",
-		AnchorPayloadHash:   "sha256:payload",
-		RewardWindowIdsRoot: "sha256:windows",
-		TaskRunIdsRoot:      "sha256:tasks",
-		MinerRewardRowsRoot: "sha256:miners",
+		CanonicalRoot:       "sha256:" + strings.Repeat("a", 64),
+		AnchorPayloadHash:   "sha256:" + strings.Repeat("b", 64),
+		RewardWindowIdsRoot: "sha256:" + strings.Repeat("c", 64),
+		TaskRunIdsRoot:      "sha256:" + strings.Repeat("d", 64),
+		MinerRewardRowsRoot: "sha256:" + strings.Repeat("e", 64),
 		WindowEndAt:         "2026-04-10T03:15:00Z",
 		TotalRewardAmount:   12345,
 	}
@@ -60,4 +61,27 @@ func TestMsgAnchorSettlementBatchValidateBasic(t *testing.T) {
 	missingWindowEnd := *msg
 	missingWindowEnd.WindowEndAt = ""
 	require.Error(t, missingWindowEnd.ValidateBasic())
+}
+
+func TestAnchorSettlementBatchRejectsMalformedSha256Roots(t *testing.T) {
+	msg := &types.MsgAnchorSettlementBatch{
+		Submitter:           sdk.AccAddress(bytes.Repeat([]byte{0x01}, 20)).String(),
+		SettlementBatchId:   "sb_2026_04_10_0001",
+		AnchorJobId:         "anchor_job_01",
+		Lane:                "fast",
+		SchemaVersion:       "settlement.v1",
+		PolicyBundleVersion: "policy.v1",
+		CanonicalRoot:       "sha256:x",
+		AnchorPayloadHash:   "sha256:" + strings.Repeat("b", 64),
+		RewardWindowIdsRoot: "sha256:" + strings.Repeat("c", 64),
+		TaskRunIdsRoot:      "sha256:" + strings.Repeat("d", 64),
+		MinerRewardRowsRoot: "sha256:" + strings.Repeat("e", 64),
+		WindowEndAt:         "2026-04-10T03:15:00Z",
+		TotalRewardAmount:   12345,
+	}
+
+	err := msg.ValidateBasic()
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid settlement batch")
 }

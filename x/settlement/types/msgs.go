@@ -1,7 +1,7 @@
 package types
 
 import (
-	"strings"
+	"regexp"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -11,6 +11,8 @@ var allowedAnchorSchemaVersions = map[string]struct{}{
 	"settlement.v1":               {},
 	"clawchain.anchor_payload.v1": {},
 }
+
+var sha256RefPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func (msg *MsgAnchorSettlementBatch) ValidateBasic() error {
 	if _, err := sdk.AccAddressFromBech32(msg.Submitter); err != nil {
@@ -43,7 +45,7 @@ func (msg *MsgAnchorSettlementBatch) ValidateBasic() error {
 }
 
 func isSHA256Ref(value string) bool {
-	return strings.HasPrefix(value, "sha256:") && len(value) > len("sha256:")
+	return sha256RefPattern.MatchString(value)
 }
 
 func (msg *MsgAnchorSettlementBatch) GetSigners() []sdk.AccAddress {

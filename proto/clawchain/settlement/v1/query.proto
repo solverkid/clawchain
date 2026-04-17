@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package clawchain.settlement.v1;
+
+import "google/api/annotations.proto";
+import "clawchain/settlement/v1/tx.proto";
+
+option go_package = "github.com/clawchain/clawchain/x/settlement/types;types";
+
+service Query {
+  rpc SettlementAnchor(QuerySettlementAnchorRequest) returns (QuerySettlementAnchorResponse) {
+    option (google.api.http).get = "/clawchain/settlement/v1/anchors/{settlement_batch_id}";
+  }
+}
+
+message QuerySettlementAnchorRequest {
+  string settlement_batch_id = 1;
+}
+
+message QuerySettlementAnchorResponse {
+  SettlementAnchor anchor = 1;
+}
+
+message SettlementAnchor {
+  string settlement_batch_id = 1;
+  string anchor_job_id = 2;
+  string submitter = 3;
+  string lane = 4;
+  string schema_version = 5;
+  string policy_bundle_version = 6;
+  string canonical_root = 7;
+  string anchor_payload_hash = 8;
+  string reward_window_ids_root = 9;
+  string task_run_ids_root = 10;
+  string miner_reward_rows_root = 11;
+  string window_end_at = 12;
+  uint64 total_reward_amount = 13;
+  int64 anchored_at_height = 14;
+  int64 anchored_at_time = 15;
+}

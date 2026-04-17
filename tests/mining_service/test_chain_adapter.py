@@ -34,6 +34,10 @@ class DummySettings:
     anchor_offline_signing = True
 
 
+def sha256_ref(char: str) -> str:
+    return "sha256:" + char * 64
+
+
 def test_normalize_keyring_dir_accepts_backend_subdirectory():
     normalized = chain_adapter.normalize_keyring_dir(
         "deploy/testnet-artifacts/val1/keyring-test",
@@ -85,16 +89,16 @@ def test_compile_typed_tx_intent_renders_unsigned_tx_and_sign_doc():
             "id": "sb_2026_04_10_0001",
             "lane": "fast",
             "anchor_schema_version": "settlement.v1",
-            "canonical_root": "sha256:canonical",
-            "anchor_payload_hash": "sha256:payload",
+            "canonical_root": sha256_ref("a"),
+            "anchor_payload_hash": sha256_ref("b"),
             "window_end_at": "2026-04-10T03:15:00Z",
             "total_reward_amount": 12345,
             "anchor_payload_json": {
                 "schema_version": "settlement.v1",
                 "policy_bundle_version": "policy.v1",
-                "reward_window_ids_root": "sha256:windows",
-                "task_run_ids_root": "sha256:tasks",
-                "miner_reward_rows_root": "sha256:miners",
+                "reward_window_ids_root": sha256_ref("c"),
+                "task_run_ids_root": sha256_ref("d"),
+                "miner_reward_rows_root": sha256_ref("e"),
             },
         },
     )
@@ -130,16 +134,16 @@ def test_compile_typed_tx_intent_rejects_invalid_schema_version():
             "id": "sb_2026_04_10_0001",
             "lane": "fast",
             "anchor_schema_version": "bad-schema",
-            "canonical_root": "sha256:canonical",
-            "anchor_payload_hash": "sha256:payload",
+            "canonical_root": sha256_ref("a"),
+            "anchor_payload_hash": sha256_ref("b"),
             "window_end_at": "2026-04-10T03:15:00Z",
             "total_reward_amount": 12345,
             "anchor_payload_json": {
                 "schema_version": "bad-schema",
                 "policy_bundle_version": "policy.v1",
-                "reward_window_ids_root": "sha256:windows",
-                "task_run_ids_root": "sha256:tasks",
-                "miner_reward_rows_root": "sha256:miners",
+                "reward_window_ids_root": sha256_ref("c"),
+                "task_run_ids_root": sha256_ref("d"),
+                "miner_reward_rows_root": sha256_ref("e"),
             },
         },
     )
@@ -169,15 +173,15 @@ def test_resolve_typed_broadcast_spec_rejects_missing_canonical_root(monkeypatch
             "lane": "fast",
             "anchor_schema_version": "settlement.v1",
             "canonical_root": "",
-            "anchor_payload_hash": "sha256:payload",
+            "anchor_payload_hash": sha256_ref("b"),
             "window_end_at": "2026-04-10T03:15:00Z",
             "total_reward_amount": 12345,
             "anchor_payload_json": {
                 "schema_version": "settlement.v1",
                 "policy_bundle_version": "policy.v1",
-                "reward_window_ids_root": "sha256:windows",
-                "task_run_ids_root": "sha256:tasks",
-                "miner_reward_rows_root": "sha256:miners",
+                "reward_window_ids_root": sha256_ref("c"),
+                "task_run_ids_root": sha256_ref("d"),
+                "miner_reward_rows_root": sha256_ref("e"),
             },
         },
     )
@@ -315,16 +319,16 @@ def test_resolve_typed_broadcast_spec_builds_generate_sign_broadcast_commands(mo
             "id": "sb_2026_04_10_0001",
             "lane": "fast",
             "anchor_schema_version": "settlement.v1",
-            "canonical_root": "sha256:canonical",
-            "anchor_payload_hash": "sha256:payload",
+            "canonical_root": sha256_ref("a"),
+            "anchor_payload_hash": sha256_ref("b"),
             "window_end_at": "2026-04-10T03:15:00Z",
             "total_reward_amount": 12345,
             "anchor_payload_json": {
                 "schema_version": "settlement.v1",
                 "policy_bundle_version": "policy.v1",
-                "reward_window_ids_root": "sha256:windows",
-                "task_run_ids_root": "sha256:tasks",
-                "miner_reward_rows_root": "sha256:miners",
+                "reward_window_ids_root": sha256_ref("c"),
+                "task_run_ids_root": sha256_ref("d"),
+                "miner_reward_rows_root": sha256_ref("e"),
             },
         },
     )
@@ -483,16 +487,16 @@ def test_broadcast_anchor_tx_via_typed_cli_retries_sequence_mismatch_once(monkey
             "id": "sb_2026_04_10_0001",
             "lane": "fast",
             "anchor_schema_version": "settlement.v1",
-            "canonical_root": "sha256:canonical",
-            "anchor_payload_hash": "sha256:payload",
+            "canonical_root": sha256_ref("a"),
+            "anchor_payload_hash": sha256_ref("b"),
             "window_end_at": "2026-04-10T03:15:00Z",
             "total_reward_amount": 12345,
             "anchor_payload_json": {
                 "schema_version": "settlement.v1",
                 "policy_bundle_version": "policy.v1",
-                "reward_window_ids_root": "sha256:windows",
-                "task_run_ids_root": "sha256:tasks",
-                "miner_reward_rows_root": "sha256:miners",
+                "reward_window_ids_root": sha256_ref("c"),
+                "task_run_ids_root": sha256_ref("d"),
+                "miner_reward_rows_root": sha256_ref("e"),
             },
         },
     )
@@ -631,3 +635,57 @@ def test_inspect_broadcast_tx_confirmation_returns_pending_when_not_found(monkey
     assert receipt["tx_hash"] == "ABC123TX"
     assert receipt["confirmation_status"] == "pending"
     assert receipt["found"] is False
+
+
+def test_chain_adapter_confirms_anchor_by_querying_stored_state():
+    adapter = chain_adapter.FakeSettlementChainAdapter(
+        query_response={
+            "settlement_batch_id": "sb_1",
+            "canonical_root": "sha256:" + "a" * 64,
+            "anchor_payload_hash": "sha256:" + "b" * 64,
+        }
+    )
+
+    result = adapter.confirm_settlement_anchor(
+        settlement_batch_id="sb_1",
+        canonical_root="sha256:" + "a" * 64,
+        anchor_payload_hash="sha256:" + "b" * 64,
+    )
+
+    assert result["confirmed"] is True
+    assert result["confirmation_status"] == "confirmed"
+
+
+def test_chain_adapter_distinguishes_missing_fallback_and_mismatched_anchor_state():
+    typed_missing = chain_adapter.confirm_settlement_anchor_response(
+        query_response={},
+        settlement_batch_id="sb_1",
+        canonical_root=sha256_ref("a"),
+        anchor_payload_hash=sha256_ref("b"),
+        tx_receipt={"confirmation_status": "confirmed"},
+        broadcast_method="typed_msg",
+    )
+    fallback_missing = chain_adapter.confirm_settlement_anchor_response(
+        query_response={},
+        settlement_batch_id="sb_1",
+        canonical_root=sha256_ref("a"),
+        anchor_payload_hash=sha256_ref("b"),
+        tx_receipt={"confirmation_status": "confirmed"},
+        broadcast_method="fallback_memo",
+    )
+    mismatch = chain_adapter.confirm_settlement_anchor_response(
+        query_response={
+            "settlement_batch_id": "sb_1",
+            "canonical_root": sha256_ref("c"),
+            "anchor_payload_hash": sha256_ref("b"),
+        },
+        settlement_batch_id="sb_1",
+        canonical_root=sha256_ref("a"),
+        anchor_payload_hash=sha256_ref("b"),
+        tx_receipt={"confirmation_status": "confirmed"},
+        broadcast_method="typed_msg",
+    )
+
+    assert typed_missing["confirmation_status"] == "typed_tx_accepted_state_missing"
+    assert fallback_missing["confirmation_status"] == "fallback_memo_tx_accepted_no_typed_state"
+    assert mismatch["confirmation_status"] == "root_hash_mismatch"

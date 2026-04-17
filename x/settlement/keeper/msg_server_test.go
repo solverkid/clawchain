@@ -2,6 +2,7 @@ package keeper_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,11 +50,11 @@ func testAnchorMsg() *types.MsgAnchorSettlementBatch {
 		Lane:                "fast",
 		SchemaVersion:       "settlement.v1",
 		PolicyBundleVersion: "policy.v1",
-		CanonicalRoot:       "sha256:canonical",
-		AnchorPayloadHash:   "sha256:payload",
-		RewardWindowIdsRoot: "sha256:windows",
-		TaskRunIdsRoot:      "sha256:tasks",
-		MinerRewardRowsRoot: "sha256:miners",
+		CanonicalRoot:       "sha256:" + strings.Repeat("a", 64),
+		AnchorPayloadHash:   "sha256:" + strings.Repeat("b", 64),
+		RewardWindowIdsRoot: "sha256:" + strings.Repeat("c", 64),
+		TaskRunIdsRoot:      "sha256:" + strings.Repeat("d", 64),
+		MinerRewardRowsRoot: "sha256:" + strings.Repeat("e", 64),
 		WindowEndAt:         "2026-04-10T03:15:00Z",
 		TotalRewardAmount:   12345,
 	}
@@ -90,8 +91,8 @@ func TestAnchorSettlementBatchRejectsDuplicateWithDifferentRoot(t *testing.T) {
 	require.NoError(t, err)
 
 	conflicting := *msg
-	conflicting.CanonicalRoot = "sha256:canonical-mutated"
-	conflicting.AnchorPayloadHash = "sha256:payload-mutated"
+	conflicting.CanonicalRoot = "sha256:" + strings.Repeat("f", 64)
+	conflicting.AnchorPayloadHash = "sha256:" + strings.Repeat("0", 64)
 	_, err = msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), &conflicting)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "settlement anchor conflict")
@@ -111,4 +112,21 @@ func TestAnchorSettlementBatchRejectsUnauthorizedSubmitter(t *testing.T) {
 	require.Contains(t, err.Error(), "unauthorized settlement anchor submitter")
 
 	require.False(t, k.HasSettlementAnchor(ctx, msg.SettlementBatchId))
+}
+
+func TestQuerySettlementAnchorReturnsStoredAnchor(t *testing.T) {
+	msgServer, k, ctx := setupSettlementMsgServer(t, testAnchorSubmitter())
+	msg := testAnchorMsg()
+	_, err := msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), msg)
+	require.NoError(t, err)
+
+	queryServer := keeper.NewQueryServerImpl(k)
+	resp, err := queryServer.SettlementAnchor(
+		sdk.WrapSDKContext(ctx),
+		&types.QuerySettlementAnchorRequest{SettlementBatchId: msg.SettlementBatchId},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, msg.CanonicalRoot, resp.Anchor.CanonicalRoot)
+	require.Equal(t, msg.AnchorPayloadHash, resp.Anchor.AnchorPayloadHash)
 }

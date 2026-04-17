@@ -27,7 +27,7 @@ DEFAULT_TYPED_SIGN_MODE_ENUM = 1
 ALLOWED_ANCHOR_SCHEMA_VERSIONS = {"settlement.v1", "clawchain.anchor_payload.v1"}
 _SEQUENCE_MISMATCH_RE = re.compile(r"expected\s+(?P<expected>\d+),\s+got\s+(?P<got>\d+)")
 _COIN_AMOUNT_RE = re.compile(r"^(?P<amount>\d+)(?P<denom>[a-zA-Z][a-zA-Z0-9/:._-]*)$")
-_HASH_VALUE_RE = re.compile(r"^sha256:[^\s]+$")
+_HASH_VALUE_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CLAWCHAIN_ADDRESS_RE = re.compile(r"^claw1[0-9a-z]+$")
 _CLI_BROADCAST_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
@@ -36,6 +36,79 @@ def _stable_hash(payload: dict) -> str:
     return "sha256:" + hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def confirm_settlement_anchor_response(
+    *,
+    query_response: dict,
+    settlement_batch_id: str,
+    canonical_root: str,
+    anchor_payload_hash: str,
+    tx_receipt: dict | None = None,
+    broadcast_method: str = "typed_msg",
+) -> dict:
+    anchor = query_response.get("anchor") or query_response
+    if not anchor:
+        tx_confirmed = (tx_receipt or {}).get("confirmation_status") == "confirmed"
+        if tx_confirmed and broadcast_method == "fallback_memo":
+            status = "fallback_memo_tx_accepted_no_typed_state"
+        elif tx_confirmed:
+            status = "typed_tx_accepted_state_missing"
+        else:
+            status = "state_missing"
+        return {
+            "settlement_batch_id": settlement_batch_id,
+            "confirmed": False,
+            "confirmation_status": status,
+            "canonical_root": None,
+            "anchor_payload_hash": None,
+            "query_response": query_response,
+            "tx_receipt": tx_receipt or {},
+            "broadcast_method": broadcast_method,
+        }
+    queried_batch_id = anchor.get("settlement_batch_id")
+    queried_canonical_root = anchor.get("canonical_root")
+    queried_anchor_payload_hash = anchor.get("anchor_payload_hash")
+    confirmed = (
+        queried_batch_id == settlement_batch_id
+        and queried_canonical_root == canonical_root
+        and queried_anchor_payload_hash == anchor_payload_hash
+    )
+    if confirmed:
+        status = "confirmed"
+    elif queried_batch_id != settlement_batch_id:
+        status = "settlement_batch_mismatch"
+    else:
+        status = "root_hash_mismatch"
+    return {
+        "settlement_batch_id": settlement_batch_id,
+        "confirmed": confirmed,
+        "confirmation_status": status,
+        "canonical_root": queried_canonical_root,
+        "anchor_payload_hash": queried_anchor_payload_hash,
+        "query_response": query_response,
+        "tx_receipt": tx_receipt or {},
+        "broadcast_method": broadcast_method,
+    }
+
+
+class FakeSettlementChainAdapter:
+    def __init__(self, *, query_response: dict):
+        self.query_response = query_response
+
+    def confirm_settlement_anchor(
+        self,
+        *,
+        settlement_batch_id: str,
+        canonical_root: str,
+        anchor_payload_hash: str,
+    ) -> dict:
+        return confirm_settlement_anchor_response(
+            query_response=self.query_response,
+            settlement_batch_id=settlement_batch_id,
+            canonical_root=canonical_root,
+            anchor_payload_hash=anchor_payload_hash,
+        )
 
 
 def _build_typed_tx_intent(*, future_msg: dict, memo: str) -> dict:
@@ -295,11 +368,16 @@ def _validate_anchor_settlement_message_value(message_value: dict) -> None:
 
     canonical_root = str(message_value.get("canonical_root") or "").strip()
     if not _HASH_VALUE_RE.fullmatch(canonical_root):
-        raise ValueError("canonical_root must be a sha256:... value")
+        raise ValueError("canonical_root must be a sha256:<64 lowercase hex> value")
 
     anchor_payload_hash = str(message_value.get("anchor_payload_hash") or "").strip()
     if not _HASH_VALUE_RE.fullmatch(anchor_payload_hash):
-        raise ValueError("anchor_payload_hash must be a sha256:... value")
+        raise ValueError("anchor_payload_hash must be a sha256:<64 lowercase hex> value")
+
+    for field in ("reward_window_ids_root", "task_run_ids_root", "miner_reward_rows_root"):
+        root = str(message_value.get(field) or "").strip()
+        if not _HASH_VALUE_RE.fullmatch(root):
+            raise ValueError(f"{field} must be a sha256:<64 lowercase hex> value")
 
 
 def _encode_typed_message(message: dict) -> bytes:
