@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import insert, select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+import poker_mtt_results
 from models import (
     metadata,
     miners,
@@ -1406,6 +1407,7 @@ class PostgresRepository:
     ) -> list[dict]:
         window_start = _maybe_dt(window_start_at)
         window_end = _maybe_dt(window_end_at)
+        compatible_policy_versions = poker_mtt_results.compatible_result_policy_versions(policy_bundle_version)
         query = (
             select(poker_mtt_result_entries)
             .where(poker_mtt_result_entries.c.locked_at.is_not(None))
@@ -1414,8 +1416,8 @@ class PostgresRepository:
             .where(poker_mtt_result_entries.c.rated_or_practice == "rated")
             .where(poker_mtt_result_entries.c.human_only.is_(True))
             .where(poker_mtt_result_entries.c.evaluation_state == "final")
-            .where(poker_mtt_result_entries.c.evaluation_version.is_not(None))
-            .where(poker_mtt_result_entries.c.evidence_state.in_(["complete", "accepted_degraded"]))
+            .where(poker_mtt_result_entries.c.evaluation_version.in_(compatible_policy_versions))
+            .where(poker_mtt_result_entries.c.evidence_state.in_(sorted(poker_mtt_results.REWARD_READY_EVIDENCE_STATES)))
             .where(poker_mtt_result_entries.c.final_ranking_id.is_not(None))
             .where(poker_mtt_result_entries.c.standing_snapshot_id.is_not(None))
             .where(poker_mtt_result_entries.c.evidence_root.is_not(None))

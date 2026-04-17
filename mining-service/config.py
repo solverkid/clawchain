@@ -26,6 +26,10 @@ def _optional_int_env(name: str) -> int | None:
     return int(raw)
 
 
+def _admin_auth_default() -> bool:
+    return os.getenv("CLAWCHAIN_ENV", "local").lower() not in {"local", "dev", "development", "test"}
+
+
 @dataclass(slots=True)
 class AppSettings:
     database_url: str | None = os.getenv("CLAWCHAIN_DATABASE_URL")
@@ -95,7 +99,7 @@ class AppSettings:
     anchor_pending_confirmation_warning_seconds: float = float(
         os.getenv("CLAWCHAIN_ANCHOR_PENDING_CONFIRMATION_WARNING_SECONDS", "120.0")
     )
-    admin_auth_enabled: bool = _bool_env("CLAWCHAIN_ADMIN_AUTH_ENABLED", False)
+    admin_auth_enabled: bool = _bool_env("CLAWCHAIN_ADMIN_AUTH_ENABLED", _admin_auth_default())
     admin_auth_token: str | None = os.getenv("CLAWCHAIN_ADMIN_AUTH_TOKEN")
     cors_allowed_origins: tuple[str, ...] = field(
         default_factory=lambda: _csv_env(

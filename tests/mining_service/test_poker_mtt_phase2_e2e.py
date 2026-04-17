@@ -188,9 +188,20 @@ def test_poker_mtt_phase2_beta_gate_runs_evidence_to_anchor_query_confirmation()
 
         query_adapter = chain_adapter.FakeSettlementChainAdapter(
             query_response={
-                "settlement_batch_id": ready_batch["id"],
-                "canonical_root": ready_batch["canonical_root"],
-                "anchor_payload_hash": ready_batch["anchor_payload_hash"],
+                "anchor": {
+                    "settlement_batch_id": ready_batch["id"],
+                    "anchor_job_id": submitted_batch["anchor_job_id"],
+                    "lane": ready_batch["lane"],
+                    "schema_version": ready_batch["anchor_schema_version"],
+                    "policy_bundle_version": ready_batch["anchor_payload_json"]["policy_bundle_version"],
+                    "canonical_root": ready_batch["canonical_root"],
+                    "anchor_payload_hash": ready_batch["anchor_payload_hash"],
+                    "reward_window_ids_root": ready_batch["anchor_payload_json"]["reward_window_ids_root"],
+                    "task_run_ids_root": ready_batch["anchor_payload_json"]["task_run_ids_root"],
+                    "miner_reward_rows_root": ready_batch["anchor_payload_json"]["miner_reward_rows_root"],
+                    "window_end_at": ready_batch["window_end_at"],
+                    "total_reward_amount": ready_batch["total_reward_amount"],
+                }
             }
         )
 

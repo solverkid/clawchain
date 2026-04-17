@@ -126,6 +126,41 @@ func TestFinalRankingApplyClientPostsPayload(t *testing.T) {
 	require.Contains(t, string(resp.Body), "mtt-client-1")
 }
 
+func TestFinalRankingApplyClientAddsAuthAndRetriesRetryableStatus(t *testing.T) {
+	payload := FinalRankingApplyPayload{
+		SchemaVersion:       FinalRankingApplySchemaVersion,
+		TournamentID:        "mtt-client-retry",
+		RatedOrPractice:     "rated",
+		HumanOnly:           true,
+		FieldSize:           30,
+		PolicyBundleVersion: "poker_mtt_v1",
+		Rows:                []FinalRankingRowDTO{{ID: "row-1", TournamentID: "mtt-client-retry", MemberID: "7:1"}},
+	}
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		require.Equal(t, "Bearer internal-secret", r.Header.Get("Authorization"))
+		if attempts == 1 {
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"tournament_id":"mtt-client-retry"}`))
+	}))
+	defer server.Close()
+
+	client := NewFinalRankingApplyClientWithOptions(server.URL, server.Client(), FinalRankingApplyClientOptions{
+		BearerToken:  "internal-secret",
+		MaxAttempts:  2,
+		RetryBackoff: 0,
+	})
+	resp, err := client.Apply(context.Background(), payload)
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, 2, attempts)
+}
+
 func TestFinalRankingApplyClientClassifiesRetryableAndPermanentErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -133,6 +168,8 @@ func TestFinalRankingApplyClientClassifiesRetryableAndPermanentErrors(t *testing
 		retryable bool
 	}{
 		{name: "service unavailable", status: http.StatusServiceUnavailable, retryable: true},
+		{name: "unauthorized", status: http.StatusUnauthorized, retryable: false},
+		{name: "forbidden", status: http.StatusForbidden, retryable: false},
 		{name: "bad request", status: http.StatusBadRequest, retryable: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

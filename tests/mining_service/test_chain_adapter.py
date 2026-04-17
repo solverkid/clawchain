@@ -689,3 +689,39 @@ def test_chain_adapter_distinguishes_missing_fallback_and_mismatched_anchor_stat
     assert typed_missing["confirmation_status"] == "typed_tx_accepted_state_missing"
     assert fallback_missing["confirmation_status"] == "fallback_memo_tx_accepted_no_typed_state"
     assert mismatch["confirmation_status"] == "root_hash_mismatch"
+
+
+def test_chain_adapter_rejects_confirmed_anchor_with_metadata_drift():
+    expected_anchor = {
+        "settlement_batch_id": "sb_1",
+        "anchor_job_id": "anchor_job_1",
+        "lane": "poker_mtt_daily",
+        "schema_version": "settlement.v1",
+        "policy_bundle_version": "policy.v1",
+        "canonical_root": sha256_ref("a"),
+        "anchor_payload_hash": sha256_ref("b"),
+        "reward_window_ids_root": sha256_ref("c"),
+        "task_run_ids_root": sha256_ref("d"),
+        "miner_reward_rows_root": sha256_ref("e"),
+        "window_end_at": "2026-04-10T03:15:00Z",
+        "total_reward_amount": 12345,
+    }
+    result = chain_adapter.confirm_settlement_anchor_response(
+        query_response={
+            "anchor": {
+                **expected_anchor,
+                "policy_bundle_version": "policy.v2",
+                "total_reward_amount": 12344,
+            }
+        },
+        settlement_batch_id="sb_1",
+        canonical_root=sha256_ref("a"),
+        anchor_payload_hash=sha256_ref("b"),
+        expected_anchor=expected_anchor,
+        tx_receipt={"confirmation_status": "confirmed"},
+        broadcast_method="typed_msg",
+    )
+
+    assert result["confirmed"] is False
+    assert result["confirmation_status"] == "anchor_metadata_mismatch"
+    assert result["metadata_mismatches"] == ["policy_bundle_version", "total_reward_amount"]

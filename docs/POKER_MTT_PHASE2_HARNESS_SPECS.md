@@ -1,7 +1,7 @@
 # Poker MTT Phase 2 Harness Specs
 
 **日期**: 2026-04-17
-**状态**: Phase 2 harness spec；不是 production rollout approval
+**状态**: Phase 2 harness spec + P1 code gates closeout；不是 production rollout approval
 **范围**: `poker mtt` 独立 skill-game mining lane
 **相关文档**:
 - `docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md`
@@ -24,15 +24,21 @@
 - `x/settlement` root registry 的本地 keeper 测试
 - 30-player smoke、300-player shape、20k synthetic projection paging 的离线检查
 
-但当前不能称为 reward-bearing production ready。Phase 2 还缺少几类硬门槛:
+2026-04-17 closeout 已把 Phase 2 最容易误伤 reward/settlement 的 P1 code gates 落成测试和实现:
 
-- reward-ready evidence 规则仍有可绕过路径
-- reward-window policy isolation 不完整
-- settlement typed query / full-field confirmation 没有真正闭环
-- 20k 测试还不是 production reward-window path
-- admin auth / local identity / projector auth 边界还没形成可上线保护
+- `accepted_degraded` 不再自动 reward-ready；缺 hidden eval 默认 audit-only
+- legacy/admin apply 不能靠 caller-provided hidden / consistency / spoofed economic unit 进入 reward-ready path
+- reward-window selection 按 locked range、evidence、eligibility、policy/evaluation version 过滤
+- settlement confirmation 区分 tx-only 和 typed state；adapter / keeper 拒绝 full-field metadata drift
+- `/admin/*` 在 auth enabled 时统一 bearer 保护；非本地默认打开 admin auth
+- Go final-ranking projector client 支持 bearer token、retryable backoff，并把 401/403 视为非重试配置错误
+
+但当前仍不能称为 reward-bearing production ready。Phase 2 之后还缺少几类 production 硬门槛:
+
+- 20k 测试还不是 DB-backed production reward-window service path
 - MQ checkpoint / replay / DLQ / lag 还只是设计，不是实现
 - donor `lepoker-auth` 的 MTT finalization / scheduler / hand history parity 不能过度宣称
+- durable reward-bound miner identity / local mock identity 非奖励化还需要 production adapter 证明
 
 因此本文件的最终口径是:
 

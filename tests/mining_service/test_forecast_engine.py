@@ -316,6 +316,7 @@ def test_confirm_anchor_job_on_chain_marks_anchored():
         provider = StaticTaskProvider(
             [{"outcome": 1, "resolution_status": "resolved", "commit_close_ref_price": 70000.5, "end_ref_price": None}]
         )
+        typed_confirmation = {}
 
         async def fake_confirmer(tx_hash, now):  # noqa: ANN001
             return {
@@ -325,6 +326,7 @@ def test_confirm_anchor_job_on_chain_marks_anchored():
                 "height": 123,
                 "code": 0,
                 "raw_log": "",
+                **typed_confirmation,
             }
 
         service = forecast_engine.ForecastMiningService(
@@ -368,6 +370,7 @@ def test_confirm_anchor_job_on_chain_marks_anchored():
         await service.reconcile(datetime(2026, 4, 10, 17, 1, 5, tzinfo=timezone.utc))
         batch = (await repo.list_settlement_batches())[0]
         await service.retry_anchor_settlement_batch(batch["id"], now=datetime(2026, 4, 10, 17, 1, 6, tzinfo=timezone.utc))
+        ready_batch = await repo.get_settlement_batch(batch["id"])
         submitted = await service.submit_anchor_job(batch["id"], now=datetime(2026, 4, 10, 17, 1, 7, tzinfo=timezone.utc))
         await repo.save_anchor_job(
             {
@@ -379,9 +382,42 @@ def test_confirm_anchor_job_on_chain_marks_anchored():
             }
         )
 
-        receipt = await service.confirm_anchor_job_on_chain(
+        tx_only_receipt = await service.confirm_anchor_job_on_chain(
             submitted["anchor_job_id"],
             now=datetime(2026, 4, 10, 17, 1, 9, tzinfo=timezone.utc),
+        )
+        tx_only_job = await repo.get_anchor_job(submitted["anchor_job_id"])
+        tx_only_batch = await repo.get_settlement_batch(batch["id"])
+
+        assert tx_only_receipt["chain_confirmation_status"] == "typed_tx_accepted_state_missing"
+        assert tx_only_receipt["anchor_job_state"] == "anchor_submitted"
+        assert tx_only_job["state"] == "anchor_submitted"
+        assert tx_only_batch["state"] == "anchor_submitted"
+
+        typed_confirmation.update(
+            {
+                "confirmed": True,
+                "query_response": {
+                    "anchor": {
+                        "settlement_batch_id": batch["id"],
+                        "anchor_job_id": submitted["anchor_job_id"],
+                        "lane": ready_batch["lane"],
+                        "schema_version": ready_batch["anchor_schema_version"],
+                        "policy_bundle_version": ready_batch["anchor_payload_json"]["policy_bundle_version"],
+                        "canonical_root": ready_batch["canonical_root"],
+                        "anchor_payload_hash": ready_batch["anchor_payload_hash"],
+                        "reward_window_ids_root": ready_batch["anchor_payload_json"]["reward_window_ids_root"],
+                        "task_run_ids_root": ready_batch["anchor_payload_json"]["task_run_ids_root"],
+                        "miner_reward_rows_root": ready_batch["anchor_payload_json"]["miner_reward_rows_root"],
+                        "window_end_at": ready_batch["window_end_at"],
+                        "total_reward_amount": ready_batch["total_reward_amount"],
+                    }
+                },
+            }
+        )
+        receipt = await service.confirm_anchor_job_on_chain(
+            submitted["anchor_job_id"],
+            now=datetime(2026, 4, 10, 17, 1, 10, tzinfo=timezone.utc),
         )
         saved_job = await repo.get_anchor_job(submitted["anchor_job_id"])
         saved_batch = await repo.get_settlement_batch(batch["id"])
@@ -493,6 +529,7 @@ def test_reconcile_pending_anchor_jobs_on_chain_confirms_broadcast_jobs():
         provider = StaticTaskProvider(
             [{"outcome": 1, "resolution_status": "resolved", "commit_close_ref_price": 70000.5, "end_ref_price": None}]
         )
+        typed_confirmation = {}
 
         async def fake_confirmer(tx_hash, now):  # noqa: ANN001
             return {
@@ -502,6 +539,7 @@ def test_reconcile_pending_anchor_jobs_on_chain_confirms_broadcast_jobs():
                 "height": 456,
                 "code": 0,
                 "raw_log": "",
+                **typed_confirmation,
             }
 
         service = forecast_engine.ForecastMiningService(
@@ -545,6 +583,7 @@ def test_reconcile_pending_anchor_jobs_on_chain_confirms_broadcast_jobs():
         await service.reconcile(datetime(2026, 4, 10, 19, 1, 5, tzinfo=timezone.utc))
         batch = (await repo.list_settlement_batches())[0]
         await service.retry_anchor_settlement_batch(batch["id"], now=datetime(2026, 4, 10, 19, 1, 6, tzinfo=timezone.utc))
+        ready_batch = await repo.get_settlement_batch(batch["id"])
         submitted = await service.submit_anchor_job(batch["id"], now=datetime(2026, 4, 10, 19, 1, 7, tzinfo=timezone.utc))
         await repo.save_anchor_job(
             {
@@ -553,6 +592,27 @@ def test_reconcile_pending_anchor_jobs_on_chain_confirms_broadcast_jobs():
                 "broadcast_tx_hash": "SWEEP123TX",
                 "last_broadcast_at": "2026-04-10T19:01:08Z",
                 "updated_at": "2026-04-10T19:01:08Z",
+            }
+        )
+        typed_confirmation.update(
+            {
+                "confirmed": True,
+                "query_response": {
+                    "anchor": {
+                        "settlement_batch_id": batch["id"],
+                        "anchor_job_id": submitted["anchor_job_id"],
+                        "lane": ready_batch["lane"],
+                        "schema_version": ready_batch["anchor_schema_version"],
+                        "policy_bundle_version": ready_batch["anchor_payload_json"]["policy_bundle_version"],
+                        "canonical_root": ready_batch["canonical_root"],
+                        "anchor_payload_hash": ready_batch["anchor_payload_hash"],
+                        "reward_window_ids_root": ready_batch["anchor_payload_json"]["reward_window_ids_root"],
+                        "task_run_ids_root": ready_batch["anchor_payload_json"]["task_run_ids_root"],
+                        "miner_reward_rows_root": ready_batch["anchor_payload_json"]["miner_reward_rows_root"],
+                        "window_end_at": ready_batch["window_end_at"],
+                        "total_reward_amount": ready_batch["total_reward_amount"],
+                    }
+                },
             }
         )
 
@@ -1264,13 +1324,26 @@ async def save_poker_mtt_final_ranking_refs(
     policy_bundle_version: str = "poker_mtt_v1",
 ) -> None:
     for miner_address, final_rank in rankings:
-        await repo.save_poker_mtt_final_ranking(
-            poker_mtt_final_ranking_row(
-                tournament_id,
-                miner_address,
-                final_rank=final_rank,
-                policy_bundle_version=policy_bundle_version,
-            )
+        row = poker_mtt_final_ranking_row(
+            tournament_id,
+            miner_address,
+            final_rank=final_rank,
+            policy_bundle_version=policy_bundle_version,
+        )
+        await repo.save_poker_mtt_final_ranking(row)
+        await repo.save_poker_mtt_hidden_eval_entry(
+            {
+                "tournament_id": tournament_id,
+                "miner_address": miner_address,
+                "final_ranking_id": row["id"],
+                "seed_assignment_id": f"hidden-seed:{tournament_id}",
+                "hidden_eval_score": 0.0,
+                "score_components_json": {"test_fixture": True},
+                "evidence_root": row["evidence_root"],
+                "policy_bundle_version": policy_bundle_version,
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
         )
 
 
@@ -1608,7 +1681,7 @@ def test_poker_mtt_rating_snapshot_is_audit_only_for_reward_weights():
         )["payload_json"]
         reward_rows = sorted(projection["miner_reward_rows"], key=lambda row: row["miner_address"])
 
-        assert [row["gross_reward_amount"] for row in reward_rows] == [50, 50]
+        assert [row["gross_reward_amount"] for row in reward_rows] == [51, 49]
         assert projection["rating_snapshot_root"].startswith("sha256:")
 
     import asyncio
@@ -1928,6 +2001,7 @@ def test_build_poker_mtt_reward_window_folds_duplicate_economic_units():
                 name=miner_address,
                 public_key="pubkey",
                 miner_version="0.4.0",
+                ip_address="203.0.113.9" if miner_address != "claw1pokerfair" else "203.0.113.10",
             )
         await save_poker_mtt_final_ranking_refs(
             repo,
@@ -2145,12 +2219,12 @@ def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
         assert anchored["anchor_payload_json"]["task_run_ids"] == ["poker-mtt-anchor-1"]
         assert anchored["anchor_payload_json"]["miner_reward_rows"] == [
             {
-                "gross_reward_amount": 67,
+                "gross_reward_amount": 51,
                 "miner_address": "claw1pokeranchorone",
                 "submission_count": 1,
             },
             {
-                "gross_reward_amount": 33,
+                "gross_reward_amount": 49,
                 "miner_address": "claw1pokeranchortwo",
                 "submission_count": 1,
             },

@@ -103,6 +103,26 @@ func TestAnchorSettlementBatchRejectsDuplicateWithDifferentRoot(t *testing.T) {
 	require.Equal(t, msg.AnchorPayloadHash, anchor.AnchorPayloadHash)
 }
 
+func TestAnchorSettlementBatchRejectsDuplicateWithMetadataDrift(t *testing.T) {
+	msgServer, k, ctx := setupSettlementMsgServer(t, testAnchorSubmitter())
+	msg := testAnchorMsg()
+
+	_, err := msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), msg)
+	require.NoError(t, err)
+
+	conflicting := *msg
+	conflicting.PolicyBundleVersion = "policy.v2"
+	conflicting.TotalRewardAmount = msg.TotalRewardAmount - 1
+	_, err = msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), &conflicting)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "settlement anchor conflict")
+
+	anchor, found := k.GetSettlementAnchor(ctx, msg.SettlementBatchId)
+	require.True(t, found)
+	require.Equal(t, msg.PolicyBundleVersion, anchor.PolicyBundleVersion)
+	require.Equal(t, msg.TotalRewardAmount, anchor.TotalRewardAmount)
+}
+
 func TestAnchorSettlementBatchRejectsUnauthorizedSubmitter(t *testing.T) {
 	msgServer, k, ctx := setupSettlementMsgServer(t)
 	msg := testAnchorMsg()

@@ -3,7 +3,25 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 
-REWARD_READY_EVIDENCE_STATES = {"complete", "accepted_degraded"}
+REWARD_READY_EVIDENCE_STATES = {"complete"}
+
+
+def compatible_result_policy_versions(reward_policy_bundle_version: str) -> list[str]:
+    if reward_policy_bundle_version.startswith("poker_mtt_daily_policy_v") or reward_policy_bundle_version.startswith(
+        "poker_mtt_weekly_policy_v"
+    ):
+        return [reward_policy_bundle_version, "poker_mtt_v1"]
+    return [reward_policy_bundle_version]
+
+
+def result_policy_matches_reward_window(
+    *,
+    result_policy_bundle_version: str | None,
+    reward_policy_bundle_version: str | None,
+) -> bool:
+    if not result_policy_bundle_version or not reward_policy_bundle_version:
+        return False
+    return result_policy_bundle_version in compatible_result_policy_versions(reward_policy_bundle_version)
 
 
 def isoformat_z(value: datetime) -> str:

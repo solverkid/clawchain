@@ -31,7 +31,7 @@ func (s msgServer) AnchorSettlementBatch(
 		return nil, types.ErrUnauthorizedSubmitter.Wrapf("%s", msg.Submitter)
 	}
 	if existingAnchor, found := s.Keeper.GetSettlementAnchor(ctx, msg.SettlementBatchId); found {
-		if existingAnchor.CanonicalRoot != msg.CanonicalRoot || existingAnchor.AnchorPayloadHash != msg.AnchorPayloadHash {
+		if !settlementAnchorMatchesMsg(existingAnchor, msg) {
 			return nil, types.ErrSettlementBatchAnchored.Wrapf(
 				"settlement anchor conflict: settlement_batch_id %s",
 				msg.SettlementBatchId,
@@ -75,4 +75,20 @@ func (s msgServer) AnchorSettlementBatch(
 	return &types.MsgAnchorSettlementBatchResponse{
 		SettlementBatchId: msg.SettlementBatchId,
 	}, nil
+}
+
+func settlementAnchorMatchesMsg(anchor *types.SettlementAnchor, msg *types.MsgAnchorSettlementBatch) bool {
+	return anchor.SettlementBatchID == msg.SettlementBatchId &&
+		anchor.AnchorJobID == msg.AnchorJobId &&
+		anchor.Submitter == msg.Submitter &&
+		anchor.Lane == msg.Lane &&
+		anchor.SchemaVersion == msg.SchemaVersion &&
+		anchor.PolicyBundleVersion == msg.PolicyBundleVersion &&
+		anchor.CanonicalRoot == msg.CanonicalRoot &&
+		anchor.AnchorPayloadHash == msg.AnchorPayloadHash &&
+		anchor.RewardWindowIdsRoot == msg.RewardWindowIdsRoot &&
+		anchor.TaskRunIdsRoot == msg.TaskRunIdsRoot &&
+		anchor.MinerRewardRowsRoot == msg.MinerRewardRowsRoot &&
+		anchor.WindowEndAt == msg.WindowEndAt &&
+		anchor.TotalRewardAmount == msg.TotalRewardAmount
 }

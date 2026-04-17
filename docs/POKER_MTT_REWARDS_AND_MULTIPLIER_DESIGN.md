@@ -1354,13 +1354,13 @@ Phase 1 不做：
 
 1. completed hand event 以 `hand_id + version + checksum` 幂等入 `poker_mtt_hand_events`
 2. hand-history manifest、short-term HUD、long-term HUD、hidden eval manifest 进入 artifact ledger
-3. hidden eval 设计口径是只从 service-owned `poker_mtt_hidden_eval_entries` 进入 reward-ready projection；legacy/admin payload 不能自带 hidden 分数解锁奖励。第二波 review 已确认还需要补 `accepted_degraded` / legacy score injection 的 harness gate
-4. final ranking handoff 使用 canonical `poker_mtt_final_rankings`；未锁定、证据不完整、缺 hidden eval 的结果不应进最终 reward window。当前 production rollout 前还必须补 policy filter 和 degraded allowlist gate
+3. hidden eval 设计口径是只从 service-owned `poker_mtt_hidden_eval_entries` 进入 reward-ready projection；legacy/admin payload 不能自带 hidden / consistency 分数解锁奖励。2026-04-17 closeout 已补 `accepted_degraded` audit-only 和 legacy score injection harness gate
+4. final ranking handoff 使用 canonical `poker_mtt_final_rankings`；未锁定、证据不完整、缺 hidden eval 的结果不应进最终 reward window。2026-04-17 closeout 已补 reward-window policy/evaluation version filter；degraded allowlist 仍必须显式 policy 化后才能 reward-bearing
 5. `poker_mtt_rating_snapshots` 和 `poker_mtt_multiplier_snapshots` 已与 forecast `public_elo` / `arena_multiplier` 分离
 6. reward window membership 有 indexed locked/evidence-ready query 形状；production gate 仍需证明 policy isolation、bounded query count 和 no N+1
 7. 大字段 projection 已分页：主 artifact 保留 `miner_reward_rows_root` 和 page refs，page artifact 保存实际 rows；production gate 仍需通过 Postgres-backed 20k service path
-8. typed `x/settlement` anchor plan 已有 state-query confirmation 语义；production gate 仍需外部 query wiring、full-field typed confirmation 和 duplicate metadata drift rejection
-9. admin mutation APIs 和 local identity guard 已有局部骨架；production gate 仍需默认非本地鉴权、projector bearer token、durable reward-bound miner identity
+8. typed `x/settlement` anchor plan 已有 state-query confirmation 语义；2026-04-17 closeout 已补 tx-only 不等于 anchored、full-field typed confirmation、duplicate metadata drift rejection。production gate 仍需外部 gRPC/gateway/CLI query wiring
+9. admin APIs 和 projector auth 已补本地 harness gate：`/admin/*` auth enabled 时统一 bearer 保护，非本地默认打开 admin auth，projector client 可带 bearer token 并对 401/403 非重试。production gate 仍需 durable reward-bound miner identity
 10. 本地 beta slice 测试覆盖：
     - hand ingest -> hand-history manifest -> HUD -> hidden eval -> final ranking projection -> reward window -> settlement batch -> typed tx plan -> query confirmation
     - 30-player smoke、300-player medium shape、20k-player synthetic projection paging、2,000-table early burst shape

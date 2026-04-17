@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Protocol
 
+import poker_mtt_results
+
 
 class MiningRepository(Protocol):
     async def register_miner(self, miner: dict) -> dict: ...
@@ -629,9 +631,12 @@ class FakeRepository:
                 continue
             if entry.get("evaluation_state") != "final":
                 continue
-            if not entry.get("evaluation_version"):
+            if not poker_mtt_results.result_policy_matches_reward_window(
+                result_policy_bundle_version=entry.get("evaluation_version"),
+                reward_policy_bundle_version=policy_bundle_version,
+            ):
                 continue
-            if entry.get("evidence_state") not in {"complete", "accepted_degraded"}:
+            if entry.get("evidence_state") not in poker_mtt_results.REWARD_READY_EVIDENCE_STATES:
                 continue
             if not entry.get("final_ranking_id") or not entry.get("standing_snapshot_id") or not entry.get("evidence_root"):
                 continue

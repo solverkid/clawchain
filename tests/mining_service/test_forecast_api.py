@@ -344,6 +344,7 @@ def test_confirm_chain_endpoint_marks_anchor_job_anchored():
         return {
             "tx_hash": tx_hash,
             "found": True,
+            "confirmed": True,
             "confirmation_status": "confirmed",
             "height": 321,
             "code": 0,
@@ -458,6 +459,7 @@ def test_reconcile_chain_endpoint_confirms_pending_anchor_jobs():
         return {
             "tx_hash": tx_hash,
             "found": True,
+            "confirmed": True,
             "confirmation_status": "confirmed",
             "height": 654,
             "code": 0,
@@ -1431,7 +1433,7 @@ def poker_mtt_reward_ready_refs(
         "standing_snapshot_id": f"poker_mtt_standing_snapshot:{tournament_id}:abc",
         "standing_snapshot_hash": f"sha256:{tournament_id}",
         "evidence_root": f"sha256:evidence:{tournament_id}:{miner_address}",
-        "evidence_state": "accepted_degraded",
+        "evidence_state": "complete",
         "locked_at": locked_at,
     }
 
@@ -1484,6 +1486,25 @@ def poker_mtt_final_ranking_row(
     }
 
 
+def poker_mtt_hidden_eval_payload(tournament_id: str, miner_addresses: list[str]) -> dict:
+    return {
+        "tournament_id": tournament_id,
+        "policy_bundle_version": "poker_mtt_v1",
+        "seed_assignment_id": f"hidden-seed:{tournament_id}",
+        "baseline_sample_id": None,
+        "entries": [
+            {
+                "miner_address": miner_address,
+                "final_ranking_id": f"poker_mtt_final_ranking:{tournament_id}:{miner_address}",
+                "hidden_eval_score": 0.0,
+                "score_components_json": {"test_fixture": True},
+                "evidence_root": f"sha256:evidence:{tournament_id}:{miner_address}",
+            }
+            for miner_address in miner_addresses
+        ],
+    }
+
+
 def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(
@@ -1505,15 +1526,21 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
         assert register_resp.status_code == 200
 
         for index in range(16):
+            tournament_id = f"poker-mtt-rated-{index}"
+            hidden_eval_resp = client.post(
+                "/admin/poker-mtt/hidden-eval/finalize",
+                json=poker_mtt_hidden_eval_payload(tournament_id, [wallet["address"]]),
+            )
+            assert hidden_eval_resp.status_code == 200
             resp = client.post(
                 "/admin/poker-mtt/final-rankings/project",
                 json={
-                    "tournament_id": f"poker-mtt-rated-{index}",
+                    "tournament_id": tournament_id,
                     "rated_or_practice": "rated",
                     "human_only": True,
                     "field_size": 30,
                     "policy_bundle_version": "poker_mtt_v1",
-                    "rows": [poker_mtt_final_ranking_row(f"poker-mtt-rated-{index}", wallet["address"], final_rank=2)],
+                    "rows": [poker_mtt_final_ranking_row(tournament_id, wallet["address"], final_rank=2)],
                 },
             )
             assert resp.status_code == 200
@@ -1587,6 +1614,11 @@ def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
             )
             assert register_resp.status_code == 200
 
+        hidden_eval_resp = client.post(
+            "/admin/poker-mtt/hidden-eval/finalize",
+            json=poker_mtt_hidden_eval_payload("poker-mtt-api-daily-1", [wallet_one["address"], wallet_two["address"]]),
+        )
+        assert hidden_eval_resp.status_code == 200
         apply_resp = client.post(
             "/admin/poker-mtt/final-rankings/project",
             json={
@@ -1686,6 +1718,29 @@ def test_poker_mtt_hand_ingest_requires_admin_token_when_auth_enabled():
         response = client.post("/admin/poker-mtt/hands/ingest", json={})
 
     assert response.status_code == 401
+
+
+def test_all_admin_routes_require_admin_token_when_auth_enabled():
+    app = server.create_app(
+        settings=AppSettings(
+            admin_auth_enabled=True,
+            admin_auth_token="internal-secret",
+        ),
+        repository=server.create_fake_repository(),
+        now_fn=FrozenClock(datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)).now,
+    )
+
+    with TestClient(app) as client:
+        admin_get = client.get("/admin/settlement-batches")
+        admin_post = client.post("/admin/anchor-jobs/reconcile-chain")
+        authorized = client.get(
+            "/admin/settlement-batches",
+            headers={"Authorization": "Bearer internal-secret"},
+        )
+
+    assert admin_get.status_code == 401
+    assert admin_post.status_code == 401
+    assert authorized.status_code == 200
 
 
 def test_admin_finalize_poker_mtt_hidden_eval_persists_manifest():

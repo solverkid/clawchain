@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from chain_adapter import build_anchor_tx_plan as build_chain_anchor_tx_plan
+from chain_adapter import confirm_settlement_anchor_response as confirm_chain_anchor_response
 from canonical import canonical_hash
 import poker_mtt_evidence
 import poker_mtt_history
@@ -553,6 +554,24 @@ def _default_poker_mtt_policy_bundle_version(settings: ForecastSettings, lane: s
     if lane == "poker_mtt_weekly":
         return getattr(settings, "poker_mtt_weekly_policy_bundle_version", "poker_mtt_weekly_policy_v1")
     return POLICY_BUNDLE_VERSION
+
+
+def _expected_settlement_anchor(anchor_job: dict, settlement_batch: dict) -> dict:
+    payload = settlement_batch.get("anchor_payload_json") or {}
+    return {
+        "settlement_batch_id": settlement_batch["id"],
+        "anchor_job_id": anchor_job["id"],
+        "lane": settlement_batch.get("lane"),
+        "schema_version": settlement_batch.get("anchor_schema_version") or payload.get("schema_version"),
+        "policy_bundle_version": payload.get("policy_bundle_version") or settlement_batch.get("policy_bundle_version"),
+        "canonical_root": settlement_batch.get("canonical_root") or payload.get("canonical_root"),
+        "anchor_payload_hash": settlement_batch.get("anchor_payload_hash"),
+        "reward_window_ids_root": payload.get("reward_window_ids_root"),
+        "task_run_ids_root": payload.get("task_run_ids_root"),
+        "miner_reward_rows_root": payload.get("miner_reward_rows_root"),
+        "window_end_at": settlement_batch.get("window_end_at"),
+        "total_reward_amount": settlement_batch.get("total_reward_amount", 0),
+    }
 
 
 def _canonical_poker_mtt_projection_rows(rows: Iterable[dict]) -> list[dict]:
@@ -1713,6 +1732,33 @@ class ForecastMiningService:
 
         current = now or utc_now()
         receipt = await confirmer(tx_hash, current)
+        settlement_batch = await self.repo.get_settlement_batch(anchor_job["settlement_batch_id"])
+        if not settlement_batch:
+            raise ValueError("settlement batch not found")
+        if receipt.get("confirmation_status") == "confirmed":
+            if receipt.get("query_response") is not None:
+                anchor_confirmation = confirm_chain_anchor_response(
+                    query_response=receipt.get("query_response") or {},
+                    settlement_batch_id=settlement_batch["id"],
+                    canonical_root=settlement_batch.get("canonical_root"),
+                    anchor_payload_hash=settlement_batch.get("anchor_payload_hash"),
+                    expected_anchor=_expected_settlement_anchor(anchor_job, settlement_batch),
+                    tx_receipt=receipt,
+                    broadcast_method=receipt.get("broadcast_method") or "typed_msg",
+                )
+                receipt = {
+                    **receipt,
+                    **anchor_confirmation,
+                    "height": receipt.get("height"),
+                    "code": receipt.get("code"),
+                    "raw_log": receipt.get("raw_log"),
+                }
+            elif receipt.get("confirmed") is not True:
+                receipt = {
+                    **receipt,
+                    "confirmed": False,
+                    "confirmation_status": "typed_tx_accepted_state_missing",
+                }
         confirmation_status = receipt.get("confirmation_status") or "pending"
         receipt_payload = {
             "receipt": receipt,
@@ -2004,6 +2050,10 @@ class ForecastMiningService:
             }
         )
 
+        hidden_eval_by_final_ranking_id = {
+            row["final_ranking_id"]: row
+            for row in await self.repo.list_poker_mtt_hidden_eval_entries_for_tournament(tournament_id)
+        }
         items = []
         for result in results:
             miner_address = result["miner_id"]
@@ -2015,29 +2065,23 @@ class ForecastMiningService:
             if final_rank < 1 or final_rank > field_size:
                 raise ValueError("final_rank out of range")
 
-            tournament_result_score = clamp(float(result["tournament_result_score"]), -1.0, 1.0)
-            hidden_eval_score = 0.0
-            consistency_input_score = clamp(float(result.get("consistency_input_score", 0.0)), -1.0, 1.0)
-            total_score = round(
-                clamp(
-                    (tournament_result_score * 0.55)
-                    + (hidden_eval_score * 0.25)
-                    + (consistency_input_score * 0.20),
-                    -1.0,
-                    1.0,
-                ),
-                6,
+            tournament_result_score = poker_mtt_results.tournament_result_score(
+                final_rank=final_rank,
+                field_size=field_size,
             )
-            finish_percentile = round((field_size - final_rank) / max(1, field_size - 1), 6)
+            hidden_eval_score = 0.0
+            consistency_input_score = 0.0
+            finish_percentile = tournament_result_score
             multiplier_before = float(miner.get("poker_mtt_multiplier", 1.0))
             multiplier_after = multiplier_before
             rolling_score = None
-            economic_unit_id = result.get("economic_unit_id") or miner.get("economic_unit_id") or miner_address
+            economic_unit_id = miner.get("economic_unit_id") or miner_address
             evaluation_state = str(result.get("evaluation_state") or "provisional")
             evidence_state = str(result.get("evidence_state") or "pending")
             locked_at = result.get("locked_at")
             rank_state = str(result.get("rank_state") or "ranked")
             chip_delta = result.get("chip_delta")
+            final_ranking_id = result.get("final_ranking_id")
             no_multiplier_reason = result.get("no_multiplier_reason") or poker_mtt_results.reward_gate_reason(
                 rank_state=rank_state,
                 rank=final_rank,
@@ -2047,11 +2091,14 @@ class ForecastMiningService:
                 policy_bundle_version=policy_bundle_version,
                 locked_at=locked_at,
                 evidence_root=result.get("evidence_root"),
-                final_ranking_id=result.get("final_ranking_id"),
+                final_ranking_id=final_ranking_id,
                 standing_snapshot_id=result.get("standing_snapshot_id"),
             )
+            if no_multiplier_reason == "not_rated_or_not_human":
+                tournament_result_score = clamp(float(result.get("tournament_result_score", tournament_result_score)), -1.0, 1.0)
+                consistency_input_score = clamp(float(result.get("consistency_input_score", 0.0)), -1.0, 1.0)
             if no_multiplier_reason is None:
-                final_ranking = await self.repo.get_poker_mtt_final_ranking(result["final_ranking_id"])
+                final_ranking = await self.repo.get_poker_mtt_final_ranking(final_ranking_id)
                 if final_ranking is None:
                     no_multiplier_reason = "canonical_final_ranking_not_found"
                 elif not _poker_mtt_final_ranking_matches_legacy_result(
@@ -2063,6 +2110,17 @@ class ForecastMiningService:
                     policy_bundle_version=policy_bundle_version,
                 ):
                     no_multiplier_reason = "canonical_final_ranking_mismatch"
+            if no_multiplier_reason is None:
+                hidden_eval_entry = hidden_eval_by_final_ranking_id.get(final_ranking_id)
+                if hidden_eval_entry is None:
+                    no_multiplier_reason = "missing_hidden_eval"
+                else:
+                    hidden_eval_score = clamp(float(hidden_eval_entry.get("hidden_eval_score", 0.0)), -1.0, 1.0)
+            total_score = poker_mtt_results.total_score(
+                tournament_score=tournament_result_score,
+                hidden_eval_score=hidden_eval_score,
+                consistency_input_score=consistency_input_score,
+            )
             eligible_for_multiplier = no_multiplier_reason is None
             anchorable_at = result.get("anchorable_at") or (locked_at if eligible_for_multiplier else None)
 
@@ -2091,7 +2149,7 @@ class ForecastMiningService:
                     "evaluation_version": policy_bundle_version,
                     "rank_state": rank_state,
                     "chip_delta": chip_delta,
-                    "final_ranking_id": result.get("final_ranking_id"),
+                    "final_ranking_id": final_ranking_id,
                     "standing_snapshot_id": result.get("standing_snapshot_id"),
                     "standing_snapshot_hash": result.get("standing_snapshot_hash"),
                     "evidence_root": result.get("evidence_root"),
@@ -2297,6 +2355,7 @@ class ForecastMiningService:
                 policy_bundle_version=policy_bundle_version,
                 locked_at=locked_at_utc,
             )
+            projected["economic_unit_id"] = miner.get("economic_unit_id") or miner_address
             hidden_eval_entry = hidden_eval_by_final_ranking_id.get(row.get("id"))
             if projected["evidence_state"] == "complete":
                 if hidden_eval_entry is None:

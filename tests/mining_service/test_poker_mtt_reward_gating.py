@@ -34,6 +34,35 @@ def test_poker_mtt_reward_window_uses_indexed_locked_range_query():
     asyncio.run(scenario())
 
 
+def test_poker_mtt_reward_window_filters_result_policy_version():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_poker_mtt_result(
+            {
+                **locked_result("mtt-policy-a", "claw1policya", locked_at="2026-04-10T10:00:00Z"),
+                "evaluation_version": "policy-a",
+            }
+        )
+        await repo.save_poker_mtt_result(
+            {
+                **locked_result("mtt-policy-b", "claw1policyb", locked_at="2026-04-10T10:01:00Z"),
+                "evaluation_version": "policy-b",
+            }
+        )
+
+        rows = await repo.list_poker_mtt_results_for_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, tzinfo=timezone.utc),
+            include_provisional=False,
+            policy_bundle_version="policy-a",
+        )
+
+        assert [row["tournament_id"] for row in rows] == ["mtt-policy-a"]
+
+    asyncio.run(scenario())
+
+
 def test_poker_mtt_correction_appends_record_without_mutating_anchored_result():
     async def scenario():
         repo = FakeRepository()
@@ -62,6 +91,56 @@ def test_poker_mtt_correction_appends_record_without_mutating_anchored_result():
         assert correction["previous_root"].startswith("sha256:")
         assert correction["corrected_root"].startswith("sha256:")
         assert correction["previous_root"] != correction["corrected_root"]
+
+    asyncio.run(scenario())
+
+
+def test_final_ranking_projection_treats_accepted_degraded_as_audit_only():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1degraded",
+            name="degraded",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await repo.save_poker_mtt_final_ranking(
+            final_ranking_row(
+                tournament_id="mtt-degraded",
+                miner_address="claw1degraded",
+                evidence_state="accepted_degraded",
+            )
+        )
+
+        projection = await service.project_poker_mtt_final_rankings(
+            tournament_id="mtt-degraded",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            locked_at=datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        stored = (await repo.list_poker_mtt_results_for_miner("claw1degraded"))[0]
+
+        assert projection["items"][0]["eligible_for_multiplier"] is False
+        assert stored["evidence_state"] == "accepted_degraded"
+        assert stored["locked_at"] is None
+        assert stored["no_multiplier_reason"] == "evidence_not_reward_ready"
+
+        try:
+            await service.build_poker_mtt_reward_window(
+                lane="poker_mtt_daily",
+                window_start_at=datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc),
+                window_end_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+                reward_pool_amount=100,
+                include_provisional=False,
+                now=datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc),
+            )
+        except ValueError as exc:
+            assert str(exc) == "no poker mtt results found for reward window"
+        else:
+            raise AssertionError("accepted_degraded evidence should not settle without an explicit policy allowlist")
 
     asyncio.run(scenario())
 
@@ -150,6 +229,47 @@ def test_final_ranking_projection_requires_service_hidden_eval_for_complete_evid
         assert stored["no_multiplier_reason"] == "missing_hidden_eval"
         assert stored["hidden_eval_score"] == 0.0
         assert stored["locked_at"] is None
+
+    asyncio.run(scenario())
+
+
+def test_final_ranking_projection_overrides_payload_economic_unit():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1serverunit",
+            name="server-unit",
+            public_key="pubkey",
+            miner_version="0.4.0",
+            economic_unit_id="eu:server-owned",
+        )
+        server_miner = await repo.get_miner("claw1serverunit")
+        row = final_ranking_row(
+            tournament_id="mtt-server-unit",
+            miner_address="claw1serverunit",
+            evidence_state="complete",
+        )
+        row["economic_unit_id"] = "eu:spoofed-payload"
+        await repo.save_poker_mtt_final_ranking(row)
+        await finalize_hidden_eval(
+            service,
+            tournament_id="mtt-server-unit",
+            miner_address="claw1serverunit",
+            final_ranking_id=row["id"],
+        )
+
+        await service.project_poker_mtt_final_rankings(
+            tournament_id="mtt-server-unit",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            locked_at=datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        stored = (await repo.list_poker_mtt_results_for_miner("claw1serverunit"))[0]
+
+        assert stored["economic_unit_id"] == server_miner["economic_unit_id"]
 
     asyncio.run(scenario())
 
@@ -347,6 +467,66 @@ def test_poker_mtt_reward_window_never_settles_provisional_rows():
             assert str(exc) == "no poker mtt results found for reward window"
         else:
             raise AssertionError("provisional poker mtt rows must never settle")
+
+    asyncio.run(scenario())
+
+
+def test_legacy_apply_matching_final_ranking_cannot_supply_scores():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1callerscore",
+            name="caller-score",
+            public_key="pubkey",
+            miner_version="0.4.0",
+            economic_unit_id="eu:server-score",
+        )
+        server_miner = await repo.get_miner("claw1callerscore")
+        canonical = final_ranking_row(
+            row_id="poker_mtt_final_ranking:mtt-caller-score:7:1",
+            tournament_id="mtt-caller-score",
+            miner_address="claw1callerscore",
+            rank=30,
+            evidence_state="complete",
+        )
+        canonical["economic_unit_id"] = "eu:payload-score"
+        await repo.save_poker_mtt_final_ranking(canonical)
+
+        applied = await service.apply_poker_mtt_results(
+            tournament_id="mtt-caller-score",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1callerscore",
+                    "final_rank": 30,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 1.0,
+                    "consistency_input_score": 1.0,
+                    "economic_unit_id": "eu:caller-spoof",
+                    "evaluation_state": "final",
+                    "evidence_state": "complete",
+                    "evidence_root": canonical["evidence_root"],
+                    "final_ranking_id": canonical["id"],
+                    "standing_snapshot_id": canonical["standing_snapshot_id"],
+                    "standing_snapshot_hash": canonical["standing_snapshot_hash"],
+                    "locked_at": "2026-04-10T10:00:00Z",
+                }
+            ],
+            completed_at=datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        item = applied["items"][0]
+        stored = (await repo.list_poker_mtt_results_for_miner("claw1callerscore"))[0]
+
+        assert item["tournament_result_score"] == 0.0
+        assert item["hidden_eval_score"] == 0.0
+        assert item["consistency_input_score"] == 0.0
+        assert item["eligible_for_multiplier"] is False
+        assert item["no_multiplier_reason"] == "missing_hidden_eval"
+        assert stored["economic_unit_id"] == server_miner["economic_unit_id"]
 
     asyncio.run(scenario())
 

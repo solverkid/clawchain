@@ -48,16 +48,6 @@ from chain_adapter import (
 logger = logging.getLogger(__name__)
 
 
-POKER_MTT_ADMIN_MUTATION_PATHS = {
-    "/admin/poker-mtt/hands/ingest",
-    "/admin/poker-mtt/hidden-eval/finalize",
-    "/admin/poker-mtt/rating-snapshots/build",
-    "/admin/poker-mtt/results/apply",
-    "/admin/poker-mtt/final-rankings/project",
-    "/admin/poker-mtt/reward-windows/build",
-}
-
-
 def create_fake_repository() -> FakeRepository:
     return FakeRepository()
 
@@ -455,10 +445,10 @@ def create_app(
         )
 
     @app.middleware("http")
-    async def require_poker_mtt_admin_auth(request: Request, call_next):  # noqa: ANN001
+    async def require_admin_auth(request: Request, call_next):  # noqa: ANN001
         if (
             request.method.upper() != "OPTIONS"
-            and request.url.path in POKER_MTT_ADMIN_MUTATION_PATHS
+            and request.url.path.startswith("/admin/")
             and bool(getattr(app_settings, "admin_auth_enabled", False))
         ):
             expected_token = getattr(app_settings, "admin_auth_token", None)

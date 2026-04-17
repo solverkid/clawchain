@@ -44,6 +44,7 @@ def confirm_settlement_anchor_response(
     settlement_batch_id: str,
     canonical_root: str,
     anchor_payload_hash: str,
+    expected_anchor: dict | None = None,
     tx_receipt: dict | None = None,
     broadcast_method: str = "typed_msg",
 ) -> dict:
@@ -75,12 +76,23 @@ def confirm_settlement_anchor_response(
         and queried_anchor_payload_hash == anchor_payload_hash
     )
     if confirmed:
-        status = "confirmed"
+        metadata_mismatches = []
+        if expected_anchor:
+            metadata_mismatches = [
+                field
+                for field, expected_value in expected_anchor.items()
+                if anchor.get(field) != expected_value
+            ]
+        if metadata_mismatches:
+            confirmed = False
+            status = "anchor_metadata_mismatch"
+        else:
+            status = "confirmed"
     elif queried_batch_id != settlement_batch_id:
         status = "settlement_batch_mismatch"
     else:
         status = "root_hash_mismatch"
-    return {
+    result = {
         "settlement_batch_id": settlement_batch_id,
         "confirmed": confirmed,
         "confirmation_status": status,
@@ -90,11 +102,16 @@ def confirm_settlement_anchor_response(
         "tx_receipt": tx_receipt or {},
         "broadcast_method": broadcast_method,
     }
+    if expected_anchor:
+        result["metadata_mismatches"] = metadata_mismatches
+        result["expected_anchor"] = expected_anchor
+    return result
 
 
 class FakeSettlementChainAdapter:
-    def __init__(self, *, query_response: dict):
+    def __init__(self, *, query_response: dict, expected_anchor: dict | None = None):
         self.query_response = query_response
+        self.expected_anchor = expected_anchor
 
     def confirm_settlement_anchor(
         self,
@@ -102,12 +119,14 @@ class FakeSettlementChainAdapter:
         settlement_batch_id: str,
         canonical_root: str,
         anchor_payload_hash: str,
+        expected_anchor: dict | None = None,
     ) -> dict:
         return confirm_settlement_anchor_response(
             query_response=self.query_response,
             settlement_batch_id=settlement_batch_id,
             canonical_root=canonical_root,
             anchor_payload_hash=anchor_payload_hash,
+            expected_anchor=expected_anchor or self.expected_anchor,
         )
 
 
