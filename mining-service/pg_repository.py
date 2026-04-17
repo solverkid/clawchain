@@ -23,6 +23,8 @@ from models import (
     poker_mtt_short_term_hud_snapshots,
     poker_mtt_long_term_hud_snapshots,
     poker_mtt_hidden_eval_entries,
+    poker_mtt_rating_snapshots,
+    poker_mtt_multiplier_snapshots,
     poker_mtt_final_rankings,
     poker_mtt_result_entries,
 )
@@ -220,6 +222,47 @@ def _poker_mtt_hidden_eval_entry_values(row: dict, *, created_at: datetime | str
     return values
 
 
+def _poker_mtt_rating_snapshot_values(row: dict, *, created_at: datetime | str | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    values = deepcopy(row)
+    miner_address = values.get("miner_address")
+    if not miner_address:
+        raise ValueError("missing poker mtt rating miner_address")
+    window_start_at = values.get("window_start_at")
+    window_end_at = values.get("window_end_at")
+    if not window_start_at or not window_end_at:
+        raise ValueError("missing poker mtt rating window")
+    values["id"] = values.get("id") or f"poker_mtt_rating:{miner_address}:{window_start_at}:{window_end_at}"
+    values["public_rating"] = float(values.get("public_rating") or 0.0)
+    values["confidence"] = float(values.get("confidence") or 0.0)
+    values["policy_bundle_version"] = values.get("policy_bundle_version") or "poker_mtt_v1"
+    values["created_at"] = created_at or values.get("created_at") or now
+    values["updated_at"] = values.get("updated_at") or now
+    for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
+        values[field] = _maybe_dt(values[field])
+    return values
+
+
+def _poker_mtt_multiplier_snapshot_values(row: dict, *, created_at: datetime | str | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    values = deepcopy(row)
+    source_result_id = values.get("source_result_id")
+    miner_address = values.get("miner_address")
+    if not miner_address:
+        raise ValueError("missing poker mtt multiplier miner_address")
+    if not source_result_id:
+        raise ValueError("missing poker mtt multiplier source_result_id")
+    values["id"] = values.get("id") or f"poker_mtt_multiplier:{source_result_id}"
+    values["multiplier_before"] = float(values.get("multiplier_before") or 1.0)
+    values["multiplier_after"] = float(values.get("multiplier_after") or 1.0)
+    values["policy_bundle_version"] = values.get("policy_bundle_version") or "poker_mtt_v1"
+    values["created_at"] = created_at or values.get("created_at") or now
+    values["updated_at"] = values.get("updated_at") or now
+    for field in ("created_at", "updated_at"):
+        values[field] = _maybe_dt(values[field])
+    return values
+
+
 def _poker_mtt_final_ranking_values(final_ranking: dict) -> dict:
     values = deepcopy(final_ranking)
     for field in ("locked_at", "anchorable_at", "created_at", "updated_at"):
@@ -361,6 +404,26 @@ def _poker_mtt_hud_snapshot_row_to_dict(row) -> dict | None:
 
 
 def _poker_mtt_hidden_eval_entry_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_rating_snapshot_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_multiplier_snapshot_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
@@ -570,6 +633,24 @@ class PostgresRepository:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hidden_eval_final_ranking "
                     "ON poker_mtt_hidden_eval_entries (final_ranking_id)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_rating_miner_window "
+                    "ON poker_mtt_rating_snapshots (miner_address, window_end_at)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_multiplier_miner_updated "
+                    "ON poker_mtt_multiplier_snapshots (miner_address, updated_at)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_multiplier_source_result "
+                    "ON poker_mtt_multiplier_snapshots (source_result_id)"
                 )
             )
 
@@ -1098,6 +1179,92 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             rows = await conn.execute(query)
             return [_poker_mtt_hidden_eval_entry_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_rating_snapshot(self, row: dict) -> dict:
+        existing = None
+        if row.get("id"):
+            async with self.engine.connect() as conn:
+                saved = await conn.execute(
+                    select(poker_mtt_rating_snapshots).where(poker_mtt_rating_snapshots.c.id == row["id"])
+                )
+                existing = _poker_mtt_rating_snapshot_row_to_dict(saved.first())
+        values = _poker_mtt_rating_snapshot_values(row, created_at=existing.get("created_at") if existing else None)
+        async with self.engine.begin() as conn:
+            existing_id = await conn.execute(
+                select(poker_mtt_rating_snapshots.c.id).where(poker_mtt_rating_snapshots.c.id == values["id"])
+            )
+            if existing_id.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_rating_snapshots)
+                    .where(poker_mtt_rating_snapshots.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_rating_snapshots).values(**values))
+        async with self.engine.connect() as conn:
+            saved = await conn.execute(
+                select(poker_mtt_rating_snapshots).where(poker_mtt_rating_snapshots.c.id == values["id"])
+            )
+            return _poker_mtt_rating_snapshot_row_to_dict(saved.first()) or values
+
+    async def list_poker_mtt_rating_snapshots(
+        self,
+        *,
+        miner_address: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_rating_snapshots)
+        if miner_address is not None:
+            query = query.where(poker_mtt_rating_snapshots.c.miner_address == miner_address)
+        query = query.order_by(poker_mtt_rating_snapshots.c.window_end_at.desc(), poker_mtt_rating_snapshots.c.id.desc())
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_rating_snapshot_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_multiplier_snapshot(self, row: dict) -> dict:
+        existing = None
+        if row.get("id"):
+            async with self.engine.connect() as conn:
+                saved = await conn.execute(
+                    select(poker_mtt_multiplier_snapshots).where(poker_mtt_multiplier_snapshots.c.id == row["id"])
+                )
+                existing = _poker_mtt_multiplier_snapshot_row_to_dict(saved.first())
+        values = _poker_mtt_multiplier_snapshot_values(row, created_at=existing.get("created_at") if existing else None)
+        async with self.engine.begin() as conn:
+            existing_id = await conn.execute(
+                select(poker_mtt_multiplier_snapshots.c.id).where(poker_mtt_multiplier_snapshots.c.id == values["id"])
+            )
+            if existing_id.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_multiplier_snapshots)
+                    .where(poker_mtt_multiplier_snapshots.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_multiplier_snapshots).values(**values))
+        async with self.engine.connect() as conn:
+            saved = await conn.execute(
+                select(poker_mtt_multiplier_snapshots).where(poker_mtt_multiplier_snapshots.c.id == values["id"])
+            )
+            return _poker_mtt_multiplier_snapshot_row_to_dict(saved.first()) or values
+
+    async def list_poker_mtt_multiplier_snapshots(
+        self,
+        *,
+        miner_address: str | None = None,
+        source_result_id: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_multiplier_snapshots)
+        if miner_address is not None:
+            query = query.where(poker_mtt_multiplier_snapshots.c.miner_address == miner_address)
+        if source_result_id is not None:
+            query = query.where(poker_mtt_multiplier_snapshots.c.source_result_id == source_result_id)
+        query = query.order_by(
+            poker_mtt_multiplier_snapshots.c.updated_at.desc(),
+            poker_mtt_multiplier_snapshots.c.id.desc(),
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_multiplier_snapshot_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         values = _poker_mtt_final_ranking_values(final_ranking)

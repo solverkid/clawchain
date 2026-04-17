@@ -1487,6 +1487,129 @@ def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
         assert result["items"][0]["rolling_score"] > 0.0
         assert miner["poker_mtt_multiplier"] > 1.0
         assert miner["poker_mtt_multiplier"] <= 1.04
+        snapshots = await repo.list_poker_mtt_multiplier_snapshots(miner_address="claw1pokermttrated")
+        assert len(snapshots) == 1
+        assert snapshots[0]["source_result_id"] == "poker_mtt:poker-mtt-rated-15:claw1pokermttrated"
+        assert snapshots[0]["multiplier_before"] == 1.0
+        assert snapshots[0]["multiplier_after"] == miner["poker_mtt_multiplier"]
+        assert snapshots[0]["rolling_score"] == result["items"][0]["rolling_score"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_poker_mtt_rating_snapshot_does_not_mutate_forecast_public_elo():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1rating",
+            name="rating",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        before = await repo.get_miner("claw1rating")
+
+        snapshot = await service.build_poker_mtt_rating_snapshot(
+            miner_address="claw1rating",
+            window_start_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 8, tzinfo=timezone.utc),
+            public_rating=1512.5,
+            public_rank=42,
+            confidence=0.72,
+            policy_bundle_version="poker_mtt_v1",
+            now=datetime(2026, 4, 8, 1, tzinfo=timezone.utc),
+        )
+        after = await repo.get_miner("claw1rating")
+
+        assert snapshot["public_rating"] == 1512.5
+        assert snapshot["public_rank"] == 42
+        assert after["public_elo"] == before["public_elo"]
+        assert after["public_rank"] == before["public_rank"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_poker_mtt_rating_snapshot_is_audit_only_for_reward_weights():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, poker_mtt_rollout_settings())
+        miners = ["claw1ratinghigh", "claw1ratinglow"]
+        for miner_address in miners:
+            await service.register_miner(
+                address=miner_address,
+                name=miner_address,
+                public_key="pubkey",
+                miner_version="0.4.0",
+            )
+
+        await service.build_poker_mtt_rating_snapshot(
+            miner_address="claw1ratinghigh",
+            window_start_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 8, tzinfo=timezone.utc),
+            public_rating=2400.0,
+            public_rank=1,
+            confidence=0.95,
+            policy_bundle_version="poker_mtt_v1",
+            now=datetime(2026, 4, 8, 1, tzinfo=timezone.utc),
+        )
+        await service.build_poker_mtt_rating_snapshot(
+            miner_address="claw1ratinglow",
+            window_start_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 8, tzinfo=timezone.utc),
+            public_rating=900.0,
+            public_rank=999,
+            confidence=0.95,
+            policy_bundle_version="poker_mtt_v1",
+            now=datetime(2026, 4, 8, 1, tzinfo=timezone.utc),
+        )
+
+        tournament_id = "poker-mtt-rating-weight"
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            tournament_id,
+            [("claw1ratinghigh", 1), ("claw1ratinglow", 2)],
+        )
+        await service.apply_poker_mtt_results(
+            tournament_id=tournament_id,
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": miner_address,
+                    "final_rank": final_rank,
+                    "tournament_result_score": 0.8,
+                    "consistency_input_score": 0.2,
+                    "evaluation_state": "final",
+                    **poker_mtt_reward_ready_refs(tournament_id, miner_address),
+                }
+                for miner_address, final_rank in [("claw1ratinghigh", 1), ("claw1ratinglow", 2)]
+            ],
+            completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+        reward_window = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, tzinfo=timezone.utc),
+            reward_pool_amount=100,
+            include_provisional=False,
+            policy_bundle_version="poker_mtt_v1",
+            now=datetime(2026, 4, 10, 12, tzinfo=timezone.utc),
+        )
+        artifacts = await repo.list_artifacts_for_entity("reward_window", reward_window["id"])
+        projection = next(
+            artifact for artifact in artifacts if artifact["kind"] == "poker_mtt_reward_window_projection"
+        )["payload_json"]
+        reward_rows = sorted(projection["miner_reward_rows"], key=lambda row: row["miner_address"])
+
+        assert [row["gross_reward_amount"] for row in reward_rows] == [50, 50]
+        assert projection["rating_snapshot_root"].startswith("sha256:")
 
     import asyncio
 

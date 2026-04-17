@@ -341,6 +341,40 @@ poker_mtt_hidden_eval_entries = Table(
 )
 
 
+poker_mtt_rating_snapshots = Table(
+    "poker_mtt_rating_snapshots",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("miner_address", String, nullable=False),
+    Column("window_start_at", DateTime(timezone=True), nullable=False),
+    Column("window_end_at", DateTime(timezone=True), nullable=False),
+    Column("public_rating", Float, nullable=False),
+    Column("public_rank", Integer, nullable=True),
+    Column("confidence", Float, nullable=False, default=0.0),
+    Column("policy_bundle_version", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_rating_miner_window", "miner_address", "window_end_at"),
+)
+
+
+poker_mtt_multiplier_snapshots = Table(
+    "poker_mtt_multiplier_snapshots",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("miner_address", String, nullable=False),
+    Column("source_result_id", String, nullable=False),
+    Column("multiplier_before", Float, nullable=False),
+    Column("multiplier_after", Float, nullable=False),
+    Column("rolling_score", Float, nullable=True),
+    Column("policy_bundle_version", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_multiplier_miner_updated", "miner_address", "updated_at"),
+    Index("ix_poker_mtt_multiplier_source_result", "source_result_id"),
+)
+
+
 poker_mtt_final_rankings = Table(
     "poker_mtt_final_rankings",
     metadata,
@@ -443,6 +477,8 @@ TABLES = {
     "poker_mtt_short_term_hud_snapshots": poker_mtt_short_term_hud_snapshots,
     "poker_mtt_long_term_hud_snapshots": poker_mtt_long_term_hud_snapshots,
     "poker_mtt_hidden_eval_entries": poker_mtt_hidden_eval_entries,
+    "poker_mtt_rating_snapshots": poker_mtt_rating_snapshots,
+    "poker_mtt_multiplier_snapshots": poker_mtt_multiplier_snapshots,
     "poker_mtt_final_rankings": poker_mtt_final_rankings,
     "poker_mtt_result_entries": poker_mtt_result_entries,
 }

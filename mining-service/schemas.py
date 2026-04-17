@@ -109,6 +109,16 @@ class FinalizePokerMTTHiddenEvalRequest(BaseModel):
     entries: list[PokerMTTHiddenEvalEntry]
 
 
+class BuildPokerMTTRatingSnapshotRequest(BaseModel):
+    miner_address: str
+    window_start_at: datetime
+    window_end_at: datetime
+    public_rating: float
+    public_rank: int | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    policy_bundle_version: str = "poker_mtt_v1"
+
+
 class PokerMTTFinalRankingRow(BaseModel):
     id: str
     tournament_id: str

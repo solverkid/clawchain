@@ -26,6 +26,7 @@ from repository import FakeRepository
 from schemas import (
     ApplyArenaResultsRequest,
     ApplyPokerMTTFinalRankingProjectionRequest,
+    BuildPokerMTTRatingSnapshotRequest,
     FinalizePokerMTTHiddenEvalRequest,
     PokerMTTHandCompletedEventRequest,
     ApplyPokerMTTResultsRequest,
@@ -888,6 +889,24 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/admin/poker-mtt/rating-snapshots/build")
+    async def build_poker_mtt_rating_snapshot(payload: BuildPokerMTTRatingSnapshotRequest):
+        try:
+            return await service().build_poker_mtt_rating_snapshot(
+                miner_address=payload.miner_address,
+                window_start_at=payload.window_start_at,
+                window_end_at=payload.window_end_at,
+                public_rating=payload.public_rating,
+                public_rank=payload.public_rank,
+                confidence=payload.confidence,
+                policy_bundle_version=payload.policy_bundle_version,
+                now=now(),
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status = 404 if "miner not found" in detail else 400
+            raise HTTPException(status_code=status, detail=detail)
 
     @app.post("/admin/poker-mtt/results/apply")
     async def apply_poker_mtt_results(payload: ApplyPokerMTTResultsRequest):

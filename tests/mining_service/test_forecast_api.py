@@ -1523,6 +1523,48 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
         assert miner_status.json()["data"]["poker_mtt_multiplier"] > 1.0
 
 
+def test_admin_build_poker_mtt_rating_snapshot_does_not_mutate_public_elo():
+    clock = FrozenClock(datetime(2026, 4, 8, 1, 0, 0, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+    wallet = generate_wallet()
+    with TestClient(app) as client:
+        register_resp = client.post(
+            "/clawchain/miner/register",
+            json={
+                "address": wallet["address"],
+                "name": "poker-rating-miner",
+                "public_key": wallet["public_key"],
+                "miner_version": "0.4.0",
+            },
+        )
+        assert register_resp.status_code == 200
+        before = client.get(f"/v1/miners/{wallet['address']}/status").json()["data"]
+
+        snapshot = client.post(
+            "/admin/poker-mtt/rating-snapshots/build",
+            json={
+                "miner_address": wallet["address"],
+                "window_start_at": "2026-04-01T00:00:00Z",
+                "window_end_at": "2026-04-08T00:00:00Z",
+                "public_rating": 1512.5,
+                "public_rank": 42,
+                "confidence": 0.72,
+                "policy_bundle_version": "poker_mtt_v1",
+            },
+        )
+        after = client.get(f"/v1/miners/{wallet['address']}/status").json()["data"]
+
+        assert snapshot.status_code == 200
+        assert snapshot.json()["public_rating"] == 1512.5
+        assert snapshot.json()["public_rank"] == 42
+        assert after["public_elo"] == before["public_elo"]
+        assert after["public_rank"] == before["public_rank"]
+
+
 def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
     clock = FrozenClock(datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(

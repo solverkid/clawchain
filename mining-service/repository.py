@@ -65,6 +65,19 @@ class MiningRepository(Protocol):
     ) -> list[dict]: ...
     async def save_poker_mtt_hidden_eval_entry(self, row: dict) -> dict: ...
     async def list_poker_mtt_hidden_eval_entries_for_tournament(self, tournament_id: str) -> list[dict]: ...
+    async def save_poker_mtt_rating_snapshot(self, row: dict) -> dict: ...
+    async def list_poker_mtt_rating_snapshots(
+        self,
+        *,
+        miner_address: str | None = None,
+    ) -> list[dict]: ...
+    async def save_poker_mtt_multiplier_snapshot(self, row: dict) -> dict: ...
+    async def list_poker_mtt_multiplier_snapshots(
+        self,
+        *,
+        miner_address: str | None = None,
+        source_result_id: str | None = None,
+    ) -> list[dict]: ...
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict: ...
     async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None: ...
     async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]: ...
@@ -96,6 +109,8 @@ class FakeRepository:
         self._poker_mtt_hand_events: dict[str, dict] = {}
         self._poker_mtt_hud_snapshots: dict[str, dict] = {}
         self._poker_mtt_hidden_eval_entries: dict[str, dict] = {}
+        self._poker_mtt_rating_snapshots: dict[str, dict] = {}
+        self._poker_mtt_multiplier_snapshots: dict[str, dict] = {}
         self._poker_mtt_final_rankings: dict[str, dict] = {}
         self._poker_mtt_results: dict[str, dict] = {}
         self._request_index: dict[str, dict] = {}
@@ -471,6 +486,45 @@ class FakeRepository:
         items.sort(key=lambda item: (item.get("miner_address") or "", item.get("final_ranking_id") or ""))
         return items
 
+    async def save_poker_mtt_rating_snapshot(self, row: dict) -> dict:
+        snapshot = _normalize_poker_mtt_rating_snapshot(row)
+        current = deepcopy(self._poker_mtt_rating_snapshots.get(snapshot["id"], {}))
+        current.update(deepcopy(snapshot))
+        self._poker_mtt_rating_snapshots[snapshot["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_rating_snapshots(
+        self,
+        *,
+        miner_address: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(snapshot) for snapshot in self._poker_mtt_rating_snapshots.values()]
+        if miner_address is not None:
+            items = [item for item in items if item.get("miner_address") == miner_address]
+        items.sort(key=lambda item: (item.get("window_end_at") or "", item.get("id") or ""), reverse=True)
+        return items
+
+    async def save_poker_mtt_multiplier_snapshot(self, row: dict) -> dict:
+        snapshot = _normalize_poker_mtt_multiplier_snapshot(row)
+        current = deepcopy(self._poker_mtt_multiplier_snapshots.get(snapshot["id"], {}))
+        current.update(deepcopy(snapshot))
+        self._poker_mtt_multiplier_snapshots[snapshot["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_multiplier_snapshots(
+        self,
+        *,
+        miner_address: str | None = None,
+        source_result_id: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(snapshot) for snapshot in self._poker_mtt_multiplier_snapshots.values()]
+        if miner_address is not None:
+            items = [item for item in items if item.get("miner_address") == miner_address]
+        if source_result_id is not None:
+            items = [item for item in items if item.get("source_result_id") == source_result_id]
+        items.sort(key=lambda item: (item.get("updated_at") or "", item.get("id") or ""), reverse=True)
+        return items
+
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict:
         current = deepcopy(self._poker_mtt_final_rankings.get(final_ranking["id"], {}))
         current.update(deepcopy(final_ranking))
@@ -622,6 +676,49 @@ def _normalize_poker_mtt_hidden_eval_entry(row: dict) -> dict:
         "manifest_root": row.get("manifest_root"),
         "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
         "visibility_state": row.get("visibility_state") or "service_internal",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _normalize_poker_mtt_rating_snapshot(row: dict) -> dict:
+    miner_address = row.get("miner_address")
+    if not miner_address:
+        raise ValueError("missing poker mtt rating miner_address")
+    window_start_at = row.get("window_start_at")
+    window_end_at = row.get("window_end_at")
+    if not window_start_at or not window_end_at:
+        raise ValueError("missing poker mtt rating window")
+    snapshot_id = row.get("id") or f"poker_mtt_rating:{miner_address}:{window_start_at}:{window_end_at}"
+    return {
+        "id": snapshot_id,
+        "miner_address": miner_address,
+        "window_start_at": row["window_start_at"],
+        "window_end_at": row["window_end_at"],
+        "public_rating": float(row.get("public_rating") or 0.0),
+        "public_rank": row.get("public_rank"),
+        "confidence": float(row.get("confidence") or 0.0),
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _normalize_poker_mtt_multiplier_snapshot(row: dict) -> dict:
+    miner_address = row.get("miner_address")
+    source_result_id = row.get("source_result_id")
+    if not miner_address:
+        raise ValueError("missing poker mtt multiplier miner_address")
+    if not source_result_id:
+        raise ValueError("missing poker mtt multiplier source_result_id")
+    return {
+        "id": row.get("id") or f"poker_mtt_multiplier:{source_result_id}",
+        "miner_address": miner_address,
+        "source_result_id": source_result_id,
+        "multiplier_before": float(row.get("multiplier_before") or 1.0),
+        "multiplier_after": float(row.get("multiplier_after") or 1.0),
+        "rolling_score": row.get("rolling_score"),
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }

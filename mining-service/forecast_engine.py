@@ -2056,6 +2056,15 @@ class ForecastMiningService:
                         "updated_at": completed_at,
                     },
                 )
+                await self._save_poker_mtt_multiplier_snapshot(
+                    miner_address=miner_address,
+                    source_result_id=entry["id"],
+                    multiplier_before=multiplier_before,
+                    multiplier_after=multiplier_after,
+                    rolling_score=rolling_score,
+                    policy_bundle_version=policy_bundle_version,
+                    now=completed_at,
+                )
 
             items.append(
                 {
@@ -2081,6 +2090,69 @@ class ForecastMiningService:
             "policy_bundle_version": policy_bundle_version,
             "items": items,
         }
+
+    async def build_poker_mtt_rating_snapshot(
+        self,
+        *,
+        miner_address: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        public_rating: float,
+        public_rank: int | None,
+        confidence: float,
+        policy_bundle_version: str,
+        now: datetime,
+    ) -> dict:
+        miner = await self.repo.get_miner(miner_address)
+        if not miner:
+            raise ValueError(f"miner not found: {miner_address}")
+        window_start = as_utc_datetime(window_start_at).replace(microsecond=0)
+        window_end = as_utc_datetime(window_end_at).replace(microsecond=0)
+        if window_end <= window_start:
+            raise ValueError("window_end_at must be after window_start_at")
+        current = as_utc_datetime(now).replace(microsecond=0)
+        return await self.repo.save_poker_mtt_rating_snapshot(
+            {
+                "id": f"poker_mtt_rating:{miner_address}:{isoformat_z(window_start)}:{isoformat_z(window_end)}",
+                "miner_address": miner_address,
+                "window_start_at": isoformat_z(window_start),
+                "window_end_at": isoformat_z(window_end),
+                "public_rating": float(public_rating),
+                "public_rank": int(public_rank) if public_rank is not None else None,
+                "confidence": clamp(float(confidence), 0.0, 1.0),
+                "policy_bundle_version": policy_bundle_version,
+                "created_at": isoformat_z(current),
+                "updated_at": isoformat_z(current),
+            }
+        )
+
+    async def _save_poker_mtt_multiplier_snapshot(
+        self,
+        *,
+        miner_address: str,
+        source_result_id: str,
+        multiplier_before: float,
+        multiplier_after: float,
+        rolling_score: float | None,
+        policy_bundle_version: str,
+        now: datetime,
+    ) -> dict | None:
+        if float(multiplier_before) == float(multiplier_after):
+            return None
+        current = as_utc_datetime(now).replace(microsecond=0)
+        return await self.repo.save_poker_mtt_multiplier_snapshot(
+            {
+                "id": f"poker_mtt_multiplier:{source_result_id}",
+                "miner_address": miner_address,
+                "source_result_id": source_result_id,
+                "multiplier_before": float(multiplier_before),
+                "multiplier_after": float(multiplier_after),
+                "rolling_score": rolling_score,
+                "policy_bundle_version": policy_bundle_version,
+                "created_at": isoformat_z(current),
+                "updated_at": isoformat_z(current),
+            }
+        )
 
     async def project_poker_mtt_final_rankings(
         self,
@@ -2208,6 +2280,15 @@ class ForecastMiningService:
                         "poker_mtt_multiplier": multiplier_after,
                         "updated_at": locked_at_utc,
                     },
+                )
+                await self._save_poker_mtt_multiplier_snapshot(
+                    miner_address=miner_address,
+                    source_result_id=entry["id"],
+                    multiplier_before=multiplier_before,
+                    multiplier_after=multiplier_after,
+                    rolling_score=rolling_score,
+                    policy_bundle_version=policy_bundle_version,
+                    now=locked_at_utc,
                 )
 
             items.append(
@@ -2641,6 +2722,24 @@ class ForecastMiningService:
             ),
             key=lambda item: item["poker_mtt_result_id"],
         )
+        rating_snapshot_rows = []
+        for miner_address in miner_addresses:
+            snapshots = await self.repo.list_poker_mtt_rating_snapshots(miner_address=miner_address)
+            if not snapshots:
+                continue
+            snapshot = snapshots[0]
+            rating_snapshot_rows.append(
+                {
+                    "rating_snapshot_id": snapshot["id"],
+                    "miner_address": snapshot["miner_address"],
+                    "window_start_at": snapshot["window_start_at"],
+                    "window_end_at": snapshot["window_end_at"],
+                    "public_rating": snapshot["public_rating"],
+                    "public_rank": snapshot.get("public_rank"),
+                    "confidence": snapshot.get("confidence", 0.0),
+                }
+            )
+        rating_snapshot_rows.sort(key=lambda item: (item["miner_address"], item["rating_snapshot_id"]))
 
         saved = await self.repo.save_reward_window(
             _materialize_reward_window(
@@ -2678,6 +2777,7 @@ class ForecastMiningService:
             "budget_disposition": budget_disposition,
             "final_ranking_root": _hash_sequence(final_ranking_refs),
             "evidence_root": _hash_sequence(evidence_refs),
+            "rating_snapshot_root": _hash_sequence(rating_snapshot_rows),
             "multiplier_snapshot_root": _hash_sequence(multiplier_snapshot_rows),
             **(projection_metadata or {}),
         }
