@@ -1429,6 +1429,13 @@ Phase 3 完成前，仍保持:
 8. **Ops gate**: 30-player non-mock WS explicit join/action-to-finish 是 hard gate；2,000-table burst 必须生成 completed-hand/finalizer inputs；observability 必须真实 emit。
 9. **Reputation delta**: 只做窗口级 dry-run artifact root。`x/reputation` 写入等 settlement、identity、budget、correction gates 稳定后再单独 review。
 
+2026-04-18 Task 1 closeout:
+
+- Final ranking contract gate 的 projector/schema/API 幂等部分已落地。
+- `projection_id`、`final_ranking_root`、standing snapshot refs、policy version、payload `locked_at` 是 FastAPI request schema 的必需字段。
+- Mining-service projection response 会回传 canonical metadata；同一 `projection_id`/root replay 返回 artifact 中保存的 existing result，同一 `projection_id` 搭配不同 root 返回 409。
+- 剩余 G1 blocker 是 donor parity finalizer：registration/waitlist/no-show snapshot merge 和 terminal/watermark invariants。
+
 ---
 
 ## 14. 我建议冻结的决策

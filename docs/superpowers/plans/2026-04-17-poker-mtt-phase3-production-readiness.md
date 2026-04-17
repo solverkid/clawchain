@@ -37,29 +37,37 @@
 - Test: `pokermtt/projector/*_test.go`
 - Test: `tests/mining_service/test_poker_mtt_final_ranking_contract.py`
 
-- [ ] **Step 1: Write the failing cross-language fixture test**
+- [x] **Step 1: Write the failing cross-language fixture test**
 
 Create a Go-produced JSON fixture for one finished entrant, one busted entrant, and one waiting/no-show entrant. Validate the fixture with Python `ApplyPokerMTTFinalRankingProjectionRequest`.
 
-- [ ] **Step 2: Run the test and confirm schema mismatch**
+- [x] **Step 2: Run the test and confirm schema mismatch**
 
 Run: `go test ./pokermtt/projector -run FinalRankingPayload -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_final_ranking_contract.py`
 
 Expected: Python validation fails on missing required fields or ignored top-level canonical fields.
 
-- [ ] **Step 3: Add projection identity fields**
+- [x] **Step 3: Add projection identity fields**
 
 Add `projection_id`, `final_ranking_root`, `standing_snapshot_id`, `standing_snapshot_hash`, and payload `locked_at` to the accepted schema. Either make server-generated row fields explicit or have Go populate required row fields.
 
-- [ ] **Step 4: Make projection idempotent**
+- [x] **Step 4: Make projection idempotent**
 
 Same `projection_id` plus same root returns the existing projection. Same `projection_id` plus changed root returns 409. Use payload `locked_at` after validation.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify**
 
 Run: `go test ./pokermtt/projector -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_final_ranking_contract.py tests/mining_service/test_poker_mtt_final_ranking.py`
 
 Commit: `git commit -m "feat(pokermtt): lock final ranking projection contract"`
+
+2026-04-18 implementation note:
+
+- Added `tests/fixtures/poker_mtt/final_ranking_projection_from_go.json` and cross-language Go/Python tests.
+- Go projector now emits `projection_id`, final-ranking root, standing snapshot refs, payload/row `locked_at`, and donor-derived row metadata required by the FastAPI schema.
+- FastAPI projection request now requires the canonical top-level fields.
+- `/admin/poker-mtt/final-rankings/project` persists a projection artifact marker and is idempotent for same `projection_id`/root while returning 409 for same `projection_id` with a different root.
+- Projection uses payload `locked_at`, not request-time `now()`.
 
 ### Task 2: Add Registration/Waitlist Finalizer Parity
 

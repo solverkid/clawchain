@@ -1486,6 +1486,33 @@ def poker_mtt_final_ranking_row(
     }
 
 
+def poker_mtt_final_ranking_projection_payload(
+    tournament_id: str,
+    rows: list[dict],
+    *,
+    locked_at: str = "2026-04-10T09:00:00Z",
+    policy_bundle_version: str = "poker_mtt_v1",
+) -> dict:
+    standing_snapshot_id = rows[0]["standing_snapshot_id"]
+    standing_snapshot_hash = rows[0]["standing_snapshot_hash"]
+    final_ranking_root = f"sha256:final-ranking-root:{tournament_id}"
+    return {
+        "schema_version": "poker_mtt.final_ranking_apply.v1",
+        "projection_id": f"poker_mtt_projection:{tournament_id}:{policy_bundle_version}:{final_ranking_root}",
+        "tournament_id": tournament_id,
+        "source_mtt_id": rows[0]["source_mtt_id"],
+        "rated_or_practice": "rated",
+        "human_only": True,
+        "field_size": 30,
+        "policy_bundle_version": policy_bundle_version,
+        "standing_snapshot_id": standing_snapshot_id,
+        "standing_snapshot_hash": standing_snapshot_hash,
+        "final_ranking_root": final_ranking_root,
+        "locked_at": locked_at,
+        "rows": rows,
+    }
+
+
 def poker_mtt_hidden_eval_payload(tournament_id: str, miner_addresses: list[str]) -> dict:
     return {
         "tournament_id": tournament_id,
@@ -1534,14 +1561,10 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
             assert hidden_eval_resp.status_code == 200
             resp = client.post(
                 "/admin/poker-mtt/final-rankings/project",
-                json={
-                    "tournament_id": tournament_id,
-                    "rated_or_practice": "rated",
-                    "human_only": True,
-                    "field_size": 30,
-                    "policy_bundle_version": "poker_mtt_v1",
-                    "rows": [poker_mtt_final_ranking_row(tournament_id, wallet["address"], final_rank=2)],
-                },
+                json=poker_mtt_final_ranking_projection_payload(
+                    tournament_id,
+                    [poker_mtt_final_ranking_row(tournament_id, wallet["address"], final_rank=2)],
+                ),
             )
             assert resp.status_code == 200
 
@@ -1621,17 +1644,13 @@ def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
         assert hidden_eval_resp.status_code == 200
         apply_resp = client.post(
             "/admin/poker-mtt/final-rankings/project",
-            json={
-                "tournament_id": "poker-mtt-api-daily-1",
-                "rated_or_practice": "rated",
-                "human_only": True,
-                "field_size": 30,
-                "policy_bundle_version": "poker_mtt_v1",
-                "rows": [
+            json=poker_mtt_final_ranking_projection_payload(
+                "poker-mtt-api-daily-1",
+                [
                     poker_mtt_final_ranking_row("poker-mtt-api-daily-1", wallet_one["address"], final_rank=1),
                     poker_mtt_final_ranking_row("poker-mtt-api-daily-1", wallet_two["address"], final_rank=2),
                 ],
-            },
+            ),
         )
         assert apply_resp.status_code == 200
 

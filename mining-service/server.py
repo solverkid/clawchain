@@ -18,6 +18,7 @@ from crypto_auth import verify_address_pubkey_binding
 from forecast_engine import (
     ForecastMiningService,
     ForecastSettings,
+    _hash_payload,
     build_signature_hash,
     utc_now,
 )
@@ -46,6 +47,14 @@ from chain_adapter import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _isoformat_z(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _poker_mtt_final_ranking_projection_artifact_id(projection_id: str) -> str:
+    return f"art:poker_mtt_final_ranking_projection:{projection_id}"
 
 
 def create_fake_repository() -> FakeRepository:
@@ -945,6 +954,17 @@ def create_app(
     async def project_poker_mtt_final_rankings(payload: ApplyPokerMTTFinalRankingProjectionRequest):
         try:
             svc = service()
+            projection_artifact_id = _poker_mtt_final_ranking_projection_artifact_id(payload.projection_id)
+            existing_projection = await svc.repo.get_artifact(projection_artifact_id)
+            if existing_projection:
+                existing_payload = existing_projection.get("payload_json") or {}
+                existing_root = existing_payload.get("final_ranking_root")
+                if existing_root != payload.final_ranking_root:
+                    raise HTTPException(status_code=409, detail="projection root conflict")
+                existing_result = existing_payload.get("result")
+                if existing_result:
+                    return existing_result
+
             for row in payload.rows:
                 await svc.repo.save_poker_mtt_final_ranking(row.model_dump())
             result = await svc.project_poker_mtt_final_rankings(
@@ -953,7 +973,46 @@ def create_app(
                 human_only=payload.human_only,
                 field_size=payload.field_size,
                 policy_bundle_version=payload.policy_bundle_version,
-                locked_at=now(),
+                locked_at=payload.locked_at,
+            )
+            locked_at = _isoformat_z(payload.locked_at)
+            result = {
+                "schema_version": payload.schema_version,
+                "projection_id": payload.projection_id,
+                "tournament_id": payload.tournament_id,
+                "source_mtt_id": payload.source_mtt_id,
+                "rated_or_practice": payload.rated_or_practice,
+                "human_only": payload.human_only,
+                "field_size": payload.field_size,
+                "policy_bundle_version": payload.policy_bundle_version,
+                "standing_snapshot_id": payload.standing_snapshot_id,
+                "standing_snapshot_hash": payload.standing_snapshot_hash,
+                "final_ranking_root": payload.final_ranking_root,
+                "locked_at": locked_at,
+                "items": result["items"],
+            }
+            artifact_payload = {
+                "schema_version": payload.schema_version,
+                "projection_id": payload.projection_id,
+                "tournament_id": payload.tournament_id,
+                "source_mtt_id": payload.source_mtt_id,
+                "standing_snapshot_id": payload.standing_snapshot_id,
+                "standing_snapshot_hash": payload.standing_snapshot_hash,
+                "final_ranking_root": payload.final_ranking_root,
+                "locked_at": locked_at,
+                "result": result,
+            }
+            await svc.repo.save_artifact(
+                {
+                    "id": projection_artifact_id,
+                    "kind": "poker_mtt_final_ranking_projection",
+                    "entity_type": "poker_mtt_tournament",
+                    "entity_id": payload.tournament_id,
+                    "payload_json": artifact_payload,
+                    "payload_hash": _hash_payload(artifact_payload),
+                    "created_at": locked_at,
+                    "updated_at": locked_at,
+                }
             )
         except ValueError as exc:
             detail = str(exc)

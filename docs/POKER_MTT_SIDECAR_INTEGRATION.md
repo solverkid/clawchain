@@ -1206,6 +1206,12 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 
 对应 canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 
+2026-04-18 已落地的 projector 部分:
+
+- Go `pokermtt/projector` 生成的 final ranking payload 已和 FastAPI schema 通过同一 golden fixture 校验。
+- Mining-service final-ranking projection endpoint 已按 `projection_id` 写 artifact marker；同 root replay 返回已存在结果，不同 root 返回 409。
+- Projection 锁定时间来自 payload `locked_at`，不会因 admin request 到达时间漂移。
+
 ### 18.8 Git 排除口径
 
 `lepoker-gameserver` 是独立 donor repo，不随 ClawChain 提交。

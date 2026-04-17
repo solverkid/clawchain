@@ -18,6 +18,7 @@ type ApplyOptions struct {
 
 type FinalRankingApplyPayload struct {
 	SchemaVersion        string               `json:"schema_version"`
+	ProjectionID         string               `json:"projection_id"`
 	TournamentID         string               `json:"tournament_id"`
 	SourceMTTID          string               `json:"source_mtt_id"`
 	RatedOrPractice      string               `json:"rated_or_practice"`
@@ -32,33 +33,43 @@ type FinalRankingApplyPayload struct {
 }
 
 type FinalRankingRowDTO struct {
-	ID                   string  `json:"id"`
-	TournamentID         string  `json:"tournament_id"`
-	SourceMTTID          string  `json:"source_mtt_id"`
-	SourceUserID         string  `json:"source_user_id"`
-	MinerAddress         string  `json:"miner_address"`
-	EconomicUnitID       string  `json:"economic_unit_id"`
-	MemberID             string  `json:"member_id"`
-	EntryNumber          int     `json:"entry_number"`
-	ReentryCount         int     `json:"reentry_count"`
-	Rank                 *int    `json:"rank"`
-	RankState            string  `json:"rank_state"`
-	Chip                 float64 `json:"chip"`
-	ChipDelta            float64 `json:"chip_delta"`
-	DiedTime             string  `json:"died_time"`
-	WaitingOrNoShow      bool    `json:"waiting_or_no_show"`
-	Bounty               float64 `json:"bounty"`
-	DefeatNum            int     `json:"defeat_num"`
-	FieldSizePolicy      string  `json:"field_size_policy"`
-	StandingSnapshotID   string  `json:"standing_snapshot_id"`
-	StandingSnapshotHash string  `json:"standing_snapshot_hash"`
-	EvidenceRoot         string  `json:"evidence_root"`
-	EvidenceState        string  `json:"evidence_state"`
-	PolicyBundleVersion  string  `json:"policy_bundle_version"`
-	LockedAt             string  `json:"locked_at,omitempty"`
-	AnchorableAt         string  `json:"anchorable_at,omitempty"`
-	RoomID               string  `json:"-"`
-	SessionID            string  `json:"-"`
+	ID                   string   `json:"id"`
+	TournamentID         string   `json:"tournament_id"`
+	SourceMTTID          string   `json:"source_mtt_id"`
+	SourceUserID         string   `json:"source_user_id"`
+	MinerAddress         string   `json:"miner_address"`
+	EconomicUnitID       string   `json:"economic_unit_id"`
+	MemberID             string   `json:"member_id"`
+	EntryNumber          int      `json:"entry_number"`
+	ReentryCount         int      `json:"reentry_count"`
+	Rank                 *int     `json:"rank"`
+	RankState            string   `json:"rank_state"`
+	Chip                 float64  `json:"chip"`
+	ChipDelta            float64  `json:"chip_delta"`
+	DiedTime             string   `json:"died_time"`
+	WaitingOrNoShow      bool     `json:"waiting_or_no_show"`
+	Bounty               float64  `json:"bounty"`
+	DefeatNum            int      `json:"defeat_num"`
+	FieldSizePolicy      string   `json:"field_size_policy"`
+	StandingSnapshotID   string   `json:"standing_snapshot_id"`
+	StandingSnapshotHash string   `json:"standing_snapshot_hash"`
+	EvidenceRoot         string   `json:"evidence_root"`
+	EvidenceState        string   `json:"evidence_state"`
+	PolicyBundleVersion  string   `json:"policy_bundle_version"`
+	SnapshotFound        bool     `json:"snapshot_found"`
+	Status               string   `json:"status"`
+	PlayerName           string   `json:"player_name"`
+	StartChip            float64  `json:"start_chip"`
+	StandUpStatus        string   `json:"stand_up_status"`
+	SourceRank           string   `json:"source_rank"`
+	SourceRankNumeric    bool     `json:"source_rank_numeric"`
+	ZSetScore            *float64 `json:"zset_score"`
+	LockedAt             string   `json:"locked_at,omitempty"`
+	AnchorableAt         string   `json:"anchorable_at,omitempty"`
+	CreatedAt            string   `json:"created_at,omitempty"`
+	UpdatedAt            string   `json:"updated_at,omitempty"`
+	RoomID               string   `json:"-"`
+	SessionID            string   `json:"-"`
 }
 
 func BuildFinalRankingApplyPayload(finalization ranking.Finalization, opts ApplyOptions) (FinalRankingApplyPayload, error) {
@@ -74,9 +85,13 @@ func BuildFinalRankingApplyPayload(finalization ranking.Finalization, opts Apply
 	if opts.FieldSize <= 0 {
 		return FinalRankingApplyPayload{}, errors.New("field size must be positive")
 	}
+	if opts.LockedAt.IsZero() {
+		return FinalRankingApplyPayload{}, errors.New("missing locked_at")
+	}
 
 	payload := FinalRankingApplyPayload{
 		SchemaVersion:        FinalRankingApplySchemaVersion,
+		ProjectionID:         finalRankingProjectionID(finalization.TournamentID, finalization.PolicyBundleVersion, finalization.Root),
 		TournamentID:         finalization.TournamentID,
 		SourceMTTID:          finalization.SourceMTTID,
 		RatedOrPractice:      opts.RatedOrPractice,
@@ -88,9 +103,7 @@ func BuildFinalRankingApplyPayload(finalization ranking.Finalization, opts Apply
 		FinalRankingRoot:     finalization.Root,
 		Rows:                 make([]FinalRankingRowDTO, 0, len(finalization.Rows)),
 	}
-	if !opts.LockedAt.IsZero() {
-		payload.LockedAt = opts.LockedAt.UTC().Format(time.RFC3339)
-	}
+	payload.LockedAt = opts.LockedAt.UTC().Format(time.RFC3339)
 	for _, row := range finalization.Rows {
 		rowDTO := FinalRankingRowDTO{
 			ID:                   row.ID,
@@ -116,10 +129,24 @@ func BuildFinalRankingApplyPayload(finalization ranking.Finalization, opts Apply
 			EvidenceRoot:         row.EvidenceRoot,
 			EvidenceState:        row.EvidenceState,
 			PolicyBundleVersion:  row.PolicyBundleVersion,
+			SnapshotFound:        row.SnapshotFound,
+			Status:               string(row.Status),
+			PlayerName:           row.PlayerName,
+			StartChip:            row.StartChip,
+			StandUpStatus:        row.StandUpStatus,
+			SourceRank:           row.SourceRank,
+			SourceRankNumeric:    row.SourceRankNumeric,
+			ZSetScore:            row.ZSetScore,
 			LockedAt:             payload.LockedAt,
 			AnchorableAt:         payload.LockedAt,
+			CreatedAt:            payload.LockedAt,
+			UpdatedAt:            payload.LockedAt,
 		}
 		payload.Rows = append(payload.Rows, rowDTO)
 	}
 	return payload, nil
+}
+
+func finalRankingProjectionID(tournamentID, policyBundleVersion, root string) string {
+	return "poker_mtt_projection:" + tournamentID + ":" + policyBundleVersion + ":" + root
 }
