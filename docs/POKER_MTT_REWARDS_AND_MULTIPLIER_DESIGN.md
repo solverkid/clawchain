@@ -6,6 +6,7 @@
 **范围**: `poker mtt` 独立产品线，不混入现有 `arena / bluff arena` 语义
 **依赖前提**: `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
 **Phase 2 执行源头**: `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`
+**Phase 2 TDD 执行清单**: `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2-tdd-execution.md`
 
 ---
 

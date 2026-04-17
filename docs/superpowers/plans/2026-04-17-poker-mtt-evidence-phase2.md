@@ -13,6 +13,7 @@
 ## Source Inputs
 
 - Current clean ClawChain base: `main@9e194f2`.
+- TDD execution checklist: `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2-tdd-execution.md`.
 - GitNexus repos:
   - `clawchain`, stale relative to `main@9e194f2`; local source inspection is authoritative for Phase 1 hardening.
   - `lepoker-auth`, independent donor reference for auth, MQ, hand history, HUD, final ranking, ELO/read models.
