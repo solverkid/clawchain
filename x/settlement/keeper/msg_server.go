@@ -27,6 +27,9 @@ func (s msgServer) AnchorSettlementBatch(
 	if err := msg.ValidateBasic(); err != nil {
 		return nil, err
 	}
+	if !s.Keeper.IsAuthorizedAnchorSubmitter(ctx, msg.Submitter) {
+		return nil, types.ErrUnauthorizedSubmitter.Wrapf("%s", msg.Submitter)
+	}
 	if existingAnchor, found := s.Keeper.GetSettlementAnchor(ctx, msg.SettlementBatchId); found {
 		if existingAnchor.CanonicalRoot != msg.CanonicalRoot || existingAnchor.AnchorPayloadHash != msg.AnchorPayloadHash {
 			return nil, types.ErrSettlementBatchAnchored.Wrapf(

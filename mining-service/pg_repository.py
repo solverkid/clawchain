@@ -113,7 +113,7 @@ def _poker_mtt_tournament_values(tournament: dict) -> dict:
 
 def _poker_mtt_final_ranking_values(final_ranking: dict) -> dict:
     values = deepcopy(final_ranking)
-    for field in ("created_at", "updated_at"):
+    for field in ("locked_at", "anchorable_at", "created_at", "updated_at"):
         if field in values and values[field] is not None:
             values[field] = _maybe_dt(values[field])
     return values
@@ -121,7 +121,7 @@ def _poker_mtt_final_ranking_values(final_ranking: dict) -> dict:
 
 def _poker_mtt_result_values(poker_mtt_result: dict) -> dict:
     values = deepcopy(poker_mtt_result)
-    for field in ("locked_at", "created_at", "updated_at"):
+    for field in ("locked_at", "anchorable_at", "created_at", "updated_at"):
         if field in values and values[field] is not None:
             values[field] = _maybe_dt(values[field])
     if values.get("risk_flags") is None:
@@ -235,7 +235,7 @@ def _poker_mtt_final_ranking_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
-    for field in ("created_at", "updated_at"):
+    for field in ("locked_at", "anchorable_at", "created_at", "updated_at"):
         if field in data and isinstance(data[field], datetime):
             data[field] = data[field].isoformat().replace("+00:00", "Z")
     return data
@@ -245,7 +245,7 @@ def _poker_mtt_result_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
-    for field in ("locked_at", "created_at", "updated_at"):
+    for field in ("locked_at", "anchorable_at", "created_at", "updated_at"):
         if field in data and isinstance(data[field], datetime):
             data[field] = data[field].isoformat().replace("+00:00", "Z")
     return data
@@ -355,6 +355,8 @@ class PostgresRepository:
             await conn.execute(
                 text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS reentry_count INTEGER NOT NULL DEFAULT 1")
             )
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS rank_state VARCHAR NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS chip_delta DOUBLE PRECISION NULL"))
             await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS final_ranking_id VARCHAR NULL"))
             await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS standing_snapshot_id VARCHAR NULL"))
             await conn.execute(
@@ -364,6 +366,7 @@ class PostgresRepository:
                 text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS evidence_state VARCHAR NOT NULL DEFAULT 'pending'")
             )
             await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS anchorable_at TIMESTAMPTZ NULL"))
             await conn.execute(
                 text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS anchor_state VARCHAR NOT NULL DEFAULT 'unanchored'")
             )
@@ -374,6 +377,8 @@ class PostgresRepository:
             await conn.execute(
                 text("ALTER TABLE poker_mtt_result_entries ADD COLUMN IF NOT EXISTS no_multiplier_reason VARCHAR NULL")
             )
+            await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS anchorable_at TIMESTAMPTZ NULL"))
 
     async def register_miner(self, miner: dict) -> dict:
         values = _miner_values(miner)

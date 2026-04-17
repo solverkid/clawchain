@@ -154,11 +154,14 @@
 
 - `mining-service/models.py`
   - `poker_mtt_tournaments`
+  - `poker_mtt_final_rankings`
   - `poker_mtt_result_entries`
 - `mining-service/server.py`
+  - `POST /admin/poker-mtt/final-rankings/project`
   - `POST /admin/poker-mtt/results/apply`
   - `POST /admin/poker-mtt/reward-windows/build`
 - `mining-service/forecast_engine.py`
+  - `project_poker_mtt_final_rankings()`
   - `apply_poker_mtt_results()`
   - `build_poker_mtt_reward_window()`
   - `_build_poker_mtt_reward_windows()`
@@ -166,6 +169,7 @@
 这条路径当前已经做了:
 
 - 接收已完赛 tournament 结果
+- 先保存 canonical `poker_mtt_final_rankings`，再投影 reward-bearing `poker_mtt_result_entries`
 - 计算 `0.55 tournament_result + 0.25 hidden_eval + 0.20 consistency_input`
 - 写入 `poker_mtt_result_entries`
 - 对 `rated + human_only` 结果更新独立的 `poker_mtt_multiplier`
@@ -174,6 +178,8 @@
 - `poker_mtt_reward_windows_enabled` 控制自动日 / 周窗口生成
 - `poker_mtt_settlement_anchoring_enabled` 控制 poker MTT settlement batch 进入 anchor payload
 - `poker_mtt_hud` 只提供 disabled-by-default 的 hot-store / manifest hook，不在 Phase 1 计算完整 HUD/ELO reward weight
+- legacy/admin `apply_poker_mtt_results()` 只有在 refs 能对上已保存 canonical final ranking 时才允许 reward-eligible
+- `x/settlement` anchor submitter 必须来自 genesis `authorized_submitters`，默认无授权 submitter 时不能写链上 anchor
 
 它当前还没有做:
 
@@ -808,19 +814,26 @@ Postgres 继续承接所有结构化聚合结果。
 - `source_mtt_id`
 - `source_user_id`
 - `miner_address`
+- `economic_unit_id`
+- `member_id`
 - `entry_number`
 - `reentry_count`
 - `rank`
 - `rank_state`
 - `chip`
+- `chip_delta`
 - `died_time`
 - `waiting_or_no_show`
 - `bounty`
 - `defeat_num`
 - `field_size_policy`
 - `standing_snapshot_id`
+- `standing_snapshot_hash`
 - `evidence_root`
+- `evidence_state`
 - `policy_bundle_version`
+- `locked_at`
+- `anchorable_at`
 - `created_at`
 - `updated_at`
 
@@ -857,12 +870,20 @@ Postgres 继续承接所有结构化聚合结果。
 - `multiplier_after`
 - `evaluation_state`
 - `evaluation_version`
+- `rank_state`
 - `evidence_root`
+- `evidence_state`
 - `standing_snapshot_id`
+- `standing_snapshot_hash`
 - `risk_flags`
 - `no_multiplier_reason`
+- `locked_at`
+- `anchorable_at`
+- `anchor_state`
 - `created_at`
 - `updated_at`
+
+Phase 1 的 reward-bearing 入口只接受 canonical final ranking 派生结果。Legacy/admin apply 可以保留为兼容入口，但只有当 `final_ranking_id` 在 `poker_mtt_final_rankings` 中存在，并且 tournament、miner、rank、standing snapshot、evidence root、policy bundle 全部对齐时，才允许 `eligible_for_multiplier = true`。
 
 ### D. `poker_mtt_hidden_eval_entries`
 
@@ -964,6 +985,7 @@ Phase 1 rollout gate:
 - `CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED=1` 后，poker MTT lane 的 `settlement_batch` 才允许 `retry_anchor_settlement_batch()`
 - 手动 `POST /admin/poker-mtt/reward-windows/build` 保留为 admin / test 入口，但即使手动构建了窗口，也必须显式打开 settlement anchoring gate 才能上链
 - reward window membership 只读 `locked_at` 落在窗口内的结果；anchor payload 只读 projection artifact 中的 locked / anchorable roots
+- 链上 `MsgAnchorSettlementBatch` 还要求 submitter 在 `x/settlement` genesis `authorized_submitters` 白名单内；相同 batch id + 相同 root/hash 幂等，相同 batch id + 不同 root/hash 冲突拒绝
 
 ## 10.2 链上应该锚什么
 

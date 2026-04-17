@@ -20,7 +20,7 @@ import (
 	"github.com/clawchain/clawchain/x/settlement/types"
 )
 
-func setupSettlementMsgServer(t *testing.T) (types.MsgServer, keeper.Keeper, sdk.Context) {
+func setupSettlementMsgServer(t *testing.T, authorizedSubmitters ...string) (types.MsgServer, keeper.Keeper, sdk.Context) {
 	storeKey := storetypes.NewKVStoreKey(types.StoreKey)
 
 	db := dbm.NewMemDB()
@@ -33,16 +33,22 @@ func setupSettlementMsgServer(t *testing.T) (types.MsgServer, keeper.Keeper, sdk
 
 	k := keeper.NewKeeper(cdc, storeKey)
 	ctx := sdk.NewContext(stateStore, cmtproto.Header{Height: 7, Time: time.Now()}, false, log.NewNopLogger())
+	k.InitGenesis(ctx, types.GenesisState{AuthorizedSubmitters: authorizedSubmitters})
 	return keeper.NewMsgServerImpl(k), k, ctx
+}
+
+func testAnchorSubmitter() string {
+	return sdk.AccAddress(bytes.Repeat([]byte{0x01}, 20)).String()
 }
 
 func testAnchorMsg() *types.MsgAnchorSettlementBatch {
 	return &types.MsgAnchorSettlementBatch{
-		Submitter:           sdk.AccAddress(bytes.Repeat([]byte{0x01}, 20)).String(),
+		Submitter:           testAnchorSubmitter(),
 		SettlementBatchId:   "sb_2026_04_10_0001",
 		AnchorJobId:         "anchor_job_01",
 		Lane:                "fast",
 		SchemaVersion:       "settlement.v1",
+		PolicyBundleVersion: "policy.v1",
 		CanonicalRoot:       "sha256:canonical",
 		AnchorPayloadHash:   "sha256:payload",
 		RewardWindowIdsRoot: "sha256:windows",
@@ -54,7 +60,7 @@ func testAnchorMsg() *types.MsgAnchorSettlementBatch {
 }
 
 func TestAnchorSettlementBatchIsIdempotentWhenAlreadyAnchored(t *testing.T) {
-	msgServer, k, ctx := setupSettlementMsgServer(t)
+	msgServer, k, ctx := setupSettlementMsgServer(t, testAnchorSubmitter())
 	msg := testAnchorMsg()
 
 	firstResp, err := msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), msg)
@@ -77,7 +83,7 @@ func TestAnchorSettlementBatchIsIdempotentWhenAlreadyAnchored(t *testing.T) {
 }
 
 func TestAnchorSettlementBatchRejectsDuplicateWithDifferentRoot(t *testing.T) {
-	msgServer, k, ctx := setupSettlementMsgServer(t)
+	msgServer, k, ctx := setupSettlementMsgServer(t, testAnchorSubmitter())
 	msg := testAnchorMsg()
 
 	_, err := msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), msg)
@@ -94,4 +100,15 @@ func TestAnchorSettlementBatchRejectsDuplicateWithDifferentRoot(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, msg.CanonicalRoot, anchor.CanonicalRoot)
 	require.Equal(t, msg.AnchorPayloadHash, anchor.AnchorPayloadHash)
+}
+
+func TestAnchorSettlementBatchRejectsUnauthorizedSubmitter(t *testing.T) {
+	msgServer, k, ctx := setupSettlementMsgServer(t)
+	msg := testAnchorMsg()
+
+	_, err := msgServer.AnchorSettlementBatch(sdk.WrapSDKContext(ctx), msg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unauthorized settlement anchor submitter")
+
+	require.False(t, k.HasSettlementAnchor(ctx, msg.SettlementBatchId))
 }

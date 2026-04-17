@@ -738,11 +738,13 @@ Phase 1 只做 reference-driven adapter 和 projection，不做完整 donor cont
 
 - thin auth adapter / local mock token 路径：借鉴 donor token verification 和 user context 注入，但不把 Cognito/JWKS 放进 `pokermtt` domain
 - final ranking 先 canonicalize，再投影 `poker_mtt_result_entries`
+- reward-bearing 入口现在以 `poker_mtt_final_rankings` 为准；legacy/admin apply 只能引用并匹配已保存 final ranking，不能凭 payload 自证
 - reward eligibility 必须等证据状态完整；未锁定结果不进 reward window
 - hand history 采用“一手完成后及时异步上传”的事件口径，不按每个 action 写永久存储
 - HUD / ELO / public rating 先作为后续 projector 输入，不直接参与 Phase 1 正向奖励权重
 - settlement 只锚窗口 root；projection artifact 保存 final ranking / evidence / multiplier roots
 - rollout 上默认关闭 poker MTT 自动 reward window 和 settlement anchoring，等 final ranking / evidence / projection 测试稳定后按环境打开
+- 链上 settlement anchor submitter 采用显式白名单，避免任何账户提交同一 `settlement_batch_id` 的抢先或冲突 root
 
 暂缓的 donor 能力：
 

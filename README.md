@@ -103,6 +103,9 @@ cd chain && go build -mod=vendor -o ../build/clawchaind ./cmd/clawchaind
 # Run tests
 cd chain && go test -mod=vendor ./...
 
+# Run the scoped Poker MTT Phase 1 gate from the repo root
+make test-poker-mtt-phase1
+
 # Run mining service locally
 cd mining-service && python3 server.py
 

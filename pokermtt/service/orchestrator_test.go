@@ -115,6 +115,49 @@ func TestOrchestratorRequeriesRoomOnReconnectAndUsesReentry(t *testing.T) {
 	require.Equal(t, fixed, client.lastReentryRequest.RequestedAt)
 }
 
+func TestOrchestratorEntryNumberOneUsesInitialJoin(t *testing.T) {
+	t.Helper()
+
+	client := &fakeRuntimeClient{
+		rooms: []sidecar.RoomResponse{
+			{
+				TournamentID:  "t-1",
+				UserID:        "7",
+				RoutingRoomID: "room-1",
+				TableID:       "table-1",
+				State:         "running",
+			},
+		},
+		joinResp: sidecar.JoinResponse{
+			TournamentID:  "t-1",
+			UserID:        "7",
+			SessionID:     "session-join",
+			RoutingRoomID: "room-1",
+			State:         "seating_ready",
+		},
+	}
+	orch := service.Orchestrator{
+		Client: client,
+		WS:     &fakeWSConnector{},
+	}
+
+	handle, err := orch.AcquireSession(context.Background(), service.SessionRequest{
+		TournamentID:  "t-1",
+		UserID:        "7",
+		PlayerName:    "tester",
+		Authorization: "Bearer local-user:7",
+		MockUserID:    "7",
+		SessionKey:    "session-001",
+		EntryNumber:   1,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "session-join", handle.SessionID)
+	require.Equal(t, 1, client.joinCalls)
+	require.Equal(t, 0, client.reentryCalls)
+	require.Equal(t, "room-1", client.lastJoinRequest.RoutingRoomID)
+}
+
 func TestOrchestratorRejectsRetryForBettingActions(t *testing.T) {
 	t.Helper()
 

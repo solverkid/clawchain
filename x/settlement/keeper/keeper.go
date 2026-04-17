@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"encoding/json"
+	"sort"
 
 	"cosmossdk.io/log"
 	storetypes "cosmossdk.io/store/types"
@@ -42,6 +43,20 @@ func (k Keeper) SetSettlementAnchor(ctx sdk.Context, anchor types.SettlementAnch
 	return nil
 }
 
+func (k Keeper) SetAuthorizedAnchorSubmitter(ctx sdk.Context, submitter string) error {
+	if _, err := sdk.AccAddressFromBech32(submitter); err != nil {
+		return err
+	}
+	store := ctx.KVStore(k.storeKey)
+	store.Set(types.GetAuthorizedAnchorSubmitterKey(submitter), []byte{0x01})
+	return nil
+}
+
+func (k Keeper) IsAuthorizedAnchorSubmitter(ctx sdk.Context, submitter string) bool {
+	store := ctx.KVStore(k.storeKey)
+	return store.Has(types.GetAuthorizedAnchorSubmitterKey(submitter))
+}
+
 func (k Keeper) GetSettlementAnchor(ctx sdk.Context, settlementBatchID string) (*types.SettlementAnchor, bool) {
 	store := ctx.KVStore(k.storeKey)
 	bz := store.Get(types.GetSettlementAnchorKey(settlementBatchID))
@@ -57,6 +72,9 @@ func (k Keeper) GetSettlementAnchor(ctx sdk.Context, settlementBatchID string) (
 }
 
 func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) {
+	for _, submitter := range gs.AuthorizedSubmitters {
+		_ = k.SetAuthorizedAnchorSubmitter(ctx, submitter)
+	}
 	for _, anchor := range gs.Anchors {
 		_ = k.SetSettlementAnchor(ctx, anchor)
 	}
@@ -76,5 +94,18 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) *types.GenesisState {
 		anchors = append(anchors, anchor)
 	}
 
-	return &types.GenesisState{Anchors: anchors}
+	submitterIter := storetypes.KVStorePrefixIterator(store, types.AuthorizedAnchorSubmitterKeyPrefix)
+	defer submitterIter.Close()
+
+	authorizedSubmitters := make([]string, 0)
+	for ; submitterIter.Valid(); submitterIter.Next() {
+		submitter := string(submitterIter.Key()[len(types.AuthorizedAnchorSubmitterKeyPrefix):])
+		authorizedSubmitters = append(authorizedSubmitters, submitter)
+	}
+	sort.Strings(authorizedSubmitters)
+
+	return &types.GenesisState{
+		Anchors:              anchors,
+		AuthorizedSubmitters: authorizedSubmitters,
+	}
 }

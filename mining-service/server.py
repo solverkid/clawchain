@@ -25,6 +25,7 @@ from pg_repository import PostgresRepository
 from repository import FakeRepository
 from schemas import (
     ApplyArenaResultsRequest,
+    ApplyPokerMTTFinalRankingProjectionRequest,
     ApplyPokerMTTResultsRequest,
     BuildPokerMTTRewardWindowRequest,
     CommitRequest,
@@ -877,6 +878,26 @@ def create_app(
         except ValueError as exc:
             detail = str(exc)
             status = 404 if "miner not found" in detail else 400
+            raise HTTPException(status_code=status, detail=detail)
+        return result
+
+    @app.post("/admin/poker-mtt/final-rankings/project")
+    async def project_poker_mtt_final_rankings(payload: ApplyPokerMTTFinalRankingProjectionRequest):
+        try:
+            svc = service()
+            for row in payload.rows:
+                await svc.repo.save_poker_mtt_final_ranking(row.model_dump())
+            result = await svc.project_poker_mtt_final_rankings(
+                tournament_id=payload.tournament_id,
+                rated_or_practice=payload.rated_or_practice,
+                human_only=payload.human_only,
+                field_size=payload.field_size,
+                policy_bundle_version=payload.policy_bundle_version,
+                locked_at=now(),
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status = 404 if "not found" in detail else 400
             raise HTTPException(status_code=status, detail=detail)
         return result
 

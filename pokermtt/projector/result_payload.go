@@ -56,6 +56,7 @@ type FinalRankingRowDTO struct {
 	EvidenceState        string  `json:"evidence_state"`
 	PolicyBundleVersion  string  `json:"policy_bundle_version"`
 	LockedAt             string  `json:"locked_at,omitempty"`
+	AnchorableAt         string  `json:"anchorable_at,omitempty"`
 	RoomID               string  `json:"-"`
 	SessionID            string  `json:"-"`
 }
@@ -116,6 +117,7 @@ func BuildFinalRankingApplyPayload(finalization ranking.Finalization, opts Apply
 			EvidenceState:        row.EvidenceState,
 			PolicyBundleVersion:  row.PolicyBundleVersion,
 			LockedAt:             payload.LockedAt,
+			AnchorableAt:         payload.LockedAt,
 		}
 		payload.Rows = append(payload.Rows, rowDTO)
 	}

@@ -17,6 +17,7 @@ func TestMsgAnchorSettlementBatchValidateBasic(t *testing.T) {
 		AnchorJobId:         "anchor_job_01",
 		Lane:                "fast",
 		SchemaVersion:       "settlement.v1",
+		PolicyBundleVersion: "policy.v1",
 		CanonicalRoot:       "sha256:canonical",
 		AnchorPayloadHash:   "sha256:payload",
 		RewardWindowIdsRoot: "sha256:windows",
@@ -39,4 +40,24 @@ func TestMsgAnchorSettlementBatchValidateBasic(t *testing.T) {
 	invalidSchema := *msg
 	invalidSchema.SchemaVersion = "bad-schema"
 	require.Error(t, invalidSchema.ValidateBasic())
+
+	missingLane := *msg
+	missingLane.Lane = ""
+	require.Error(t, missingLane.ValidateBasic())
+
+	missingPolicy := *msg
+	missingPolicy.PolicyBundleVersion = ""
+	require.Error(t, missingPolicy.ValidateBasic())
+
+	missingRewardWindowRoot := *msg
+	missingRewardWindowRoot.RewardWindowIdsRoot = ""
+	require.Error(t, missingRewardWindowRoot.ValidateBasic())
+
+	missingMinerRoot := *msg
+	missingMinerRoot.MinerRewardRowsRoot = ""
+	require.Error(t, missingMinerRoot.ValidateBasic())
+
+	missingWindowEnd := *msg
+	missingWindowEnd.WindowEndAt = ""
+	require.Error(t, missingWindowEnd.ValidateBasic())
 }

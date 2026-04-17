@@ -1,4 +1,4 @@
-.PHONY: build build-arena build-arena-swarm install clean test test-arena lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
+.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
@@ -48,6 +48,13 @@ test:
 test-arena:
 	@echo "Running arena tests..."
 	@ARENA_TEST_DATABASE_URL='$(ARENA_TEST_DATABASE_URL)' go test -v ./arena/...
+
+test-poker-mtt-phase1:
+	@echo "Running Poker MTT Phase 1 scoped tests..."
+	@go test ./authadapter ./pokermtt/... -v
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/mining_service tests/poker_mtt -p no:cacheprovider -q
+	@go test ./x/settlement/... -run 'TestAnchor' -v
+	@npm --prefix website test
 
 # Run linter
 lint:
@@ -101,6 +108,7 @@ help:
 	@echo "  clean      - Remove build artifacts"
 	@echo "  test       - Run all tests"
 	@echo "  test-arena - Run arena package tests"
+	@echo "  test-poker-mtt-phase1 - Run Poker MTT Phase 1 scoped gate"
 	@echo "  lint       - Run linter"
 	@echo "  tidy       - Tidy go.mod dependencies"
 	@echo "  proto-gen  - Generate protobuf code"

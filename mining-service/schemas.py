@@ -111,6 +111,8 @@ class PokerMTTFinalRankingRow(BaseModel):
     source_rank: str | None = None
     source_rank_numeric: bool = False
     zset_score: float | None = None
+    locked_at: datetime | None = None
+    anchorable_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

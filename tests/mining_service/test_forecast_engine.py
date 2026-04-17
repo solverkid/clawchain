@@ -162,10 +162,14 @@ def test_models_expose_deterministic_settlement_columns():
     task_columns = set(models.forecast_task_runs.c.keys())
     reward_window_columns = set(models.reward_windows.c.keys())
     settlement_batch_columns = set(models.settlement_batches.c.keys())
+    poker_mtt_final_ranking_columns = set(models.poker_mtt_final_rankings.c.keys())
+    poker_mtt_result_columns = set(models.poker_mtt_result_entries.c.keys())
 
     assert {"task_state", "degraded_reason", "void_reason", "resolution_source"} <= task_columns
     assert {"policy_bundle_version", "canonical_root"} <= reward_window_columns
     assert "policy_bundle_version" in settlement_batch_columns
+    assert {"rank_state", "chip_delta", "locked_at", "anchorable_at"} <= poker_mtt_final_ranking_columns
+    assert {"rank_state", "chip_delta", "locked_at", "anchorable_at"} <= poker_mtt_result_columns
     assert (
         normalize_database_url("postgresql+asyncpg://clawchain:pw@127.0.0.1:55432/clawchain")
         == "postgresql+asyncpg://clawchain:pw@127.0.0.1:55432/clawchain"
@@ -1199,6 +1203,76 @@ def poker_mtt_reward_ready_refs(
     }
 
 
+def poker_mtt_final_ranking_row(
+    tournament_id: str,
+    miner_address: str,
+    *,
+    final_rank: int,
+    field_size: int = 30,
+    policy_bundle_version: str = "poker_mtt_v1",
+    economic_unit_id: str | None = None,
+    locked_at: str = "2026-04-10T09:00:00Z",
+) -> dict:
+    refs = poker_mtt_reward_ready_refs(tournament_id, miner_address, locked_at=locked_at)
+    chip_delta = float(field_size - final_rank)
+    return {
+        "id": refs["final_ranking_id"],
+        "tournament_id": tournament_id,
+        "source_mtt_id": tournament_id,
+        "source_user_id": miner_address,
+        "miner_address": miner_address,
+        "economic_unit_id": economic_unit_id or miner_address,
+        "member_id": f"{miner_address}:1",
+        "entry_number": 1,
+        "reentry_count": 1,
+        "rank": final_rank,
+        "rank_state": "ranked",
+        "chip": 3000.0 + chip_delta,
+        "chip_delta": chip_delta,
+        "died_time": None,
+        "waiting_or_no_show": False,
+        "bounty": 0.0,
+        "defeat_num": 0,
+        "field_size_policy": "exclude_waiting_no_show_from_reward_field_size",
+        "standing_snapshot_id": refs["standing_snapshot_id"],
+        "standing_snapshot_hash": refs["standing_snapshot_hash"],
+        "evidence_root": refs["evidence_root"],
+        "evidence_state": refs["evidence_state"],
+        "policy_bundle_version": policy_bundle_version,
+        "snapshot_found": True,
+        "status": "completed",
+        "player_name": miner_address,
+        "room_id": "room-1",
+        "start_chip": 3000.0,
+        "stand_up_status": "",
+        "source_rank": str(final_rank),
+        "source_rank_numeric": True,
+        "zset_score": 3000.0 + chip_delta,
+        "locked_at": locked_at,
+        "anchorable_at": locked_at,
+        "created_at": locked_at,
+        "updated_at": locked_at,
+    }
+
+
+async def save_poker_mtt_final_ranking_refs(
+    repo: FakeRepository,
+    tournament_id: str,
+    rankings: list[tuple[str, int]],
+    *,
+    policy_bundle_version: str = "poker_mtt_v1",
+) -> None:
+    for miner_address, final_rank in rankings:
+        await repo.save_poker_mtt_final_ranking(
+            poker_mtt_final_ranking_row(
+                tournament_id,
+                miner_address,
+                final_rank=final_rank,
+                policy_bundle_version=policy_bundle_version,
+            )
+        )
+
+
 def poker_mtt_rollout_settings(**overrides) -> forecast_engine.ForecastSettings:
     defaults = {
         "poker_mtt_reward_windows_enabled": True,
@@ -1222,6 +1296,11 @@ async def build_poker_mtt_anchor_fixture(
             public_key="pubkey",
             miner_version="0.4.0",
         )
+    await save_poker_mtt_final_ranking_refs(
+        repo,
+        tournament_id,
+        [(miner_address, index) for index, miner_address in enumerate(miner_addresses, start=1)],
+    )
     await service.apply_poker_mtt_results(
         tournament_id=tournament_id,
         rated_or_practice="rated",
@@ -1266,6 +1345,11 @@ def test_reconcile_skips_poker_mtt_auto_windows_when_rollout_disabled():
             name="poker-disabled-auto",
             public_key="pubkey",
             miner_version="0.4.0",
+        )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-disabled-auto-1",
+            [("claw1pokerdisabledauto", 1)],
         )
         await service.apply_poker_mtt_results(
             tournament_id="poker-mtt-disabled-auto-1",
@@ -1338,6 +1422,11 @@ def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
         )
 
         for index in range(15):
+            await save_poker_mtt_final_ranking_refs(
+                repo,
+                f"poker-mtt-rated-{index}",
+                [("claw1pokermttrated", 1)],
+            )
             await service.apply_poker_mtt_results(
                 tournament_id=f"poker-mtt-rated-{index}",
                 rated_or_practice="rated",
@@ -1364,6 +1453,11 @@ def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
         miner = await repo.get_miner("claw1pokermttrated")
         assert miner["poker_mtt_multiplier"] == 1.0
 
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-rated-15",
+            [("claw1pokermttrated", 2)],
+        )
         result = await service.apply_poker_mtt_results(
             tournament_id="poker-mtt-rated-15",
             rated_or_practice="rated",
@@ -1415,6 +1509,11 @@ def test_build_poker_mtt_reward_window_creates_settlement_batch():
             name="poker-daily-two",
             public_key="pubkey",
             miner_version="0.4.0",
+        )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-daily-1",
+            [("claw1pokerdailyone", 1), ("claw1pokerdailytwo", 2)],
         )
 
         await service.apply_poker_mtt_results(
@@ -1483,6 +1582,11 @@ def test_build_poker_mtt_reward_window_rejects_no_positive_weights():
                 public_key="pubkey",
                 miner_version="0.4.0",
             )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-zero-weight-1",
+            [("claw1pokerzeroweightone", 30), ("claw1pokerzeroweighttwo", 30)],
+        )
 
         await service.apply_poker_mtt_results(
             tournament_id="poker-mtt-zero-weight-1",
@@ -1558,6 +1662,11 @@ def test_reconcile_no_positive_poker_mtt_window_does_not_enter_settlement():
             public_key="pubkey",
             miner_version="0.4.0",
         )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-reconcile-zero-1",
+            [("claw1pokerreconcilezero", 30)],
+        )
         await service.apply_poker_mtt_results(
             tournament_id="poker-mtt-reconcile-zero-1",
             rated_or_practice="rated",
@@ -1604,6 +1713,11 @@ def test_no_positive_rebuild_cancels_stale_open_settlement_batch():
             public_key="pubkey",
             miner_version="0.4.0",
         )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-stale-open-1",
+            [("claw1pokerstaleopen", 1)],
+        )
         await service.apply_poker_mtt_results(
             tournament_id="poker-mtt-stale-open-1",
             rated_or_practice="rated",
@@ -1634,6 +1748,13 @@ def test_no_positive_rebuild_cancels_stale_open_settlement_batch():
         stale_batch_id = positive_window["settlement_batch_id"]
 
         stored = (await repo.list_poker_mtt_results_for_miner("claw1pokerstaleopen"))[0]
+        await repo.save_poker_mtt_final_ranking(
+            poker_mtt_final_ranking_row(
+                "poker-mtt-stale-open-1",
+                "claw1pokerstaleopen",
+                final_rank=30,
+            )
+        )
         await repo.save_poker_mtt_result(
             {
                 **stored,
@@ -1684,6 +1805,11 @@ def test_build_poker_mtt_reward_window_folds_duplicate_economic_units():
                 public_key="pubkey",
                 miner_version="0.4.0",
             )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-duplicate-unit-1",
+            [("claw1pokerdupone", 1), ("claw1pokerduptwo", 2), ("claw1pokerfair", 1)],
+        )
 
         await service.apply_poker_mtt_results(
             tournament_id="poker-mtt-duplicate-unit-1",
@@ -1772,6 +1898,11 @@ def test_build_poker_mtt_reward_window_propagates_explicit_policy_bundle_version
             public_key="pubkey",
             miner_version="0.4.0",
         )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-policy-1",
+            [("claw1pokerpolicyone", 1)],
+        )
 
         await service.apply_poker_mtt_results(
             tournament_id="poker-mtt-policy-1",
@@ -1835,6 +1966,11 @@ def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
             name="poker-anchor-two",
             public_key="pubkey",
             miner_version="0.4.0",
+        )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-anchor-1",
+            [("claw1pokeranchorone", 1), ("claw1pokeranchortwo", 2)],
         )
 
         await service.apply_poker_mtt_results(
@@ -2060,12 +2196,22 @@ def test_build_poker_mtt_reward_window_uses_locked_at_for_membership_time():
         )
 
         stored = (await repo.list_poker_mtt_results_for_miner("claw1pokerwindowtime"))[0]
+        await repo.save_poker_mtt_final_ranking(
+            poker_mtt_final_ranking_row(
+                "poker-mtt-window-time-1",
+                "claw1pokerwindowtime",
+                final_rank=1,
+            )
+        )
         await repo.save_poker_mtt_result(
             {
                 **stored,
                 "evaluation_state": "final",
+                "rank_state": "ranked",
+                "chip_delta": 29.0,
                 "evidence_state": "complete",
                 "locked_at": "2026-04-10T09:00:00Z",
+                "anchorable_at": "2026-04-10T09:00:00Z",
                 "final_ranking_id": "poker_mtt_final_ranking:poker-mtt-window-time-1:claw1pokerwindowtime",
                 "standing_snapshot_id": "poker_mtt_standing_snapshot:poker-mtt-window-time-1:abc",
                 "standing_snapshot_hash": "sha256:poker-mtt-window-time-1",
@@ -2110,6 +2256,11 @@ def test_reconcile_auto_builds_closed_poker_mtt_daily_and_weekly_windows():
             name="poker-auto-daily",
             public_key="pubkey",
             miner_version="0.4.0",
+        )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-auto-1",
+            [("claw1pokerautodaily", 1)],
         )
 
         await service.apply_poker_mtt_results(
@@ -2189,12 +2340,22 @@ def test_reconcile_skips_poker_mtt_auto_window_until_all_results_are_final():
         assert reward_windows == []
 
         stored = (await repo.list_poker_mtt_results_for_miner("claw1pokerautofinal"))[0]
+        await repo.save_poker_mtt_final_ranking(
+            poker_mtt_final_ranking_row(
+                "poker-mtt-auto-final-1",
+                "claw1pokerautofinal",
+                final_rank=1,
+            )
+        )
         await repo.save_poker_mtt_result(
             {
                 **stored,
                 "evaluation_state": "final",
+                "rank_state": "ranked",
+                "chip_delta": 29.0,
                 "evidence_state": "complete",
                 "locked_at": "2026-04-10T09:00:00Z",
+                "anchorable_at": "2026-04-10T09:00:00Z",
                 "final_ranking_id": "poker_mtt_final_ranking:poker-mtt-auto-final-1:claw1pokerautofinal",
                 "standing_snapshot_id": "poker_mtt_standing_snapshot:poker-mtt-auto-final-1:abc",
                 "standing_snapshot_hash": "sha256:poker-mtt-auto-final-1",

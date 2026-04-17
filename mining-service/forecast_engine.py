@@ -468,6 +468,75 @@ def _default_poker_mtt_policy_bundle_version(settings: ForecastSettings, lane: s
     return POLICY_BUNDLE_VERSION
 
 
+def _canonical_poker_mtt_projection_rows(rows: Iterable[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        key = row.get("economic_unit_id") or row.get("miner_address") or row.get("source_user_id") or row.get("member_id")
+        if not key:
+            key = row.get("id", "")
+        current = grouped.get(key)
+        if current is None or _poker_mtt_projection_row_sort_key(row) < _poker_mtt_projection_row_sort_key(current):
+            grouped[key] = row
+    return sorted(grouped.values(), key=_poker_mtt_projection_row_sort_key)
+
+
+def _poker_mtt_projection_row_sort_key(row: dict) -> tuple:
+    rank_state = row.get("rank_state")
+    rank = row.get("rank")
+    try:
+        normalized_rank = int(rank) if rank is not None else 10**9
+    except (TypeError, ValueError):
+        normalized_rank = 10**9
+    try:
+        chip = float(row.get("chip", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        chip = 0.0
+    return (
+        0 if rank_state == "ranked" and rank is not None else 1,
+        normalized_rank,
+        -chip,
+        int(row.get("entry_number") or 0),
+        str(row.get("member_id") or ""),
+        str(row.get("id") or ""),
+    )
+
+
+def _poker_mtt_final_ranking_matches_legacy_result(
+    row: dict,
+    *,
+    tournament_id: str,
+    miner_address: str,
+    final_rank: int,
+    result: dict,
+    policy_bundle_version: str,
+) -> bool:
+    if row.get("tournament_id") != tournament_id:
+        return False
+    row_miner_address = row.get("miner_address") or row.get("source_user_id")
+    if row_miner_address != miner_address:
+        return False
+    if row.get("rank_state") != "ranked":
+        return False
+    try:
+        if int(row.get("rank")) != final_rank:
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    expected_fields = (
+        "standing_snapshot_id",
+        "standing_snapshot_hash",
+        "evidence_root",
+        "evidence_state",
+    )
+    for field in expected_fields:
+        if result.get(field) and row.get(field) != result.get(field):
+            return False
+    if row.get("policy_bundle_version") and row.get("policy_bundle_version") != policy_bundle_version:
+        return False
+    return True
+
+
 def _parse_version(version: str) -> tuple[int, ...]:
     digits = []
     for part in version.replace("-", ".").split("."):
@@ -1880,8 +1949,10 @@ class ForecastMiningService:
             evaluation_state = str(result.get("evaluation_state") or "provisional")
             evidence_state = str(result.get("evidence_state") or "pending")
             locked_at = result.get("locked_at")
+            rank_state = str(result.get("rank_state") or "ranked")
+            chip_delta = result.get("chip_delta")
             no_multiplier_reason = result.get("no_multiplier_reason") or poker_mtt_results.reward_gate_reason(
-                rank_state="ranked",
+                rank_state=rank_state,
                 rank=final_rank,
                 rated_or_practice=rated_or_practice,
                 human_only=human_only,
@@ -1892,7 +1963,21 @@ class ForecastMiningService:
                 final_ranking_id=result.get("final_ranking_id"),
                 standing_snapshot_id=result.get("standing_snapshot_id"),
             )
+            if no_multiplier_reason is None:
+                final_ranking = await self.repo.get_poker_mtt_final_ranking(result["final_ranking_id"])
+                if final_ranking is None:
+                    no_multiplier_reason = "canonical_final_ranking_not_found"
+                elif not _poker_mtt_final_ranking_matches_legacy_result(
+                    final_ranking,
+                    tournament_id=tournament_id,
+                    miner_address=miner_address,
+                    final_rank=final_rank,
+                    result=result,
+                    policy_bundle_version=policy_bundle_version,
+                ):
+                    no_multiplier_reason = "canonical_final_ranking_mismatch"
             eligible_for_multiplier = no_multiplier_reason is None
+            anchorable_at = result.get("anchorable_at") or (locked_at if eligible_for_multiplier else None)
 
             entry = await self.repo.save_poker_mtt_result(
                 {
@@ -1917,12 +2002,15 @@ class ForecastMiningService:
                     "multiplier_after": multiplier_after,
                     "evaluation_state": evaluation_state,
                     "evaluation_version": policy_bundle_version,
+                    "rank_state": rank_state,
+                    "chip_delta": chip_delta,
                     "final_ranking_id": result.get("final_ranking_id"),
                     "standing_snapshot_id": result.get("standing_snapshot_id"),
                     "standing_snapshot_hash": result.get("standing_snapshot_hash"),
                     "evidence_root": result.get("evidence_root"),
                     "evidence_state": evidence_state,
                     "locked_at": locked_at,
+                    "anchorable_at": anchorable_at,
                     "anchor_state": str(result.get("anchor_state") or "unanchored"),
                     "anchor_payload_hash": result.get("anchor_payload_hash"),
                     "risk_flags": list(result.get("risk_flags") or ([] if no_multiplier_reason is None else [no_multiplier_reason])),
@@ -2011,6 +2099,7 @@ class ForecastMiningService:
         rows = await self.repo.list_poker_mtt_final_rankings_for_tournament(tournament_id)
         if not rows:
             raise ValueError("no poker mtt final rankings found")
+        rows = _canonical_poker_mtt_projection_rows(rows)
 
         await self.repo.save_poker_mtt_tournament(
             {
@@ -2216,7 +2305,7 @@ class ForecastMiningService:
                 continue
             if result.get("human_only") is not True:
                 continue
-            if not include_provisional and result.get("evaluation_state") != "final":
+            if result.get("evaluation_state") != "final":
                 continue
             if not result.get("evaluation_version"):
                 continue
@@ -2224,9 +2313,30 @@ class ForecastMiningService:
                 continue
             if not result.get("final_ranking_id") or not result.get("standing_snapshot_id") or not result.get("evidence_root"):
                 continue
+            if result.get("rank_state") != "ranked":
+                continue
+            anchorable_at = result.get("anchorable_at") or locked_at
+            if not anchorable_at or as_utc_datetime(anchorable_at) > current:
+                continue
             if result.get("no_multiplier_reason") is not None:
                 continue
             if result.get("eligible_for_multiplier") is not True:
+                continue
+            try:
+                final_rank = int(result.get("final_rank"))
+            except (TypeError, ValueError):
+                continue
+            final_ranking = await self.repo.get_poker_mtt_final_ranking(result["final_ranking_id"])
+            if final_ranking is None:
+                continue
+            if not _poker_mtt_final_ranking_matches_legacy_result(
+                final_ranking,
+                tournament_id=result["tournament_id"],
+                miner_address=result["miner_address"],
+                final_rank=final_rank,
+                result=result,
+                policy_bundle_version=result["evaluation_version"],
+            ):
                 continue
             selected_results.append(result)
 
@@ -2251,18 +2361,16 @@ class ForecastMiningService:
         representative_miners: dict[str, str] = {}
         for result in selected_results:
             economic_unit_id = result.get("economic_unit_id") or result["miner_address"]
-            if (
-                economic_unit_id not in representative_miners
-                or result["miner_address"] < representative_miners[economic_unit_id]
+            candidate_weight = max(0.0, float(result.get("total_score", 0.0) or 0.0))
+            previous_weight = score_weights.get(economic_unit_id)
+            if economic_unit_id not in representative_miners or candidate_weight > previous_weight or (
+                candidate_weight == previous_weight and result["miner_address"] < representative_miners[economic_unit_id]
             ):
                 representative_miners[economic_unit_id] = result["miner_address"]
             submission_counts[economic_unit_id] = submission_counts.get(economic_unit_id, 0) + 1
             score_weights[economic_unit_id] = max(
                 score_weights.get(economic_unit_id, 0.0),
-                max(
-                    0.0,
-                    float(result.get("total_score", 0.0) or 0.0),
-                ),
+                candidate_weight,
             )
 
         economic_unit_ids = sorted(score_weights)

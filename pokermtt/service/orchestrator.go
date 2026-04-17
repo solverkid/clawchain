@@ -197,7 +197,7 @@ func (o Orchestrator) AcquireSession(ctx context.Context, req SessionRequest) (S
 
 	var admission sidecar.JoinResponse
 	requestedAt := o.now()
-	if req.Reentry || req.EntryNumber > 0 {
+	if req.Reentry || req.EntryNumber > 1 {
 		reentry, err := o.Client.Reentry(ctx, sidecar.ReentryRequest{
 			TournamentID:  req.TournamentID,
 			UserID:        req.UserID,

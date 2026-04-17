@@ -73,6 +73,9 @@ func TestBuildFinalRankingApplyPayloadUsesCanonicalRows(t *testing.T) {
 	if payload.Rows[0].LockedAt != "2026-04-10T12:00:00Z" {
 		t.Fatalf("locked_at not normalized: %s", payload.Rows[0].LockedAt)
 	}
+	if payload.Rows[0].AnchorableAt != "2026-04-10T12:00:00Z" {
+		t.Fatalf("anchorable_at not normalized: %s", payload.Rows[0].AnchorableAt)
+	}
 	if _, err := json.Marshal(payload); err != nil {
 		t.Fatalf("payload must be json serializable: %v", err)
 	}

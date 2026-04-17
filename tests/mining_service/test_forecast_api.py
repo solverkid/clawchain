@@ -1435,6 +1435,54 @@ def poker_mtt_reward_ready_refs(
     }
 
 
+def poker_mtt_final_ranking_row(
+    tournament_id: str,
+    miner_address: str,
+    *,
+    final_rank: int,
+    created_at: str = "2026-04-10T09:00:00Z",
+) -> dict:
+    refs = poker_mtt_reward_ready_refs(tournament_id, miner_address, locked_at=created_at)
+    return {
+        "id": refs["final_ranking_id"],
+        "tournament_id": tournament_id,
+        "source_mtt_id": tournament_id,
+        "source_user_id": miner_address,
+        "miner_address": miner_address,
+        "economic_unit_id": miner_address,
+        "member_id": f"{miner_address}:1",
+        "entry_number": 1,
+        "reentry_count": 1,
+        "rank": final_rank,
+        "rank_state": "ranked",
+        "chip": 3000.0 + float(30 - final_rank),
+        "chip_delta": float(30 - final_rank),
+        "died_time": None,
+        "waiting_or_no_show": False,
+        "bounty": 0.0,
+        "defeat_num": 0,
+        "field_size_policy": "exclude_waiting_no_show_from_reward_field_size",
+        "standing_snapshot_id": refs["standing_snapshot_id"],
+        "standing_snapshot_hash": refs["standing_snapshot_hash"],
+        "evidence_root": refs["evidence_root"],
+        "evidence_state": refs["evidence_state"],
+        "policy_bundle_version": "poker_mtt_v1",
+        "snapshot_found": True,
+        "status": "completed",
+        "player_name": miner_address,
+        "room_id": "room-1",
+        "start_chip": 3000.0,
+        "stand_up_status": "",
+        "source_rank": str(final_rank),
+        "source_rank_numeric": True,
+        "zset_score": 3000.0 + float(30 - final_rank),
+        "locked_at": created_at,
+        "anchorable_at": created_at,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+
+
 def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(
@@ -1457,27 +1505,14 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
 
         for index in range(16):
             resp = client.post(
-                "/admin/poker-mtt/results/apply",
+                "/admin/poker-mtt/final-rankings/project",
                 json={
                     "tournament_id": f"poker-mtt-rated-{index}",
                     "rated_or_practice": "rated",
                     "human_only": True,
                     "field_size": 30,
                     "policy_bundle_version": "poker_mtt_v1",
-                    "results": [
-                        {
-                            "miner_id": wallet["address"],
-                            "final_rank": 2,
-                            "tournament_result_score": 0.9,
-                            "hidden_eval_score": 0.6,
-                            "consistency_input_score": 0.3,
-                            "evaluation_state": "final",
-                            **poker_mtt_reward_ready_refs(
-                                f"poker-mtt-rated-{index}",
-                                wallet["address"],
-                            ),
-                        }
-                    ],
+                    "rows": [poker_mtt_final_ranking_row(f"poker-mtt-rated-{index}", wallet["address"], final_rank=2)],
                 },
             )
             assert resp.status_code == 200
@@ -1510,32 +1545,16 @@ def test_admin_build_poker_mtt_reward_window_creates_anchor_ready_batch():
             assert register_resp.status_code == 200
 
         apply_resp = client.post(
-            "/admin/poker-mtt/results/apply",
+            "/admin/poker-mtt/final-rankings/project",
             json={
                 "tournament_id": "poker-mtt-api-daily-1",
                 "rated_or_practice": "rated",
                 "human_only": True,
                 "field_size": 30,
                 "policy_bundle_version": "poker_mtt_v1",
-                "results": [
-                    {
-                        "miner_id": wallet_one["address"],
-                        "final_rank": 1,
-                        "tournament_result_score": 1.0,
-                        "hidden_eval_score": 0.0,
-                        "consistency_input_score": 0.0,
-                        "evaluation_state": "final",
-                        **poker_mtt_reward_ready_refs("poker-mtt-api-daily-1", wallet_one["address"]),
-                    },
-                    {
-                        "miner_id": wallet_two["address"],
-                        "final_rank": 2,
-                        "tournament_result_score": 0.5,
-                        "hidden_eval_score": 0.0,
-                        "consistency_input_score": 0.0,
-                        "evaluation_state": "final",
-                        **poker_mtt_reward_ready_refs("poker-mtt-api-daily-1", wallet_two["address"]),
-                    },
+                "rows": [
+                    poker_mtt_final_ranking_row("poker-mtt-api-daily-1", wallet_one["address"], final_rank=1),
+                    poker_mtt_final_ranking_row("poker-mtt-api-daily-1", wallet_two["address"], final_rank=2),
                 ],
             },
         )

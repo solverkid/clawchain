@@ -27,7 +27,10 @@ func TestWSConnectSpecUsesDonorBoundaryMetadata(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, server.URL+"/v1/ws?id=t-1&type=mtt", spec.URL)
+	parsedBase, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	parsedBase.Scheme = "ws"
+	require.Equal(t, parsedBase.String()+"/v1/ws?id=t-1&type=mtt", spec.URL)
 	require.Equal(t, "room-9", spec.RoutingRoomID)
 	require.Equal(t, "Bearer local-user:7", spec.Headers.Get("Authorization"))
 	require.Equal(t, "7", spec.Headers.Get("Mock-Userid"))

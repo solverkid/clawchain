@@ -109,7 +109,6 @@ def project_final_ranking_row(
 ) -> dict:
     rank = row.get("rank")
     final_rank = int(rank) if rank is not None else field_size
-    result_score = tournament_result_score(final_rank=final_rank, field_size=field_size)
     evidence_state = str(row.get("evidence_state") or "pending")
     locked_at_iso = isoformat_z(locked_at)
     reason = reward_gate_reason(
@@ -124,6 +123,13 @@ def project_final_ranking_row(
         policy_bundle_version=policy_bundle_version or row.get("policy_bundle_version"),
         locked_at=locked_at,
     )
+    try:
+        result_score = tournament_result_score(final_rank=final_rank, field_size=field_size)
+    except ValueError:
+        if reason is None:
+            raise
+        final_rank = max(1, min(field_size, final_rank))
+        result_score = 0.0
     risk_flags = []
     if reason:
         risk_flags.append(reason)
@@ -140,6 +146,8 @@ def project_final_ranking_row(
         "human_only": human_only,
         "field_size": field_size,
         "final_rank": final_rank,
+        "rank_state": row.get("rank_state"),
+        "chip_delta": row.get("chip_delta"),
         "entry_number": row.get("entry_number"),
         "reentry_count": int(row.get("reentry_count") or 1),
         "finish_percentile": result_score,
@@ -157,6 +165,7 @@ def project_final_ranking_row(
         "evidence_root": row.get("evidence_root"),
         "evidence_state": evidence_state,
         "locked_at": locked_at_iso if reason is None else None,
+        "anchorable_at": locked_at_iso if reason is None else None,
         "anchor_state": "unanchored",
         "anchor_payload_hash": None,
         "risk_flags": risk_flags,

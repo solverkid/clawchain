@@ -544,8 +544,10 @@ tournament result
 - runtime 参考 `lepoker-gameserver` 的 table / ws / live ranking
 - control/read model 参考 `lepoker-auth` 的 auth / MQ / final ranking / hand history / HUD / ELO
 - reward 仍接 ClawChain 的 `reward_window / settlement_batch`
+- reward-bearing 结果只从 canonical `poker_mtt_final_rankings` 投影；legacy/admin 结果入口必须引用并匹配已保存 final ranking
 - 链上第一阶段只锚定窗口 root，不逐手或逐场上链
 - 第一阶段默认关闭自动 `poker_mtt_daily` / `poker_mtt_weekly` 发奖和 poker settlement anchoring，通过环境级 rollout gate 显式打开
+- settlement anchor submitter 必须显式授权，不允许任意账户提交窗口 root
 - final ranking 可能晚于比赛结束出现，因为 donor finish handling、hand history、hidden eval、evidence lock 都是异步链路
 - 公开侧使用 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived internal `total_score`
 

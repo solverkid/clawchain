@@ -67,6 +67,15 @@ func (w WS) connectURL(tournamentID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	switch base.Scheme {
+	case "http":
+		base.Scheme = "ws"
+	case "https":
+		base.Scheme = "wss"
+	case "ws", "wss":
+	default:
+		return "", errors.New("unsupported websocket base url scheme")
+	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/v1/ws"
 	query := base.Query()
 	query.Set("id", tournamentID)

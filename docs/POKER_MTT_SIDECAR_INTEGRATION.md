@@ -84,6 +84,19 @@ Phase 1 的硬约束:
 - `anchorable` 后才能进入 settlement batch anchor payload
 - post-anchor correction 只能 append / supersede，不能改旧 root
 
+### 2.5 Phase 1 实现硬化点（2026-04-17）
+
+当前 ClawChain Phase 1 代码已经把以下边界固化为测试约束：
+
+- donor `roomID` 只作为路由信息，不进入 final ranking canonical root
+- donor HTTP base URL 会转换成正确的 `ws://` / `wss://` 连接 URL
+- `EntryNumber = 1` 走首次 join；只有显式 `Reentry` 或 `EntryNumber > 1` 才走 reentry
+- reward-bearing 结果必须先落入 `poker_mtt_final_rankings`，再投影 `poker_mtt_result_entries`
+- legacy/admin `apply_poker_mtt_results` 不能伪造 `final_ranking_id` 绕过 canonical final ranking
+- reward window 会再次校验 `poker_mtt_result_entries.final_ranking_id` 是否存在并与 rank/miner/tournament/evidence 对齐
+- `rank_state = ranked`、完整 evidence、`locked_at`、`anchorable_at`、policy bundle 都是进入 reward window 的前置条件
+- `x/settlement` 的 `MsgAnchorSettlementBatch` 不再 permissionless；submitter 必须在 settlement genesis `authorized_submitters` 白名单中
+
 ## 3. 证据基础
 
 本文档基于以下事实源：

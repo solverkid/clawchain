@@ -554,11 +554,19 @@ type canonicalRowsPayload struct {
 }
 
 func canonicalRows(tournamentID string, sourceMTTID string, policyBundleVersion string, rows []FinalRankingRow) canonicalRowsPayload {
+	canonical := append([]FinalRankingRow(nil), rows...)
+	for index := range canonical {
+		canonical[index].RoomID = ""
+		canonical[index].StandingSnapshotID = ""
+		canonical[index].StandingSnapshotHash = ""
+		canonical[index].EvidenceRoot = ""
+		canonical[index].EvidenceState = ""
+	}
 	return canonicalRowsPayload{
 		TournamentID:        tournamentID,
 		SourceMTTID:         sourceMTTID,
 		PolicyBundleVersion: policyBundleVersion,
-		Rows:                append([]FinalRankingRow(nil), rows...),
+		Rows:                canonical,
 	}
 }
 

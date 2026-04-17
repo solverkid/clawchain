@@ -235,6 +235,34 @@ func TestFinalizerCanonicalHashIgnoresSnapshotJSONKeyOrder(t *testing.T) {
 	require.Equal(t, leftFinal.Root, rightFinal.Root)
 }
 
+func TestFinalizerCanonicalHashIgnoresRoutingRoomID(t *testing.T) {
+	left := ranking.LiveSnapshot{
+		TournamentID: "mtt-routing-room",
+		GameType:     model.GameTypeMTT,
+		UserInfo: map[string]string{
+			"7:1": `{"userID":"7","entryNumber":1,"minerAddress":"claw1miner7","endChip":5000,"roomID":"room-a"}`,
+		},
+		Alive: []ranking.ZMember{{Member: "7:1", Score: 5000}},
+	}
+	right := ranking.LiveSnapshot{
+		TournamentID: "mtt-routing-room",
+		GameType:     model.GameTypeMTT,
+		UserInfo: map[string]string{
+			"7:1": `{"userID":"7","entryNumber":1,"minerAddress":"claw1miner7","endChip":5000,"roomID":"room-b"}`,
+		},
+		Alive: []ranking.ZMember{{Member: "7:1", Score: 5000}},
+	}
+
+	finalizer := ranking.Finalizer{PolicyBundleVersion: "poker-mtt-phase1-test"}
+	leftFinal, err := finalizer.Finalize(left)
+	require.NoError(t, err)
+	rightFinal, err := finalizer.Finalize(right)
+	require.NoError(t, err)
+
+	require.NotEqual(t, rowsByMember(leftFinal.Rows)["7:1"].RoomID, rowsByMember(rightFinal.Rows)["7:1"].RoomID)
+	require.Equal(t, leftFinal.Root, rightFinal.Root)
+}
+
 func TestFinalizerStableRootForTenThousandEntrants(t *testing.T) {
 	const entrants = 10000
 	snapshot := ranking.LiveSnapshot{
