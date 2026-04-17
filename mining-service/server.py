@@ -10,6 +10,7 @@ import logging
 from eth_keys import keys as eth_keys
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import uvicorn
 
 from config import AppSettings, load_settings
@@ -45,6 +46,16 @@ from chain_adapter import (
 
 
 logger = logging.getLogger(__name__)
+
+
+POKER_MTT_ADMIN_MUTATION_PATHS = {
+    "/admin/poker-mtt/hands/ingest",
+    "/admin/poker-mtt/hidden-eval/finalize",
+    "/admin/poker-mtt/rating-snapshots/build",
+    "/admin/poker-mtt/results/apply",
+    "/admin/poker-mtt/final-rankings/project",
+    "/admin/poker-mtt/reward-windows/build",
+}
 
 
 def create_fake_repository() -> FakeRepository:
@@ -441,6 +452,19 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    @app.middleware("http")
+    async def require_poker_mtt_admin_auth(request: Request, call_next):  # noqa: ANN001
+        if (
+            request.method.upper() != "OPTIONS"
+            and request.url.path in POKER_MTT_ADMIN_MUTATION_PATHS
+            and bool(getattr(app_settings, "admin_auth_enabled", False))
+        ):
+            expected_token = getattr(app_settings, "admin_auth_token", None)
+            authorization = request.headers.get("Authorization", "")
+            if not expected_token or authorization != f"Bearer {expected_token}":
+                return JSONResponse({"detail": "admin authorization required"}, status_code=401)
+        return await call_next(request)
 
     def service() -> ForecastMiningService:
         return app.state.service

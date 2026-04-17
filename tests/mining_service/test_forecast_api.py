@@ -1672,6 +1672,22 @@ def test_admin_ingest_poker_mtt_hand_event_persists_completed_hand():
         assert inserted.json()["event"]["payload_json"]["pot"] == 120
 
 
+def test_poker_mtt_hand_ingest_requires_admin_token_when_auth_enabled():
+    app = server.create_app(
+        settings=AppSettings(
+            admin_auth_enabled=True,
+            admin_auth_token="internal-secret",
+        ),
+        repository=server.create_fake_repository(),
+        now_fn=FrozenClock(datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)).now,
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/admin/poker-mtt/hands/ingest", json={})
+
+    assert response.status_code == 401
+
+
 def test_admin_finalize_poker_mtt_hidden_eval_persists_manifest():
     clock = FrozenClock(datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(

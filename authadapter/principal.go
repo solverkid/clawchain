@@ -17,6 +17,8 @@ var (
 	ErrPrincipalRevoked        = errors.New("principal revoked")
 )
 
+const RolePokerMTTRewardBound = "poker_mtt_reward_bound"
+
 type Principal struct {
 	UserID         string
 	MinerAddress   string
@@ -40,6 +42,27 @@ func (p Principal) ValidateMutation(now time.Time) error {
 
 func (p Principal) NormalizedMinerAddress() (string, error) {
 	return normalizeMinerAddress(p.MinerAddress)
+}
+
+func (p Principal) HasRole(role string) bool {
+	expected := strings.TrimSpace(role)
+	for _, candidate := range p.Roles {
+		if strings.TrimSpace(candidate) == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func (p Principal) PokerMTTRewardEligible() bool {
+	minerAddress, err := p.NormalizedMinerAddress()
+	if err != nil {
+		return false
+	}
+	if strings.HasPrefix(minerAddress, "claw1local-") {
+		return p.HasRole(RolePokerMTTRewardBound)
+	}
+	return true
 }
 
 func normalizeAuthorizationHeader(authorization string) (string, error) {

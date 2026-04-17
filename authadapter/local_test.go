@@ -24,6 +24,18 @@ func TestLocalAdapterVerifyBearerLocalUser(t *testing.T) {
 	require.True(t, principal.TokenExpiresAt.Equal(now.Add(time.Hour)))
 }
 
+func TestLocalMockPrincipalRequiresExplicitRewardBinding(t *testing.T) {
+	now := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
+	adapter := authadapter.LocalAdapter{Now: func() time.Time { return now }}
+
+	principal, err := adapter.Verify(context.Background(), "Bearer local-user:7")
+	require.NoError(t, err)
+	require.False(t, principal.PokerMTTRewardEligible())
+
+	principal.Roles = append(principal.Roles, authadapter.RolePokerMTTRewardBound)
+	require.True(t, principal.PokerMTTRewardEligible())
+}
+
 func TestLocalAdapterRejectsMalformedToken(t *testing.T) {
 	adapter := authadapter.LocalAdapter{}
 

@@ -92,6 +92,8 @@ class AppSettings:
     anchor_pending_confirmation_warning_seconds: float = float(
         os.getenv("CLAWCHAIN_ANCHOR_PENDING_CONFIRMATION_WARNING_SECONDS", "120.0")
     )
+    admin_auth_enabled: bool = _bool_env("CLAWCHAIN_ADMIN_AUTH_ENABLED", False)
+    admin_auth_token: str | None = os.getenv("CLAWCHAIN_ADMIN_AUTH_TOKEN")
     cors_allowed_origins: tuple[str, ...] = field(
         default_factory=lambda: _csv_env(
             "CLAWCHAIN_CORS_ALLOWED_ORIGINS",
