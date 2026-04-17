@@ -1,11 +1,15 @@
 package projector
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/clawchain/clawchain/pokermtt/ranking"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildFinalRankingApplyPayloadUsesCanonicalRows(t *testing.T) {
@@ -90,5 +94,60 @@ func TestBuildFinalRankingApplyPayloadRejectsUnrootedFinalization(t *testing.T) 
 
 	if err == nil {
 		t.Fatalf("expected error for missing finalization root")
+	}
+}
+
+func TestFinalRankingApplyClientPostsPayload(t *testing.T) {
+	payload := FinalRankingApplyPayload{
+		SchemaVersion:       FinalRankingApplySchemaVersion,
+		TournamentID:        "mtt-client-1",
+		RatedOrPractice:     "rated",
+		HumanOnly:           true,
+		FieldSize:           30,
+		PolicyBundleVersion: "poker_mtt_v1",
+		Rows:                []FinalRankingRowDTO{{ID: "row-1", TournamentID: "mtt-client-1", MemberID: "7:1"}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/poker-mtt/final-rankings/project", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		var decoded FinalRankingApplyPayload
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&decoded))
+		require.Equal(t, payload.TournamentID, decoded.TournamentID)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"tournament_id":"mtt-client-1"}`))
+	}))
+	defer server.Close()
+
+	client := NewFinalRankingApplyClient(server.URL, server.Client())
+	resp, err := client.Apply(context.Background(), payload)
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, string(resp.Body), "mtt-client-1")
+}
+
+func TestFinalRankingApplyClientClassifiesRetryableAndPermanentErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		retryable bool
+	}{
+		{name: "service unavailable", status: http.StatusServiceUnavailable, retryable: true},
+		{name: "bad request", status: http.StatusBadRequest, retryable: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, tc.name, tc.status)
+			}))
+			defer server.Close()
+
+			client := NewFinalRankingApplyClient(server.URL, server.Client())
+			_, err := client.Apply(context.Background(), FinalRankingApplyPayload{TournamentID: "mtt-error"})
+
+			var applyErr *ApplyError
+			require.ErrorAs(t, err, &applyErr)
+			require.Equal(t, tc.status, applyErr.StatusCode)
+			require.Equal(t, tc.retryable, applyErr.Retryable)
+		})
 	}
 }

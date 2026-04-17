@@ -2,13 +2,22 @@ package ranking
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/clawchain/clawchain/pokermtt/model"
 )
 
 var ErrInvalidRedisStore = errors.New("invalid poker mtt ranking redis store")
+var ErrUnstableLiveSnapshot = errors.New("unstable poker mtt live ranking snapshot")
+
+type StableSnapshotPolicy struct {
+	MaxAttempts int
+}
 
 type RedisClient interface {
 	HGetAll(ctx context.Context, key string) (map[string]string, error)
@@ -59,6 +68,44 @@ func (s RedisStore) ReadLiveSnapshot(ctx context.Context, tournamentID string) (
 		Alive:        append([]ZMember(nil), alive...),
 		Died:         append([]string(nil), died...),
 	}, nil
+}
+
+func (s RedisStore) ReadStableLiveSnapshot(ctx context.Context, tournamentID string, policy StableSnapshotPolicy) (LiveSnapshot, error) {
+	maxAttempts := policy.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 2
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		first, err := s.ReadLiveSnapshot(ctx, tournamentID)
+		if err != nil {
+			return LiveSnapshot{}, err
+		}
+		firstHash, err := hashLiveSnapshot(first)
+		if err != nil {
+			return LiveSnapshot{}, err
+		}
+		second, err := s.ReadLiveSnapshot(ctx, tournamentID)
+		if err != nil {
+			return LiveSnapshot{}, err
+		}
+		secondHash, err := hashLiveSnapshot(second)
+		if err != nil {
+			return LiveSnapshot{}, err
+		}
+		if firstHash == secondHash {
+			return second, nil
+		}
+	}
+	return LiveSnapshot{}, fmt.Errorf("%w after %d attempts", ErrUnstableLiveSnapshot, maxAttempts)
+}
+
+func hashLiveSnapshot(snapshot LiveSnapshot) (string, error) {
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func copyStringMap(values map[string]string) map[string]string {

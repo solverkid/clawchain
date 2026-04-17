@@ -35,7 +35,10 @@ func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
 		decodedSnapshots[strings.TrimSpace(memberID)] = decoded
 	}
 
-	snapshotHash, err := hashCanonicalJSON(canonicalSnapshot(snapshot, decodedSnapshots))
+	aliveRows := canonicalAliveRows(snapshot.Alive)
+	snapshotForHash := snapshot
+	snapshotForHash.Alive = aliveRows
+	snapshotHash, err := hashCanonicalJSON(canonicalSnapshot(snapshotForHash, decodedSnapshots))
 	if err != nil {
 		return Finalization{}, err
 	}
@@ -56,7 +59,7 @@ func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
 	rows := make([]FinalRankingRow, 0, rowCapacity)
 	seenMembers := make(map[string]struct{}, len(snapshot.UserInfo)+len(snapshot.Alive))
 
-	for aliveRankZeroBased, alive := range snapshot.Alive {
+	for aliveRankZeroBased, alive := range aliveRows {
 		memberID := strings.TrimSpace(alive.Member)
 		entry, found := decodedSnapshots[memberID]
 		displayRank := aliveRankZeroBased + 1
@@ -361,6 +364,17 @@ func memberSortKeyLess(left string, right string) bool {
 	}
 }
 
+func canonicalAliveRows(rows []ZMember) []ZMember {
+	canonical := append([]ZMember(nil), rows...)
+	sort.SliceStable(canonical, func(i, j int) bool {
+		if canonical[i].Score != canonical[j].Score {
+			return canonical[i].Score > canonical[j].Score
+		}
+		return memberSortKeyLess(canonical[i].Member, canonical[j].Member)
+	})
+	return canonical
+}
+
 func firstString(values ...any) string {
 	for _, value := range values {
 		if normalized := normalizeString(value); normalized != "" {
@@ -541,7 +555,7 @@ func canonicalSnapshot(snapshot LiveSnapshot, decodedSnapshots map[string]map[st
 		GameType:     snapshot.GameType,
 		Keys:         snapshot.Keys,
 		UserInfo:     userInfo,
-		Alive:        append([]ZMember(nil), snapshot.Alive...),
+		Alive:        canonicalAliveRows(snapshot.Alive),
 		Died:         append([]string(nil), snapshot.Died...),
 	}
 }

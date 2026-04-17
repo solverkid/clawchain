@@ -54,6 +54,20 @@ func TestRedisStoreReadsDonorRankingKeys(t *testing.T) {
 	require.Len(t, snapshot.Died, 1)
 }
 
+func TestRedisStoreReadStableSnapshotRejectsDrift(t *testing.T) {
+	client := &driftingRedisClient{}
+	store := ranking.RedisStore{Client: client, GameType: model.GameTypeMTT}
+
+	_, err := store.ReadStableLiveSnapshot(
+		context.Background(),
+		"mtt-drift",
+		ranking.StableSnapshotPolicy{MaxAttempts: 2},
+	)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unstable poker mtt live ranking snapshot")
+}
+
 func TestFinalizerCanonicalizesLiveSnapshotEdges(t *testing.T) {
 	snapshot := ranking.LiveSnapshot{
 		TournamentID: "mtt-edges",
@@ -207,6 +221,52 @@ func TestFinalizerCollapsesDuplicateReentriesByEconomicUnit(t *testing.T) {
 	require.Equal(t, 2, rankValue(t, rows["42:1"]))
 }
 
+func TestFinalizerCanonicalizesEqualAliveScoreTiesByMemberID(t *testing.T) {
+	userInfo := map[string]string{
+		"7:1": mustJSON(t, map[string]any{
+			"userID":       "7",
+			"entryNumber":  1,
+			"minerAddress": "claw1miner7",
+			"endChip":      5000,
+		}),
+		"8:1": mustJSON(t, map[string]any{
+			"userID":       "8",
+			"entryNumber":  1,
+			"minerAddress": "claw1miner8",
+			"endChip":      5000,
+		}),
+	}
+	left := ranking.LiveSnapshot{
+		TournamentID: "mtt-equal-ties",
+		GameType:     model.GameTypeMTT,
+		UserInfo:     userInfo,
+		Alive: []ranking.ZMember{
+			{Member: "8:1", Score: 5000},
+			{Member: "7:1", Score: 5000},
+		},
+	}
+	right := ranking.LiveSnapshot{
+		TournamentID: "mtt-equal-ties",
+		GameType:     model.GameTypeMTT,
+		UserInfo:     userInfo,
+		Alive: []ranking.ZMember{
+			{Member: "7:1", Score: 5000},
+			{Member: "8:1", Score: 5000},
+		},
+	}
+
+	finalizer := ranking.Finalizer{PolicyBundleVersion: "poker-mtt-phase2-test"}
+	leftFinal, err := finalizer.Finalize(left)
+	require.NoError(t, err)
+	rightFinal, err := finalizer.Finalize(right)
+	require.NoError(t, err)
+
+	require.Equal(t, leftFinal.Root, rightFinal.Root)
+	require.Equal(t, leftFinal.SnapshotHash, rightFinal.SnapshotHash)
+	require.Equal(t, 1, rankValue(t, rowsByMember(leftFinal.Rows)["7:1"]))
+	require.Equal(t, 2, rankValue(t, rowsByMember(leftFinal.Rows)["8:1"]))
+}
+
 func TestFinalizerCanonicalHashIgnoresSnapshotJSONKeyOrder(t *testing.T) {
 	left := ranking.LiveSnapshot{
 		TournamentID: "mtt-canonical-json",
@@ -317,6 +377,37 @@ type fakeRedis struct {
 	zsets  map[string][]ranking.ZMember
 	lists  map[string][]string
 	calls  []string
+}
+
+type driftingRedisClient struct {
+	hgetCalls int
+}
+
+func (r *driftingRedisClient) HGetAll(ctx context.Context, key string) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.hgetCalls++
+	return map[string]string{
+		"7:1": fmt.Sprintf(
+			`{"userID":"7","entryNumber":1,"minerAddress":"claw1miner7","endChip":%d}`,
+			4500+r.hgetCalls,
+		),
+	}, nil
+}
+
+func (r *driftingRedisClient) ZRevRangeWithScores(ctx context.Context, key string, start int64, stop int64) ([]ranking.ZMember, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return []ranking.ZMember{{Member: "7:1", Score: 4500}}, nil
+}
+
+func (r *driftingRedisClient) LRange(ctx context.Context, key string, start int64, stop int64) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func newFakeRedis() *fakeRedis {
