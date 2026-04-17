@@ -54,6 +54,8 @@
 - `daily_anchor`
 - `arena_rated`
 - `arena_practice`
+- `poker_mtt_daily`
+- `poker_mtt_weekly`
 
 ## 2.4 经济单位
 
@@ -889,6 +891,8 @@ bash scripts/poker_mtt/run_phase2_load_check.sh --players 30 --local
 - 20k-player synthetic reward projection paging
 - 2,000-table early-stage hand-ingest burst shape
 
+这个 local check 只证明 projection/page contract 的形状，不证明 production reward-window path。Phase 2 production harness 还必须单独覆盖 DB-backed `POST /admin/poker-mtt/reward-windows/build`、bounded query count、no N+1 final-ranking/rating lookup、真实 metric/log emission，以及 donor sidecar 30-player non-mock play-to-finish gate。
+
 最小 observability fields：
 
 ```text
@@ -898,6 +902,8 @@ poker_mtt.hud.project.duration_ms
 poker_mtt.reward_window.query.duration_ms
 poker_mtt.settlement_anchor.confirmation_state
 ```
+
+这些字段名只是 contract。production harness 必须证明它们被真实 metrics/log sink 发出，不能只靠常量或文档声明通过。
 
 ## 5. Public Write APIs
 

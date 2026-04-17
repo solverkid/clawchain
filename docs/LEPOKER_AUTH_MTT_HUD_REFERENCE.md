@@ -733,7 +733,7 @@ auth 只是入口适配，不该成为 `poker mtt` 领域层的核心依赖。
 | `calculateCommonHUD()` | `short_term_hud` projector | 服务 hidden eval / risk，不直接发币 |
 | `calculateMTTSpecialHUD()` | `long_term_hud` / rating snapshot | 服务 consistency / public rating / multiplier 慢变量 |
 | donor ELO / leaderboard | `poker_mtt_public_rating` / `poker_mtt_public_rank` | 展示、匹配、风控辅助；不做正向 reward weight |
-| DynamoDB user history GSIs | hand evidence store read model | DynamoDB 是生产候选；ClawChain core 只依赖 storage interface |
+| DynamoDB user history GSIs | per-user/history read model | DynamoDB 是生产候选；confirmed MTT raw hand ingest path 仍以 `HandHistoryService.upsertHandHistory()` 为准，ClawChain core 只依赖 storage interface |
 
 不要借：
 
@@ -781,13 +781,15 @@ Phase 2 已把 donor 里线上跑稳的几个结构转成 ClawChain 自己的 Go
 | `calculateMTTSpecialHUD()` / ELO | long-term HUD、rating snapshot、multiplier snapshot，慢变量化，不做直接 reward weight |
 | `saveMTTRankingInfo()` | canonical final ranking handoff，reward 只吃 locked final ranking projection |
 | Redis live ranking | Go finalizer 的 stable snapshot 输入，不直接进 reward window |
-| DynamoDB raw history | 生产候选 adapter；当前 core 只依赖 hand evidence store contract |
+| DynamoDB raw / user history | 生产候选 adapter / read model；当前 confirmed MTT raw hand path 是 `HandHistoryService.upsertHandHistory()`，core 只依赖 hand evidence store contract |
 
 新增约束：
 
 - 大 reward projection 必须分页，主 artifact 只放 `miner_reward_rows_root` 和 page refs
 - settlement materialization 会读取 page artifact 并校验 page root / full rows root
 - typed `x/settlement` confirmation 必须查链上 stored state；fallback memo 只能作为 degraded proof
+- Redis-only finalization 还不是 donor parity；Phase 2 production harness 必须合并 registration / waitlist snapshot，等待或 no-show 用户进 final archive 但不进 reward rows
+- MQ parity 当前只借鉴 `bizId` 幂等思想；ClawChain 还需要 checkpoint / replay / DLQ / lag harness，不能把 offline load generator 当作 RocketMQ parity
 - `x/reputation` 仍不接 donor ELO，也不接单场 hidden eval；等窗口级 reputation delta 设计成熟后再接
 - rollout 上默认关闭 poker MTT 自动 reward window 和 settlement anchoring，等 final ranking / evidence / projection 测试稳定后按环境打开
 - 链上 settlement anchor submitter 采用显式白名单，避免任何账户提交同一 `settlement_batch_id` 的抢先或冲突 root

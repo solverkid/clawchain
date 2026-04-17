@@ -571,13 +571,13 @@ tournament result
 - donor Java monolith port
 - 高价值 mainnet 奖励默认开启
 
-截至 2026-04-17，Poker MTT Evidence Phase 2 的 beta gate 已经可以在本地回归：
+截至 2026-04-17，Poker MTT Evidence Phase 2 已经形成本地可回归的 beta slice，但 production harness gates 仍未全部通过：
 
 - 一手完成后写 completed-hand evidence，不按 action 永久写入
 - final ranking、hand-history manifest、HUD、hidden eval、rating / multiplier snapshot 都进入可审计链路
-- daily / weekly reward window 只吃 locked、evidence-ready 的 `poker_mtt_result_entries`
+- daily / weekly reward window 设计上只吃 locked、evidence-ready 的 `poker_mtt_result_entries`；production rollout 前还要补 `accepted_degraded`、policy filter、server economic-unit、identity binding 等 harness gate
 - 20k-player reward projection 不返回整包 rows，主 artifact 保存 root/page refs，page artifact 保存 rows
-- settlement batch 通过 typed `x/settlement` state query 确认 root/hash，不只看 tx success
+- settlement batch 设计上通过 typed `x/settlement` state query 确认 root/hash，不只看 tx success；production rollout 前还要补外部 query wiring 和 full-field metadata confirmation
 
 产品上仍然按 beta / internal rollout 处理：自动发奖和 poker settlement anchoring 默认关闭，公开页面只展示 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived `total_score`。
 
@@ -597,7 +597,7 @@ tournament result
 - 风控阈值
 - 单场 multiplier 草算值
 
-详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md)、[docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md) 和 [docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md)。
+详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md)、[docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md)、[docs/POKER_MTT_PHASE2_HARNESS_SPECS.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE2_HARNESS_SPECS.md) 和 [docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md)。
 
 ### 5.6 anti-abuse、review 与成熟度
 
