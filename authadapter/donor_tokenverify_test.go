@@ -41,7 +41,40 @@ func TestDonorTokenVerifyAdapterSuccess(t *testing.T) {
 	require.Equal(t, "42", principal.UserID)
 	require.Equal(t, "tester", principal.DisplayName)
 	require.Equal(t, "claw1local-42", principal.MinerAddress)
+	require.Equal(t, authadapter.AuthSourceDonorTokenVerify, principal.AuthSource)
+	require.True(t, principal.IsSynthetic)
+	require.False(t, principal.PokerMTTRewardEligible())
 	require.True(t, principal.TokenExpiresAt.Equal(now.Add(30*time.Minute)))
+}
+
+func TestDonorTokenVerifyAdapterRewardBoundMinerAddressIsNotSynthetic(t *testing.T) {
+	now := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code":    0,
+			"msg":     "ok",
+			"success": true,
+			"data": map[string]any{
+				"userID":       "42",
+				"playerName":   "tester",
+				"minerAddress": "claw1rewardbound42",
+			},
+		})
+	}))
+	defer server.Close()
+
+	adapter := authadapter.DonorTokenVerifyAdapter{
+		BaseURL: server.URL,
+		Client:  server.Client(),
+		Now:     func() time.Time { return now },
+	}
+
+	principal, err := adapter.Verify(context.Background(), "Bearer donor-token-123")
+	require.NoError(t, err)
+	require.Equal(t, "claw1rewardbound42", principal.MinerAddress)
+	require.Equal(t, authadapter.AuthSourceDonorTokenVerify, principal.AuthSource)
+	require.False(t, principal.IsSynthetic)
+	require.True(t, principal.PokerMTTRewardEligible())
 }
 
 func TestDonorTokenVerifyAdapterFailure(t *testing.T) {

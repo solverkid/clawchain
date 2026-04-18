@@ -70,13 +70,13 @@ def confirm_settlement_anchor_response(
     queried_batch_id = anchor.get("settlement_batch_id")
     queried_canonical_root = anchor.get("canonical_root")
     queried_anchor_payload_hash = anchor.get("anchor_payload_hash")
+    metadata_mismatches = []
     confirmed = (
         queried_batch_id == settlement_batch_id
         and queried_canonical_root == canonical_root
         and queried_anchor_payload_hash == anchor_payload_hash
     )
     if confirmed:
-        metadata_mismatches = []
         if expected_anchor:
             metadata_mismatches = [
                 field

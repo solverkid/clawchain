@@ -113,11 +113,18 @@ def test_fake_repository_preserves_result_entry_projection_fields():
 def test_final_ranking_projection_request_schema_accepts_canonical_rows():
     row = schemas.PokerMTTFinalRankingRow(**final_ranking_row())
     request = schemas.ApplyPokerMTTFinalRankingProjectionRequest(
+        schema_version="poker_mtt.final_ranking_apply.v1",
+        projection_id="poker_mtt_projection:mtt-1:poker_mtt_v1:sha256:abc",
         tournament_id="mtt-1",
+        source_mtt_id="mtt-1",
         rated_or_practice="rated",
         human_only=True,
         field_size=30,
         policy_bundle_version="poker_mtt_v1",
+        standing_snapshot_id="poker_mtt_standing_snapshot:mtt-1:abc",
+        standing_snapshot_hash="sha256:abc",
+        final_ranking_root="sha256:abc",
+        locked_at="2026-04-10T09:00:00Z",
         rows=[row],
     )
 

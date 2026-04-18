@@ -38,6 +38,14 @@ class HarnessFailure(RuntimeError):
     pass
 
 
+ALLOWED_WS_CLOSE_ERROR_SNIPPETS = (
+    "close status: 1000",
+    "close status: 1001",
+    "connection to remote host was lost",
+    "socket is already closed",
+)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run non-mock MTT users through auth-backed join + websocket play.",
@@ -241,6 +249,80 @@ def is_tournament_finished(standings_payload: dict[str, Any], *, expected_player
     alive_count = int(counts.get("alive_count") or 0)
     pending_count = int(counts.get("pending_count") or 0)
     return snapshot_count >= expected_players and pending_count == 0 and alive_count <= 1
+
+
+def is_allowed_ws_close_error(message: str) -> bool:
+    normalized = str(message or "").lower()
+    return any(snippet in normalized for snippet in ALLOWED_WS_CLOSE_ERROR_SNIPPETS)
+
+
+def validate_finish_summary(summary: dict[str, Any], *, expected_players: int) -> None:
+    connections = summary.get("connections") or {}
+    finish_mode = summary.get("finish_mode") or {}
+    standings = summary.get("standings") or {}
+    counts = standings.get("counts") or {}
+    users = list(summary.get("users") or [])
+
+    expected_died = max(0, expected_players - 1)
+    failures: list[str] = []
+    required_counts = {
+        "joined_users": expected_players,
+        "received_current_mtt_ranking": expected_players,
+        "users_with_sent_actions": expected_players,
+    }
+    for field, expected in required_counts.items():
+        actual = int(connections.get(field) or 0)
+        if actual != expected:
+            failures.append(f"{field}={actual}, expected={expected}")
+    if int(connections.get("sent_action_total") or 0) < expected_players:
+        failures.append(
+            f"sent_action_total={connections.get('sent_action_total')}, expected_at_least={expected_players}"
+        )
+    if finish_mode.get("finished") is not True:
+        failures.append("finish_mode.finished=false")
+
+    standings_required = {
+        "snapshot_count": expected_players,
+        "standings_count": expected_players,
+        "alive_count": 1,
+        "died_count": expected_died,
+        "pending_count": 0,
+    }
+    for field, expected in standings_required.items():
+        actual = int(counts.get(field) or 0)
+        if actual != expected:
+            failures.append(f"{field}={actual}, expected={expected}")
+
+    if len(users) != expected_players:
+        failures.append(f"users={len(users)}, expected={expected_players}")
+
+    users_missing_ranking = []
+    users_missing_actions = []
+    unexpected_ws_errors = []
+    for user in users:
+        user_id = str(user.get("user_id") or "")
+        ws_summary = user.get("ws") or {}
+        if ws_summary.get("received_current_mtt_ranking") is not True:
+            users_missing_ranking.append(user_id)
+        if not ws_summary.get("sent_actions"):
+            users_missing_actions.append(user_id)
+        for error in ws_summary.get("errors") or []:
+            if not is_allowed_ws_close_error(str(error)):
+                unexpected_ws_errors.append({"user_id": user_id, "error": str(error)})
+
+    if users_missing_ranking:
+        failures.append(f"users_missing_current_mtt_ranking={users_missing_ranking}")
+    if users_missing_actions:
+        failures.append(f"users_missing_sent_actions={users_missing_actions}")
+    if unexpected_ws_errors:
+        failures.append(f"unexpected_ws_errors={unexpected_ws_errors[:5]}")
+
+    statuses = collections.Counter(str(item.get("status") or "") for item in standings.get("standings") or [])
+    if statuses.get("alive", 0) != 1 or statuses.get("died", 0) != expected_died or statuses.get("pending", 0) != 0:
+        failures.append(f"standing_statuses={dict(sorted(statuses.items()))}")
+
+    if failures:
+        raise HarnessFailure("finish gate failed: " + "; ".join(failures))
 
 
 def wait_for_tournament_finish(
@@ -455,6 +537,8 @@ def main() -> int:
         "standings": standings,
         "users": results,
     }
+    if args.until_finish:
+        validate_finish_summary(summary, expected_players=args.user_count)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

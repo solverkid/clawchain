@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,6 +279,127 @@ func TestClientHealthChecksPlayerSurface(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Healthy)
 	require.Equal(t, "ok", resp.Status)
+}
+
+func TestClientStartRetriesTransient503ThenOK(t *testing.T) {
+	t.Helper()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/mtt/start", r.URL.Path)
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			writeJSON(t, w, map[string]any{
+				"code":    503,
+				"msg":     "donor sidecar warming",
+				"success": false,
+				"data":    map[string]any{},
+			})
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"code":    0,
+			"msg":     "ok",
+			"success": true,
+			"data": map[string]any{
+				"tournamentID": "t-retry",
+				"roomID":       "room-retry",
+				"state":        "running",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := sidecar.Client{
+		ControlBaseURL: server.URL,
+		PlayerBaseURL:  server.URL,
+		HTTPClient:     server.Client(),
+		Timeout:        time.Second,
+	}
+
+	resp, err := client.Start(context.Background(), sidecar.StartRequest{TournamentID: "t-retry"})
+	require.NoError(t, err)
+	require.Equal(t, int32(2), attempts.Load())
+	require.Equal(t, "room-retry", resp.RoutingRoomID)
+}
+
+func TestClientGetRoomRetriesTimeoutThenOK(t *testing.T) {
+	t.Helper()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/mtt/getMTTRoomByID", r.URL.Path)
+		if attempts.Add(1) == 1 {
+			time.Sleep(80 * time.Millisecond)
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"code":    0,
+			"msg":     "ok",
+			"success": true,
+			"data": map[string]any{
+				"tournamentID": "t-timeout",
+				"userID":       "7",
+				"roomID":       "room-timeout",
+				"tableID":      "table-timeout",
+				"state":        "running",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := sidecar.Client{
+		ControlBaseURL: server.URL,
+		PlayerBaseURL:  server.URL,
+		HTTPClient:     server.Client(),
+		Timeout:        20 * time.Millisecond,
+	}
+
+	resp, err := client.GetRoom(context.Background(), sidecar.RoomRequest{TournamentID: "t-timeout", UserID: "7"})
+	require.NoError(t, err)
+	require.Equal(t, int32(2), attempts.Load())
+	require.Equal(t, "room-timeout", resp.RoutingRoomID)
+}
+
+func TestClientJoinDoesNotRetryUnauthorizedAndIncludesDonorMessage(t *testing.T) {
+	t.Helper()
+
+	var attempts atomic.Int32
+	fixed := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		require.Equal(t, "/v1/join_game", r.URL.Path)
+		w.WriteHeader(http.StatusUnauthorized)
+		writeJSON(t, w, map[string]any{
+			"code":    401,
+			"msg":     "donor token expired",
+			"success": false,
+			"data":    map[string]any{},
+		})
+	}))
+	defer server.Close()
+
+	client := sidecar.Client{
+		ControlBaseURL: server.URL,
+		PlayerBaseURL:  server.URL,
+		HTTPClient:     server.Client(),
+		Timeout:        time.Second,
+	}
+
+	_, err := client.Join(context.Background(), sidecar.JoinRequest{
+		TournamentID:  "t-auth",
+		UserID:        "7",
+		PlayerName:    "tester",
+		Authorization: "Bearer expired",
+		RequestedAt:   fixed,
+	})
+	require.Error(t, err)
+	require.Equal(t, int32(1), attempts.Load())
+	require.Contains(t, err.Error(), "donor token expired")
+
+	var reqErr *sidecar.RequestError
+	require.True(t, errors.As(err, &reqErr))
+	require.Equal(t, http.StatusUnauthorized, reqErr.StatusCode)
 }
 
 func TestClientTimeoutReturnsTypedError(t *testing.T) {

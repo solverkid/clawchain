@@ -162,14 +162,18 @@ def test_models_expose_deterministic_settlement_columns():
     task_columns = set(models.forecast_task_runs.c.keys())
     reward_window_columns = set(models.reward_windows.c.keys())
     settlement_batch_columns = set(models.settlement_batches.c.keys())
+    budget_ledger_columns = set(models.poker_mtt_budget_ledgers.c.keys())
     poker_mtt_final_ranking_columns = set(models.poker_mtt_final_rankings.c.keys())
     poker_mtt_result_columns = set(models.poker_mtt_result_entries.c.keys())
+    poker_mtt_multiplier_columns = set(models.poker_mtt_multiplier_snapshots.c.keys())
 
     assert {"task_state", "degraded_reason", "void_reason", "resolution_source"} <= task_columns
     assert {"policy_bundle_version", "canonical_root"} <= reward_window_columns
     assert "policy_bundle_version" in settlement_batch_columns
+    assert {"budget_source_id", "emission_epoch_id", "approved_amount", "budget_root"} <= budget_ledger_columns
     assert {"rank_state", "chip_delta", "locked_at", "anchorable_at"} <= poker_mtt_final_ranking_columns
     assert {"rank_state", "chip_delta", "locked_at", "anchorable_at"} <= poker_mtt_result_columns
+    assert {"effective_window_start_at", "effective_window_end_at"} <= poker_mtt_multiplier_columns
     assert (
         normalize_database_url("postgresql+asyncpg://clawchain:pw@127.0.0.1:55432/clawchain")
         == "postgresql+asyncpg://clawchain:pw@127.0.0.1:55432/clawchain"
@@ -389,10 +393,11 @@ def test_confirm_anchor_job_on_chain_marks_anchored():
         tx_only_job = await repo.get_anchor_job(submitted["anchor_job_id"])
         tx_only_batch = await repo.get_settlement_batch(batch["id"])
 
-        assert tx_only_receipt["chain_confirmation_status"] == "typed_tx_accepted_state_missing"
-        assert tx_only_receipt["anchor_job_state"] == "anchor_submitted"
-        assert tx_only_job["state"] == "anchor_submitted"
-        assert tx_only_batch["state"] == "anchor_submitted"
+        assert tx_only_receipt["chain_confirmation_status"] == "typed_state_missing"
+        assert tx_only_receipt["anchor_job_state"] == "anchor_failed"
+        assert tx_only_job["state"] == "anchor_failed"
+        assert tx_only_job["chain_confirmation_status"] == "typed_state_missing"
+        assert tx_only_batch["state"] == "anchor_failed"
 
         typed_confirmation.update(
             {
@@ -1831,12 +1836,18 @@ def test_build_poker_mtt_reward_window_rejects_no_positive_weights():
         assert reward_window["state"] == "no_positive_weight"
         assert reward_window["total_reward_amount"] == 0
         assert reward_window["settlement_batch_id"] is None
-        assert artifact["payload_json"]["budget_disposition"] == {
+        budget_disposition = artifact["payload_json"]["budget_disposition"]
+        assert {
+            key: budget_disposition[key]
+            for key in ("forfeited_amount", "paid_amount", "requested_reward_pool_amount", "state")
+        } == {
             "forfeited_amount": 100,
             "paid_amount": 0,
             "requested_reward_pool_amount": 100,
             "state": "no_positive_weight",
         }
+        assert budget_disposition["budget_enforcement"] == "disabled"
+        assert budget_disposition["budget_root"].startswith("sha256:")
         assert all(row["gross_reward_amount"] == 0 for row in artifact["payload_json"]["miner_reward_rows"])
 
     import asyncio
@@ -2899,6 +2910,97 @@ def test_anchor_job_progression_to_anchored():
         assert saved_batch["state"] == "anchored"
         assert saved_batch["anchor_job_id"] == anchored["id"]
         assert jobs[0]["state"] == "anchored"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_anchor_job_persists_terminal_query_mismatch_state():
+    async def scenario():
+        repo = FakeRepository()
+        current = datetime(2026, 4, 10, 12, 1, 0, tzinfo=timezone.utc)
+        batch_id = "sb_query_mismatch"
+        anchor_job_id = "aj_query_mismatch"
+        root_a = "sha256:" + "a" * 64
+        root_b = "sha256:" + "b" * 64
+        root_c = "sha256:" + "c" * 64
+        await repo.save_settlement_batch(
+            {
+                "id": batch_id,
+                "lane": "poker_mtt_daily",
+                "state": "anchor_submitted",
+                "window_start_at": "2026-04-10T00:00:00Z",
+                "window_end_at": "2026-04-11T00:00:00Z",
+                "reward_window_ids": ["rw_query_mismatch"],
+                "policy_bundle_version": "policy.v1",
+                "task_count": 1,
+                "miner_count": 1,
+                "total_reward_amount": 10,
+                "anchor_job_id": anchor_job_id,
+                "anchor_schema_version": "clawchain.anchor_payload.v1",
+                "canonical_root": root_a,
+                "anchor_payload_hash": root_b,
+                "anchor_payload_json": {
+                    "schema_version": "clawchain.anchor_payload.v1",
+                    "policy_bundle_version": "policy.v1",
+                    "settlement_batch_id": batch_id,
+                    "lane": "poker_mtt_daily",
+                    "reward_window_ids_root": root_c,
+                    "task_run_ids_root": root_c,
+                    "miner_reward_rows_root": root_c,
+                    "canonical_root": root_a,
+                },
+                "created_at": "2026-04-10T12:00:00Z",
+                "updated_at": "2026-04-10T12:00:00Z",
+            }
+        )
+        await repo.save_anchor_job(
+            {
+                "id": anchor_job_id,
+                "settlement_batch_id": batch_id,
+                "lane": "poker_mtt_daily",
+                "state": "anchor_submitted",
+                "anchor_payload_hash": root_b,
+                "broadcast_status": "broadcast_submitted",
+                "broadcast_tx_hash": "ABC123",
+                "last_broadcast_at": "2026-04-10T12:00:05Z",
+                "failure_reason": None,
+                "submitted_at": "2026-04-10T12:00:01Z",
+                "anchored_at": None,
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:05Z",
+            }
+        )
+
+        async def confirmer(_tx_hash, _now):
+            return {
+                "confirmation_status": "confirmed",
+                "query_response": {
+                    "anchor": {
+                        "settlement_batch_id": batch_id,
+                        "canonical_root": "sha256:" + "d" * 64,
+                        "anchor_payload_hash": root_b,
+                    }
+                },
+                "broadcast_method": "typed_msg",
+                "height": 42,
+                "code": 0,
+                "raw_log": "",
+            }
+
+        service = forecast_engine.ForecastMiningService(
+            repo,
+            poker_mtt_rollout_settings(),
+            chain_tx_confirmer=confirmer,
+        )
+        result = await service.confirm_anchor_job_on_chain(anchor_job_id, now=current)
+        saved_job = await repo.get_anchor_job(anchor_job_id)
+
+        assert result["chain_confirmation_status"] == "root_mismatch"
+        assert result["anchor_job_state"] == "anchor_failed"
+        assert saved_job["chain_confirmation_status"] == "root_mismatch"
+        assert "root_hash_mismatch" in saved_job["failure_reason"]
 
     import asyncio
 

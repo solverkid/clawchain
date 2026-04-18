@@ -44,6 +44,13 @@ miners = Table(
     Column("ops_reliability", Float, nullable=False, default=1.0),
     Column("arena_multiplier", Float, nullable=False, default=1.0),
     Column("poker_mtt_multiplier", Float, nullable=False, default=1.0),
+    Column("poker_mtt_user_id", String, nullable=True),
+    Column("poker_mtt_auth_source", String, nullable=True),
+    Column("poker_mtt_reward_bound", Boolean, nullable=False, default=False),
+    Column("poker_mtt_reward_bound_at", DateTime(timezone=True), nullable=True),
+    Column("poker_mtt_is_synthetic", Boolean, nullable=False, default=False),
+    Column("poker_mtt_identity_expires_at", DateTime(timezone=True), nullable=True),
+    Column("poker_mtt_identity_revoked_at", DateTime(timezone=True), nullable=True),
     Column("public_rank", Integer, nullable=True),
     Column("public_elo", Integer, nullable=False, default=1200),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -127,6 +134,32 @@ reward_windows = Table(
 )
 
 
+poker_mtt_budget_ledgers = Table(
+    "poker_mtt_budget_ledgers",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("budget_source_id", String, nullable=False),
+    Column("emission_epoch_id", String, nullable=False),
+    Column("lane", String, nullable=False),
+    Column("reward_window_id", String, nullable=False),
+    Column("settlement_batch_id", String, nullable=True),
+    Column("window_start_at", DateTime(timezone=True), nullable=False),
+    Column("window_end_at", DateTime(timezone=True), nullable=False),
+    Column("requested_amount", Integer, nullable=False, default=0),
+    Column("approved_amount", Integer, nullable=False, default=0),
+    Column("paid_amount", Integer, nullable=False, default=0),
+    Column("forfeited_amount", Integer, nullable=False, default=0),
+    Column("rolled_amount", Integer, nullable=False, default=0),
+    Column("state", String, nullable=False, default="reserved"),
+    Column("policy_bundle_version", String, nullable=False),
+    Column("budget_root", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_budget_epoch", "budget_source_id", "emission_epoch_id"),
+    Index("ix_poker_mtt_budget_reward_window", "reward_window_id"),
+)
+
+
 settlement_batches = Table(
     "settlement_batches",
     metadata,
@@ -160,6 +193,7 @@ anchor_jobs = Table(
     Column("anchor_payload_hash", String, nullable=False),
     Column("broadcast_status", String, nullable=True),
     Column("broadcast_tx_hash", String, nullable=True),
+    Column("chain_confirmation_status", String, nullable=True),
     Column("last_broadcast_at", DateTime(timezone=True), nullable=True),
     Column("failure_reason", Text, nullable=True),
     Column("submitted_at", DateTime(timezone=True), nullable=False),
@@ -180,6 +214,7 @@ artifacts = Table(
     Column("payload_hash", String, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_artifacts_entity_kind_id", "entity_type", "entity_id", "kind"),
 )
 
 
@@ -281,6 +316,80 @@ poker_mtt_hand_events = Table(
 )
 
 
+poker_mtt_mq_checkpoints = Table(
+    "poker_mtt_mq_checkpoints",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=True),
+    Column("topic", String, nullable=False),
+    Column("queue", String, nullable=False),
+    Column("consumer_group", String, nullable=False),
+    Column("last_offset", Integer, nullable=True),
+    Column("last_message_id", String, nullable=True),
+    Column("last_biz_id", String, nullable=True),
+    Column("last_hand_id", String, nullable=True),
+    Column("last_ingest_state", String, nullable=False),
+    Column("replay_root", String, nullable=False),
+    Column("lag_messages", Integer, nullable=False, default=0),
+    Column("lag_watermark_at", DateTime(timezone=True), nullable=True),
+    Column("source_json", JSONB, nullable=False, default=dict),
+    Column("last_processed_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_mq_checkpoints_tournament", "tournament_id"),
+    Index("ix_poker_mtt_mq_checkpoints_group_queue", "topic", "consumer_group", "queue"),
+)
+
+
+poker_mtt_mq_conflicts = Table(
+    "poker_mtt_mq_conflicts",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=True),
+    Column("hand_id", String, nullable=True),
+    Column("topic", String, nullable=False),
+    Column("queue", String, nullable=False),
+    Column("consumer_group", String, nullable=False),
+    Column("offset", Integer, nullable=True),
+    Column("message_id", String, nullable=True),
+    Column("biz_id", String, nullable=True),
+    Column("version", Integer, nullable=True),
+    Column("checksum", String, nullable=True),
+    Column("previous_checksum", String, nullable=True),
+    Column("conflict_reason", String, nullable=False),
+    Column("state", String, nullable=False, default="manual_review"),
+    Column("payload_json", JSONB, nullable=False, default=dict),
+    Column("previous_payload_json", JSONB, nullable=True),
+    Column("source_json", JSONB, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_mq_conflicts_tournament_state", "tournament_id", "state"),
+    Index("ix_poker_mtt_mq_conflicts_hand", "hand_id"),
+)
+
+
+poker_mtt_mq_dlq = Table(
+    "poker_mtt_mq_dlq",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=True),
+    Column("topic", String, nullable=False),
+    Column("queue", String, nullable=False),
+    Column("consumer_group", String, nullable=False),
+    Column("offset", Integer, nullable=True),
+    Column("message_id", String, nullable=True),
+    Column("biz_id", String, nullable=True),
+    Column("dlq_reason", String, nullable=False),
+    Column("state", String, nullable=False, default="open"),
+    Column("payload_json", JSONB, nullable=False, default=dict),
+    Column("source_json", JSONB, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_mq_dlq_tournament_state", "tournament_id", "state"),
+    Index("ix_poker_mtt_mq_dlq_group_queue", "topic", "consumer_group", "queue"),
+)
+
+
 poker_mtt_short_term_hud_snapshots = Table(
     "poker_mtt_short_term_hud_snapshots",
     metadata,
@@ -367,6 +476,8 @@ poker_mtt_multiplier_snapshots = Table(
     Column("multiplier_before", Float, nullable=False),
     Column("multiplier_after", Float, nullable=False),
     Column("rolling_score", Float, nullable=True),
+    Column("effective_window_start_at", DateTime(timezone=True), nullable=True),
+    Column("effective_window_end_at", DateTime(timezone=True), nullable=True),
     Column("policy_bundle_version", String, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -430,6 +541,7 @@ poker_mtt_final_rankings = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("tournament_id", "member_id", name="uq_poker_mtt_final_ranking_tournament_member"),
+    Index("ix_poker_mtt_final_rankings_window_join", "id", "tournament_id", "miner_address", "policy_bundle_version"),
 )
 
 
@@ -473,6 +585,14 @@ poker_mtt_result_entries = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Index("ix_poker_mtt_results_locked_reward_window", "locked_at", "rated_or_practice", "human_only", "evaluation_state"),
+    Index(
+        "ix_poker_mtt_results_reward_window_ready",
+        "locked_at",
+        "evaluation_version",
+        "evidence_state",
+        "rank_state",
+        "eligible_for_multiplier",
+    ),
     UniqueConstraint("tournament_id", "miner_address", name="uq_poker_mtt_result_tournament_miner"),
 )
 
@@ -482,6 +602,7 @@ TABLES = {
     "forecast_task_runs": forecast_task_runs,
     "forecast_submissions": forecast_submissions,
     "reward_windows": reward_windows,
+    "poker_mtt_budget_ledgers": poker_mtt_budget_ledgers,
     "settlement_batches": settlement_batches,
     "anchor_jobs": anchor_jobs,
     "artifacts": artifacts,
@@ -490,6 +611,9 @@ TABLES = {
     "arena_result_entries": arena_result_entries,
     "poker_mtt_tournaments": poker_mtt_tournaments,
     "poker_mtt_hand_events": poker_mtt_hand_events,
+    "poker_mtt_mq_checkpoints": poker_mtt_mq_checkpoints,
+    "poker_mtt_mq_conflicts": poker_mtt_mq_conflicts,
+    "poker_mtt_mq_dlq": poker_mtt_mq_dlq,
     "poker_mtt_short_term_hud_snapshots": poker_mtt_short_term_hud_snapshots,
     "poker_mtt_long_term_hud_snapshots": poker_mtt_long_term_hud_snapshots,
     "poker_mtt_hidden_eval_entries": poker_mtt_hidden_eval_entries,

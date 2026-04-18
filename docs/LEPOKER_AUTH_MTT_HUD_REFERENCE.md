@@ -813,6 +813,8 @@ Phase 2 已把 donor 里线上跑稳的几个结构转成 ClawChain 自己的 Go
 - `RecordListener` / `RecordCalculateListener` -> `HandHistoryService` 仍是确认过的 donor raw hand path；DynamoDB user history 继续作为 production/read-model candidate，不能过度宣称是已确认 MTT raw ingest 主路径。
 - Donor MQ 的关键参考不是 RocketMQ 本身，而是 `bizId` idempotency、checkpoint/replay、DLQ/conflict、lag/watermark 这些 production semantics。
 - Donor auth token verifies user identity only。ClawChain reward-bound miner/economic-unit identity 必须由本项目自己的 durable binding 决定。
+- Phase 3 release evidence 不再以 lepoker-auth Java job 是否跑通作为充分条件；ClawChain 必须保留自己的 `make test-poker-mtt-phase3-fast`、`make test-poker-mtt-phase3-heavy` 和 `artifacts/poker-mtt/phase3/*` 证据。
+- lepoker-auth 的 HUD / ranking / MTT setup 继续作为 donor reference，但 reward-bound identity、budget ledger、settlement anchor、reputation delta dry-run root 都以 ClawChain projection/settlement artifacts 为准。
 
 对应 ClawChain Phase 3 spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 

@@ -17,12 +17,18 @@ var (
 	ErrPrincipalRevoked        = errors.New("principal revoked")
 )
 
-const RolePokerMTTRewardBound = "poker_mtt_reward_bound"
+const (
+	AuthSourceLocal            = "local"
+	AuthSourceDonorTokenVerify = "donor_token_verify"
+	RolePokerMTTRewardBound    = "poker_mtt_reward_bound"
+)
 
 type Principal struct {
 	UserID         string
 	MinerAddress   string
 	DisplayName    string
+	AuthSource     string
+	IsSynthetic    bool
 	Roles          []string
 	TokenExpiresAt time.Time
 	AuthSessionID  string
@@ -57,6 +63,9 @@ func (p Principal) HasRole(role string) bool {
 func (p Principal) PokerMTTRewardEligible() bool {
 	minerAddress, err := p.NormalizedMinerAddress()
 	if err != nil {
+		return false
+	}
+	if p.IsSynthetic && !p.HasRole(RolePokerMTTRewardBound) {
 		return false
 	}
 	if strings.HasPrefix(minerAddress, "claw1local-") {

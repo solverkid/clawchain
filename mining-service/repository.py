@@ -12,6 +12,7 @@ class MiningRepository(Protocol):
     async def get_miner(self, address: str) -> dict | None: ...
     async def update_miner(self, address: str, updates: dict) -> dict: ...
     async def list_miners(self) -> list[dict]: ...
+    async def list_miners_by_addresses(self, addresses: list[str]) -> list[dict]: ...
     async def count_active_miners(self) -> int: ...
     async def upsert_task(self, task: dict) -> dict: ...
     async def get_task(self, task_run_id: str) -> dict | None: ...
@@ -27,6 +28,15 @@ class MiningRepository(Protocol):
     async def save_reward_window(self, reward_window: dict) -> dict: ...
     async def get_reward_window(self, reward_window_id: str) -> dict | None: ...
     async def list_reward_windows(self) -> list[dict]: ...
+    async def save_poker_mtt_budget_ledger(self, row: dict) -> dict: ...
+    async def list_poker_mtt_budget_ledgers(
+        self,
+        *,
+        budget_source_id: str | None = None,
+        emission_epoch_id: str | None = None,
+        reward_window_id: str | None = None,
+        lane: str | None = None,
+    ) -> list[dict]: ...
     async def save_settlement_batch(self, settlement_batch: dict) -> dict: ...
     async def get_settlement_batch(self, settlement_batch_id: str) -> dict | None: ...
     async def list_settlement_batches(self) -> list[dict]: ...
@@ -34,6 +44,7 @@ class MiningRepository(Protocol):
     async def get_anchor_job(self, anchor_job_id: str) -> dict | None: ...
     async def list_anchor_jobs(self) -> list[dict]: ...
     async def save_artifact(self, artifact: dict) -> dict: ...
+    async def save_artifacts_bulk(self, artifacts: list[dict]) -> list[dict]: ...
     async def get_artifact(self, artifact_id: str) -> dict | None: ...
     async def list_artifacts_for_entity(self, entity_type: str, entity_id: str) -> list[dict]: ...
     async def save_risk_case(self, risk_case: dict) -> dict: ...
@@ -58,6 +69,22 @@ class MiningRepository(Protocol):
     async def save_poker_mtt_hand_event(self, event: dict) -> dict: ...
     async def get_poker_mtt_hand_event(self, hand_id: str) -> dict | None: ...
     async def list_poker_mtt_hand_events_for_tournament(self, tournament_id: str) -> list[dict]: ...
+    async def save_poker_mtt_mq_checkpoint(self, checkpoint: dict) -> dict: ...
+    async def list_poker_mtt_mq_checkpoints(self, *, tournament_id: str | None = None) -> list[dict]: ...
+    async def save_poker_mtt_mq_conflict(self, conflict: dict) -> dict: ...
+    async def list_poker_mtt_mq_conflicts(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]: ...
+    async def save_poker_mtt_mq_dlq(self, dlq: dict) -> dict: ...
+    async def list_poker_mtt_mq_dlq(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]: ...
     async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict: ...
     async def list_poker_mtt_hud_snapshots(
         self,
@@ -74,6 +101,7 @@ class MiningRepository(Protocol):
         *,
         miner_address: str | None = None,
     ) -> list[dict]: ...
+    async def list_latest_poker_mtt_rating_snapshots_for_miners(self, miner_addresses: list[str]) -> list[dict]: ...
     async def save_poker_mtt_multiplier_snapshot(self, row: dict) -> dict: ...
     async def list_poker_mtt_multiplier_snapshots(
         self,
@@ -83,6 +111,7 @@ class MiningRepository(Protocol):
     ) -> list[dict]: ...
     async def save_poker_mtt_final_ranking(self, final_ranking: dict) -> dict: ...
     async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None: ...
+    async def list_poker_mtt_final_rankings_by_ids(self, final_ranking_ids: list[str]) -> list[dict]: ...
     async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]: ...
     async def list_poker_mtt_final_rankings_for_window(self, window_start_at: str, window_end_at: str) -> list[dict]: ...
     async def save_poker_mtt_result(self, poker_mtt_result: dict) -> dict: ...
@@ -103,6 +132,24 @@ class MiningRepository(Protocol):
         include_provisional: bool,
         policy_bundle_version: str,
     ) -> list[dict]: ...
+    async def load_poker_mtt_reward_window_inputs(
+        self,
+        *,
+        lane: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        include_provisional: bool,
+        policy_bundle_version: str,
+        current_at: datetime,
+    ) -> dict: ...
+    async def list_poker_mtt_closed_reward_window_candidates(
+        self,
+        *,
+        locked_after_at: datetime,
+        locked_before_at: datetime,
+        policy_bundle_versions: list[str],
+        limit: int = 100000,
+    ) -> list[dict]: ...
     async def save_poker_mtt_correction(self, correction: dict) -> dict: ...
     async def list_poker_mtt_corrections(
         self,
@@ -119,6 +166,7 @@ class FakeRepository:
         self._submissions: dict[tuple[str, str], dict] = {}
         self._hold_entries: dict[str, dict] = {}
         self._reward_windows: dict[str, dict] = {}
+        self._poker_mtt_budget_ledgers: dict[str, dict] = {}
         self._settlement_batches: dict[str, dict] = {}
         self._anchor_jobs: dict[str, dict] = {}
         self._artifacts: dict[str, dict] = {}
@@ -126,6 +174,9 @@ class FakeRepository:
         self._arena_results: dict[str, dict] = {}
         self._poker_mtt_tournaments: dict[str, dict] = {}
         self._poker_mtt_hand_events: dict[str, dict] = {}
+        self._poker_mtt_mq_checkpoints: dict[str, dict] = {}
+        self._poker_mtt_mq_conflicts: dict[str, dict] = {}
+        self._poker_mtt_mq_dlq: dict[str, dict] = {}
         self._poker_mtt_hud_snapshots: dict[str, dict] = {}
         self._poker_mtt_hidden_eval_entries: dict[str, dict] = {}
         self._poker_mtt_rating_snapshots: dict[str, dict] = {}
@@ -152,6 +203,12 @@ class FakeRepository:
 
     async def list_miners(self) -> list[dict]:
         return [deepcopy(m) for m in self._miners.values()]
+
+    async def list_miners_by_addresses(self, addresses: list[str]) -> list[dict]:
+        address_set = set(addresses)
+        items = [deepcopy(miner) for address, miner in self._miners.items() if address in address_set]
+        items.sort(key=lambda miner: miner.get("address") or "")
+        return items
 
     async def count_active_miners(self) -> int:
         return sum(1 for miner in self._miners.values() if miner.get("status") == "active")
@@ -276,6 +333,33 @@ class FakeRepository:
         )
         return items
 
+    async def save_poker_mtt_budget_ledger(self, row: dict) -> dict:
+        ledger = _normalize_poker_mtt_budget_ledger(row)
+        current = deepcopy(self._poker_mtt_budget_ledgers.get(ledger["id"], {}))
+        current.update(deepcopy(ledger))
+        self._poker_mtt_budget_ledgers[ledger["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_budget_ledgers(
+        self,
+        *,
+        budget_source_id: str | None = None,
+        emission_epoch_id: str | None = None,
+        reward_window_id: str | None = None,
+        lane: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_budget_ledgers.values()]
+        if budget_source_id is not None:
+            items = [item for item in items if item.get("budget_source_id") == budget_source_id]
+        if emission_epoch_id is not None:
+            items = [item for item in items if item.get("emission_epoch_id") == emission_epoch_id]
+        if reward_window_id is not None:
+            items = [item for item in items if item.get("reward_window_id") == reward_window_id]
+        if lane is not None:
+            items = [item for item in items if item.get("lane") == lane]
+        items.sort(key=lambda item: (item.get("created_at") or "", item.get("id") or ""))
+        return items
+
     async def save_settlement_batch(self, settlement_batch: dict) -> dict:
         current = deepcopy(self._settlement_batches.get(settlement_batch["id"], {}))
         current.update(deepcopy(settlement_batch))
@@ -325,6 +409,23 @@ class FakeRepository:
         current.update(deepcopy(artifact))
         self._artifacts[artifact["id"]] = current
         return deepcopy(current)
+
+    async def save_artifacts_bulk(self, artifacts: list[dict]) -> list[dict]:
+        saved = []
+        for artifact in artifacts:
+            existing = self._artifacts.get(artifact["id"])
+            if existing and _artifact_payload_unchanged(existing, artifact):
+                row = deepcopy(existing)
+                row["_write_state"] = "unchanged"
+                saved.append(row)
+                continue
+            current = deepcopy(existing or {})
+            current.update(deepcopy(artifact))
+            self._artifacts[artifact["id"]] = current
+            row = deepcopy(current)
+            row["_write_state"] = "upserted"
+            saved.append(row)
+        return saved
 
     async def get_artifact(self, artifact_id: str) -> dict | None:
         artifact = self._artifacts.get(artifact_id)
@@ -466,6 +567,59 @@ class FakeRepository:
         items.sort(key=lambda item: (item.get("table_id") or "", item.get("hand_no") or 0, item.get("hand_id") or ""))
         return items
 
+    async def save_poker_mtt_mq_checkpoint(self, checkpoint: dict) -> dict:
+        current = deepcopy(self._poker_mtt_mq_checkpoints.get(checkpoint["id"], {}))
+        current.update(deepcopy(checkpoint))
+        self._poker_mtt_mq_checkpoints[checkpoint["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_mq_checkpoints(self, *, tournament_id: str | None = None) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_mq_checkpoints.values()]
+        if tournament_id is not None:
+            items = [row for row in items if row.get("tournament_id") == tournament_id]
+        items.sort(key=lambda row: (row.get("topic") or "", row.get("consumer_group") or "", row.get("queue") or ""))
+        return items
+
+    async def save_poker_mtt_mq_conflict(self, conflict: dict) -> dict:
+        current = deepcopy(self._poker_mtt_mq_conflicts.get(conflict["id"], {}))
+        current.update(deepcopy(conflict))
+        self._poker_mtt_mq_conflicts[conflict["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_mq_conflicts(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_mq_conflicts.values()]
+        if tournament_id is not None:
+            items = [row for row in items if row.get("tournament_id") == tournament_id]
+        if state is not None:
+            items = [row for row in items if row.get("state") == state]
+        items.sort(key=lambda row: (row.get("created_at") or "", row.get("id") or ""))
+        return items
+
+    async def save_poker_mtt_mq_dlq(self, dlq: dict) -> dict:
+        current = deepcopy(self._poker_mtt_mq_dlq.get(dlq["id"], {}))
+        current.update(deepcopy(dlq))
+        self._poker_mtt_mq_dlq[dlq["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_mq_dlq(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_mq_dlq.values()]
+        if tournament_id is not None:
+            items = [row for row in items if row.get("tournament_id") == tournament_id]
+        if state is not None:
+            items = [row for row in items if row.get("state") == state]
+        items.sort(key=lambda row: (row.get("created_at") or "", row.get("id") or ""))
+        return items
+
     async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict:
         snapshot = _normalize_poker_mtt_hud_snapshot(row)
         current = deepcopy(self._poker_mtt_hud_snapshots.get(snapshot["id"], {}))
@@ -524,6 +678,26 @@ class FakeRepository:
         items.sort(key=lambda item: (item.get("window_end_at") or "", item.get("id") or ""), reverse=True)
         return items
 
+    async def list_latest_poker_mtt_rating_snapshots_for_miners(self, miner_addresses: list[str]) -> list[dict]:
+        miner_set = set(miner_addresses)
+        latest_by_miner: dict[str, dict] = {}
+        for snapshot in self._poker_mtt_rating_snapshots.values():
+            miner_address = snapshot.get("miner_address")
+            if miner_address not in miner_set:
+                continue
+            current = latest_by_miner.get(miner_address)
+            if current is None or (
+                snapshot.get("window_end_at") or "",
+                snapshot.get("id") or "",
+            ) > (
+                current.get("window_end_at") or "",
+                current.get("id") or "",
+            ):
+                latest_by_miner[miner_address] = snapshot
+        items = [deepcopy(row) for row in latest_by_miner.values()]
+        items.sort(key=lambda item: (item.get("miner_address") or "", item.get("id") or ""))
+        return items
+
     async def save_poker_mtt_multiplier_snapshot(self, row: dict) -> dict:
         snapshot = _normalize_poker_mtt_multiplier_snapshot(row)
         current = deepcopy(self._poker_mtt_multiplier_snapshots.get(snapshot["id"], {}))
@@ -554,6 +728,16 @@ class FakeRepository:
     async def get_poker_mtt_final_ranking(self, final_ranking_id: str) -> dict | None:
         final_ranking = self._poker_mtt_final_rankings.get(final_ranking_id)
         return deepcopy(final_ranking) if final_ranking else None
+
+    async def list_poker_mtt_final_rankings_by_ids(self, final_ranking_ids: list[str]) -> list[dict]:
+        final_ranking_id_set = set(final_ranking_ids)
+        items = [
+            deepcopy(row)
+            for final_ranking_id, row in self._poker_mtt_final_rankings.items()
+            if final_ranking_id in final_ranking_id_set
+        ]
+        items.sort(key=lambda item: item.get("id") or "")
+        return items
 
     async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]:
         items = [
@@ -650,6 +834,135 @@ class FakeRepository:
         items.sort(key=lambda item: (_utc_iso(item.get("locked_at")), item.get("id") or ""))
         return items
 
+    async def load_poker_mtt_reward_window_inputs(
+        self,
+        *,
+        lane: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        include_provisional: bool,
+        policy_bundle_version: str,
+        current_at: datetime,
+    ) -> dict:
+        results = await self._list_poker_mtt_results_for_reward_window_untracked(
+            lane=lane,
+            window_start_at=window_start_at,
+            window_end_at=window_end_at,
+            include_provisional=include_provisional,
+            policy_bundle_version=policy_bundle_version,
+        )
+        final_ranking_ids = sorted({row["final_ranking_id"] for row in results if row.get("final_ranking_id")})
+        miner_addresses = sorted({row["miner_address"] for row in results if row.get("miner_address")})
+        latest_rating_by_miner: dict[str, dict] = {}
+        miner_set = set(miner_addresses)
+        for snapshot in self._poker_mtt_rating_snapshots.values():
+            miner_address = snapshot.get("miner_address")
+            if miner_address not in miner_set:
+                continue
+            current = latest_rating_by_miner.get(miner_address)
+            if current is None or (
+                snapshot.get("window_end_at") or "",
+                snapshot.get("id") or "",
+            ) > (
+                current.get("window_end_at") or "",
+                current.get("id") or "",
+            ):
+                latest_rating_by_miner[miner_address] = snapshot
+        return {
+            "results": results,
+            "final_rankings_by_id": {
+                final_ranking_id: deepcopy(self._poker_mtt_final_rankings[final_ranking_id])
+                for final_ranking_id in final_ranking_ids
+                if final_ranking_id in self._poker_mtt_final_rankings
+            },
+            "miners_by_address": {
+                miner_address: deepcopy(self._miners[miner_address])
+                for miner_address in miner_addresses
+                if miner_address in self._miners
+            },
+            "rating_snapshots_by_miner": {
+                miner_address: deepcopy(row)
+                for miner_address, row in latest_rating_by_miner.items()
+            },
+        }
+
+    async def list_poker_mtt_closed_reward_window_candidates(
+        self,
+        *,
+        locked_after_at: datetime,
+        locked_before_at: datetime,
+        policy_bundle_versions: list[str],
+        limit: int = 100000,
+    ) -> list[dict]:
+        locked_after = _utc_iso(locked_after_at)
+        locked_before = _utc_iso(locked_before_at)
+        compatible_versions = set()
+        for policy_bundle_version in policy_bundle_versions:
+            compatible_versions.update(poker_mtt_results.compatible_result_policy_versions(policy_bundle_version))
+        items = []
+        for entry in self._poker_mtt_results.values():
+            locked_at = entry.get("locked_at")
+            if not locked_at or not (locked_after <= _utc_iso(locked_at) < locked_before):
+                continue
+            if entry.get("rated_or_practice") != "rated":
+                continue
+            if entry.get("human_only") is not True:
+                continue
+            if entry.get("evaluation_version") not in compatible_versions:
+                continue
+            if entry.get("evidence_state") not in poker_mtt_results.REWARD_READY_EVIDENCE_STATES:
+                continue
+            if not entry.get("final_ranking_id") or not entry.get("standing_snapshot_id") or not entry.get("evidence_root"):
+                continue
+            if entry.get("no_multiplier_reason") is not None:
+                continue
+            if entry.get("eligible_for_multiplier") is not True:
+                continue
+            items.append(deepcopy(entry))
+        items.sort(key=lambda item: (_utc_iso(item.get("locked_at")), item.get("id") or ""))
+        return items[:limit]
+
+    async def _list_poker_mtt_results_for_reward_window_untracked(
+        self,
+        *,
+        lane: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        include_provisional: bool,
+        policy_bundle_version: str,
+    ) -> list[dict]:
+        window_start = _utc_iso(window_start_at)
+        window_end = _utc_iso(window_end_at)
+        items = []
+        for entry in self._poker_mtt_results.values():
+            locked_at = entry.get("locked_at")
+            if not locked_at or not (window_start <= _utc_iso(locked_at) < window_end):
+                continue
+            if entry.get("rated_or_practice") != "rated":
+                continue
+            if entry.get("human_only") is not True:
+                continue
+            if entry.get("evaluation_state") != "final":
+                continue
+            if not poker_mtt_results.result_policy_matches_reward_window(
+                result_policy_bundle_version=entry.get("evaluation_version"),
+                reward_policy_bundle_version=policy_bundle_version,
+            ):
+                continue
+            if entry.get("evidence_state") not in poker_mtt_results.REWARD_READY_EVIDENCE_STATES:
+                continue
+            if not entry.get("final_ranking_id") or not entry.get("standing_snapshot_id") or not entry.get("evidence_root"):
+                continue
+            if entry.get("rank_state") != "ranked":
+                continue
+            if entry.get("no_multiplier_reason") is not None:
+                continue
+            if entry.get("eligible_for_multiplier") is not True:
+                continue
+            items.append(deepcopy(entry))
+        items.sort(key=lambda item: (_utc_iso(item.get("locked_at")), item.get("id") or ""))
+        return items
+
     async def save_poker_mtt_correction(self, correction: dict) -> dict:
         current = deepcopy(self._poker_mtt_corrections.get(correction["id"], {}))
         current.update(deepcopy(correction))
@@ -699,6 +1012,16 @@ def _utc_iso(value) -> str:
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return str(value)
+
+
+def _artifact_payload_unchanged(existing: dict, candidate: dict) -> bool:
+    return (
+        existing.get("kind") == candidate.get("kind")
+        and existing.get("entity_type") == candidate.get("entity_type")
+        and existing.get("entity_id") == candidate.get("entity_id")
+        and existing.get("payload_hash") == candidate.get("payload_hash")
+        and existing.get("payload_json") == candidate.get("payload_json")
+    )
 
 
 def _normalize_poker_mtt_hud_snapshot(row: dict) -> dict:
@@ -805,7 +1128,46 @@ def _normalize_poker_mtt_multiplier_snapshot(row: dict) -> dict:
         "multiplier_before": float(row.get("multiplier_before") or 1.0),
         "multiplier_after": float(row.get("multiplier_after") or 1.0),
         "rolling_score": row.get("rolling_score"),
+        "effective_window_start_at": row.get("effective_window_start_at"),
+        "effective_window_end_at": row.get("effective_window_end_at"),
         "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _normalize_poker_mtt_budget_ledger(row: dict) -> dict:
+    budget_source_id = row.get("budget_source_id")
+    emission_epoch_id = row.get("emission_epoch_id")
+    reward_window_id = row.get("reward_window_id")
+    if not budget_source_id:
+        raise ValueError("missing poker mtt budget_source_id")
+    if not emission_epoch_id:
+        raise ValueError("missing poker mtt emission_epoch_id")
+    if not reward_window_id:
+        raise ValueError("missing poker mtt budget reward_window_id")
+    requested_amount = int(row.get("requested_amount") or 0)
+    approved_amount = int(row.get("approved_amount") or 0)
+    paid_amount = int(row.get("paid_amount") or 0)
+    forfeited_amount = int(row.get("forfeited_amount") or 0)
+    rolled_amount = int(row.get("rolled_amount") or 0)
+    return {
+        "id": row.get("id") or f"poker_mtt_budget:{budget_source_id}:{emission_epoch_id}:{reward_window_id}",
+        "budget_source_id": budget_source_id,
+        "emission_epoch_id": emission_epoch_id,
+        "lane": row.get("lane") or "poker_mtt_daily",
+        "reward_window_id": reward_window_id,
+        "settlement_batch_id": row.get("settlement_batch_id"),
+        "window_start_at": row.get("window_start_at"),
+        "window_end_at": row.get("window_end_at"),
+        "requested_amount": requested_amount,
+        "approved_amount": approved_amount,
+        "paid_amount": paid_amount,
+        "forfeited_amount": forfeited_amount,
+        "rolled_amount": rolled_amount,
+        "state": row.get("state") or "reserved",
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "budget_root": row.get("budget_root"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }

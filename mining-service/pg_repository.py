@@ -3,7 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from sqlalchemy import insert, select, update, func, text
+from sqlalchemy import insert, select, update, func, text, or_
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 import poker_mtt_results
@@ -13,6 +14,7 @@ from models import (
     forecast_task_runs,
     forecast_submissions,
     reward_windows,
+    poker_mtt_budget_ledgers,
     settlement_batches,
     anchor_jobs,
     artifacts,
@@ -21,6 +23,9 @@ from models import (
     arena_result_entries,
     poker_mtt_tournaments,
     poker_mtt_hand_events,
+    poker_mtt_mq_checkpoints,
+    poker_mtt_mq_conflicts,
+    poker_mtt_mq_dlq,
     poker_mtt_short_term_hud_snapshots,
     poker_mtt_long_term_hud_snapshots,
     poker_mtt_hidden_eval_entries,
@@ -79,6 +84,34 @@ def _reward_window_values(reward_window: dict) -> dict:
     return values
 
 
+def _poker_mtt_budget_ledger_values(row: dict, *, created_at: datetime | str | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    values = deepcopy(row)
+    budget_source_id = values.get("budget_source_id")
+    emission_epoch_id = values.get("emission_epoch_id")
+    reward_window_id = values.get("reward_window_id")
+    if not budget_source_id:
+        raise ValueError("missing poker mtt budget_source_id")
+    if not emission_epoch_id:
+        raise ValueError("missing poker mtt emission_epoch_id")
+    if not reward_window_id:
+        raise ValueError("missing poker mtt budget reward_window_id")
+    values["id"] = values.get("id") or f"poker_mtt_budget:{budget_source_id}:{emission_epoch_id}:{reward_window_id}"
+    values["lane"] = values.get("lane") or "poker_mtt_daily"
+    for field in ("requested_amount", "approved_amount", "paid_amount", "forfeited_amount", "rolled_amount"):
+        values[field] = int(values.get(field) or 0)
+    values["state"] = values.get("state") or "reserved"
+    values["policy_bundle_version"] = values.get("policy_bundle_version") or "poker_mtt_v1"
+    if not values.get("budget_root"):
+        raise ValueError("missing poker mtt budget_root")
+    values["created_at"] = created_at or values.get("created_at") or now
+    values["updated_at"] = values.get("updated_at") or now
+    for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
+        if values.get(field) is not None:
+            values[field] = _maybe_dt(values[field])
+    return values
+
+
 def _settlement_batch_values(settlement_batch: dict) -> dict:
     values = deepcopy(settlement_batch)
     for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
@@ -105,7 +138,14 @@ def _artifact_values(artifact: dict) -> dict:
 
 def _miner_values(miner: dict) -> dict:
     values = deepcopy(miner)
-    for field in ("created_at", "updated_at", "fast_window_start_at"):
+    for field in (
+        "created_at",
+        "updated_at",
+        "fast_window_start_at",
+        "poker_mtt_reward_bound_at",
+        "poker_mtt_identity_expires_at",
+        "poker_mtt_identity_revoked_at",
+    ):
         if field in values and values[field] is not None:
             values[field] = _maybe_dt(values[field])
     return values
@@ -141,6 +181,14 @@ def _poker_mtt_hand_event_values(event: dict, *, created_at: datetime | str | No
         raise ValueError("missing poker mtt hand_id")
     for field in ("created_at", "updated_at"):
         values[field] = _maybe_dt(values[field])
+    return values
+
+
+def _mq_row_values(row: dict) -> dict:
+    values = deepcopy(row)
+    for field in ("created_at", "updated_at", "last_processed_at", "lag_watermark_at"):
+        if field in values and values[field] is not None:
+            values[field] = _maybe_dt(values[field])
     return values
 
 
@@ -260,8 +308,9 @@ def _poker_mtt_multiplier_snapshot_values(row: dict, *, created_at: datetime | s
     values["policy_bundle_version"] = values.get("policy_bundle_version") or "poker_mtt_v1"
     values["created_at"] = created_at or values.get("created_at") or now
     values["updated_at"] = values.get("updated_at") or now
-    for field in ("created_at", "updated_at"):
-        values[field] = _maybe_dt(values[field])
+    for field in ("effective_window_start_at", "effective_window_end_at", "created_at", "updated_at"):
+        if field in values and values[field] is not None:
+            values[field] = _maybe_dt(values[field])
     return values
 
 
@@ -322,6 +371,16 @@ def _hold_entry_row_to_dict(row) -> dict | None:
 
 
 def _reward_window_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_budget_ledger_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
@@ -436,7 +495,7 @@ def _poker_mtt_multiplier_snapshot_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
-    for field in ("created_at", "updated_at"):
+    for field in ("effective_window_start_at", "effective_window_end_at", "created_at", "updated_at"):
         if field in data and isinstance(data[field], datetime):
             data[field] = data[field].isoformat().replace("+00:00", "Z")
     return data
@@ -503,6 +562,29 @@ class PostgresRepository:
             await conn.execute(
                 text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS fast_window_start_at TIMESTAMPTZ NULL")
             )
+            await conn.execute(text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_user_id VARCHAR NULL"))
+            await conn.execute(text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_auth_source VARCHAR NULL"))
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_reward_bound BOOLEAN NOT NULL DEFAULT FALSE")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_reward_bound_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_is_synthetic BOOLEAN NOT NULL DEFAULT FALSE")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_identity_expires_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_identity_revoked_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_miners_poker_mtt_reward_identity "
+                    "ON miners (poker_mtt_reward_bound, poker_mtt_is_synthetic, poker_mtt_identity_revoked_at)"
+                )
+            )
             await conn.execute(
                 text("ALTER TABLE forecast_task_runs ADD COLUMN IF NOT EXISTS reward_window_id VARCHAR NULL")
             )
@@ -535,6 +617,18 @@ class PostgresRepository:
                 text("ALTER TABLE reward_windows ADD COLUMN IF NOT EXISTS canonical_root VARCHAR NULL")
             )
             await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_budget_epoch "
+                    "ON poker_mtt_budget_ledgers (budget_source_id, emission_epoch_id)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_budget_reward_window "
+                    "ON poker_mtt_budget_ledgers (reward_window_id)"
+                )
+            )
+            await conn.execute(
                 text("ALTER TABLE settlement_batches ADD COLUMN IF NOT EXISTS anchor_payload_json JSONB NULL")
             )
             await conn.execute(
@@ -561,7 +655,16 @@ class PostgresRepository:
                 text("ALTER TABLE anchor_jobs ADD COLUMN IF NOT EXISTS broadcast_tx_hash VARCHAR NULL")
             )
             await conn.execute(
+                text("ALTER TABLE anchor_jobs ADD COLUMN IF NOT EXISTS chain_confirmation_status VARCHAR NULL")
+            )
+            await conn.execute(
                 text("ALTER TABLE anchor_jobs ADD COLUMN IF NOT EXISTS last_broadcast_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_artifacts_entity_kind_id "
+                    "ON artifacts (entity_type, entity_id, kind)"
+                )
             )
             await conn.execute(text("ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS decision VARCHAR NULL"))
             await conn.execute(text("ALTER TABLE risk_review_cases ADD COLUMN IF NOT EXISTS decision_reason TEXT NULL"))
@@ -599,6 +702,12 @@ class PostgresRepository:
             )
             await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL"))
             await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS anchorable_at TIMESTAMPTZ NULL"))
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_final_rankings_window_join "
+                    "ON poker_mtt_final_rankings (id, tournament_id, miner_address, policy_bundle_version)"
+                )
+            )
             await conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_hand_events_tournament_hand_no "
@@ -667,6 +776,18 @@ class PostgresRepository:
             )
             await conn.execute(
                 text(
+                    "ALTER TABLE poker_mtt_multiplier_snapshots "
+                    "ADD COLUMN IF NOT EXISTS effective_window_start_at TIMESTAMPTZ NULL"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE poker_mtt_multiplier_snapshots "
+                    "ADD COLUMN IF NOT EXISTS effective_window_end_at TIMESTAMPTZ NULL"
+                )
+            )
+            await conn.execute(
+                text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_multiplier_source_result "
                     "ON poker_mtt_multiplier_snapshots (source_result_id)"
                 )
@@ -675,6 +796,13 @@ class PostgresRepository:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_results_locked_reward_window "
                     "ON poker_mtt_result_entries (locked_at, rated_or_practice, human_only, evaluation_state)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_results_reward_window_ready "
+                    "ON poker_mtt_result_entries "
+                    "(locked_at, evaluation_version, evidence_state, rank_state, eligible_for_multiplier)"
                 )
             )
             await conn.execute(
@@ -708,6 +836,17 @@ class PostgresRepository:
     async def list_miners(self) -> list[dict]:
         async with self.engine.connect() as conn:
             rows = await conn.execute(select(miners))
+            return [_row_to_dict(row) for row in rows.fetchall()]
+
+    async def list_miners_by_addresses(self, addresses: list[str]) -> list[dict]:
+        if not addresses:
+            return []
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(miners)
+                .where(miners.c.address.in_(sorted(set(addresses))))
+                .order_by(miners.c.address.asc())
+            )
             return [_row_to_dict(row) for row in rows.fetchall()]
 
     async def count_active_miners(self) -> int:
@@ -871,6 +1010,58 @@ class PostgresRepository:
             )
             return [_reward_window_row_to_dict(row) for row in rows.fetchall()]
 
+    async def save_poker_mtt_budget_ledger(self, row: dict) -> dict:
+        existing = None
+        if row.get("id"):
+            async with self.engine.connect() as conn:
+                saved = await conn.execute(
+                    select(poker_mtt_budget_ledgers).where(poker_mtt_budget_ledgers.c.id == row["id"])
+                )
+                existing = _poker_mtt_budget_ledger_row_to_dict(saved.first())
+        values = _poker_mtt_budget_ledger_values(row, created_at=existing.get("created_at") if existing else None)
+        async with self.engine.begin() as conn:
+            existing_id = await conn.execute(
+                select(poker_mtt_budget_ledgers.c.id).where(poker_mtt_budget_ledgers.c.id == values["id"])
+            )
+            if existing_id.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_budget_ledgers)
+                    .where(poker_mtt_budget_ledgers.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_budget_ledgers).values(**values))
+        async with self.engine.connect() as conn:
+            saved = await conn.execute(
+                select(poker_mtt_budget_ledgers).where(poker_mtt_budget_ledgers.c.id == values["id"])
+            )
+            return _poker_mtt_budget_ledger_row_to_dict(saved.first()) or values
+
+    async def list_poker_mtt_budget_ledgers(
+        self,
+        *,
+        budget_source_id: str | None = None,
+        emission_epoch_id: str | None = None,
+        reward_window_id: str | None = None,
+        lane: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_budget_ledgers)
+        if budget_source_id is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.budget_source_id == budget_source_id)
+        if emission_epoch_id is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.emission_epoch_id == emission_epoch_id)
+        if reward_window_id is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.reward_window_id == reward_window_id)
+        if lane is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.lane == lane)
+        query = query.order_by(
+            poker_mtt_budget_ledgers.c.created_at.asc(),
+            poker_mtt_budget_ledgers.c.id.asc(),
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_budget_ledger_row_to_dict(row) for row in rows.fetchall()]
+
     async def save_settlement_batch(self, settlement_batch: dict) -> dict:
         values = _settlement_batch_values(settlement_batch)
         async with self.engine.begin() as conn:
@@ -956,6 +1147,43 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             row = await conn.execute(select(artifacts).where(artifacts.c.id == artifact["id"]))
             return _artifact_row_to_dict(row.first()) or artifact
+
+    async def save_artifacts_bulk(self, artifact_rows: list[dict]) -> list[dict]:
+        if not artifact_rows:
+            return []
+        values = [_artifact_values(artifact) for artifact in artifact_rows]
+        artifact_ids = [artifact["id"] for artifact in values]
+        stmt = postgres_insert(artifacts).values(values)
+        excluded = stmt.excluded
+        update_values = {
+            "kind": excluded.kind,
+            "entity_type": excluded.entity_type,
+            "entity_id": excluded.entity_id,
+            "payload_json": excluded.payload_json,
+            "payload_hash": excluded.payload_hash,
+            "created_at": excluded.created_at,
+            "updated_at": excluded.updated_at,
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[artifacts.c.id],
+            set_=update_values,
+            where=or_(
+                artifacts.c.kind.is_distinct_from(excluded.kind),
+                artifacts.c.entity_type.is_distinct_from(excluded.entity_type),
+                artifacts.c.entity_id.is_distinct_from(excluded.entity_id),
+                artifacts.c.payload_hash.is_distinct_from(excluded.payload_hash),
+                artifacts.c.payload_json.is_distinct_from(excluded.payload_json),
+            ),
+        )
+        async with self.engine.begin() as conn:
+            await conn.execute(stmt)
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(artifacts)
+                .where(artifacts.c.id.in_(artifact_ids))
+                .order_by(artifacts.c.id.asc())
+            )
+            return [_artifact_row_to_dict(row) for row in rows.fetchall()]
 
     async def get_artifact(self, artifact_id: str) -> dict | None:
         async with self.engine.connect() as conn:
@@ -1144,6 +1372,99 @@ class PostgresRepository:
             rows = await conn.execute(query)
             return [_poker_mtt_hand_event_row_to_dict(row) for row in rows.fetchall()]
 
+    async def save_poker_mtt_mq_checkpoint(self, checkpoint: dict) -> dict:
+        values = _mq_row_values(checkpoint)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(poker_mtt_mq_checkpoints.c.id).where(poker_mtt_mq_checkpoints.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_mq_checkpoints)
+                    .where(poker_mtt_mq_checkpoints.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_mq_checkpoints).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_mq_checkpoints).where(poker_mtt_mq_checkpoints.c.id == values["id"]))
+            return _row_to_dict(row.first()) or values
+
+    async def list_poker_mtt_mq_checkpoints(self, *, tournament_id: str | None = None) -> list[dict]:
+        query = select(poker_mtt_mq_checkpoints)
+        if tournament_id is not None:
+            query = query.where(poker_mtt_mq_checkpoints.c.tournament_id == tournament_id)
+        query = query.order_by(
+            poker_mtt_mq_checkpoints.c.topic.asc(),
+            poker_mtt_mq_checkpoints.c.consumer_group.asc(),
+            poker_mtt_mq_checkpoints.c.queue.asc(),
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_mq_conflict(self, conflict: dict) -> dict:
+        values = _mq_row_values(conflict)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(poker_mtt_mq_conflicts.c.id).where(poker_mtt_mq_conflicts.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_mq_conflicts)
+                    .where(poker_mtt_mq_conflicts.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_mq_conflicts).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_mq_conflicts).where(poker_mtt_mq_conflicts.c.id == values["id"]))
+            return _row_to_dict(row.first()) or values
+
+    async def list_poker_mtt_mq_conflicts(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_mq_conflicts)
+        if tournament_id is not None:
+            query = query.where(poker_mtt_mq_conflicts.c.tournament_id == tournament_id)
+        if state is not None:
+            query = query.where(poker_mtt_mq_conflicts.c.state == state)
+        query = query.order_by(poker_mtt_mq_conflicts.c.created_at.asc(), poker_mtt_mq_conflicts.c.id.asc())
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_mq_dlq(self, dlq: dict) -> dict:
+        values = _mq_row_values(dlq)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(poker_mtt_mq_dlq.c.id).where(poker_mtt_mq_dlq.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_mq_dlq)
+                    .where(poker_mtt_mq_dlq.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_mq_dlq).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_mq_dlq).where(poker_mtt_mq_dlq.c.id == values["id"]))
+            return _row_to_dict(row.first()) or values
+
+    async def list_poker_mtt_mq_dlq(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_mq_dlq)
+        if tournament_id is not None:
+            query = query.where(poker_mtt_mq_dlq.c.tournament_id == tournament_id)
+        if state is not None:
+            query = query.where(poker_mtt_mq_dlq.c.state == state)
+        query = query.order_by(poker_mtt_mq_dlq.c.created_at.asc(), poker_mtt_mq_dlq.c.id.asc())
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_row_to_dict(row) for row in rows.fetchall()]
+
     async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict:
         values = _poker_mtt_hud_snapshot_values(row)
         table = _poker_mtt_hud_snapshot_table(values["hud_window"])
@@ -1250,6 +1571,34 @@ class PostgresRepository:
             rows = await conn.execute(query)
             return [_poker_mtt_rating_snapshot_row_to_dict(row) for row in rows.fetchall()]
 
+    async def list_latest_poker_mtt_rating_snapshots_for_miners(self, miner_addresses: list[str]) -> list[dict]:
+        if not miner_addresses:
+            return []
+        ranked = (
+            select(
+                *[column for column in poker_mtt_rating_snapshots.c],
+                func.row_number()
+                .over(
+                    partition_by=poker_mtt_rating_snapshots.c.miner_address,
+                    order_by=(
+                        poker_mtt_rating_snapshots.c.window_end_at.desc(),
+                        poker_mtt_rating_snapshots.c.id.desc(),
+                    ),
+                )
+                .label("_snapshot_rank"),
+            )
+            .where(poker_mtt_rating_snapshots.c.miner_address.in_(sorted(set(miner_addresses))))
+            .subquery()
+        )
+        query = (
+            select(ranked)
+            .where(ranked.c._snapshot_rank == 1)
+            .order_by(ranked.c.miner_address.asc(), ranked.c.id.asc())
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_rating_snapshot_row_to_dict(row) for row in rows.fetchall()]
+
     async def save_poker_mtt_multiplier_snapshot(self, row: dict) -> dict:
         existing = None
         if row.get("id"):
@@ -1320,6 +1669,18 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             row = await conn.execute(select(poker_mtt_final_rankings).where(poker_mtt_final_rankings.c.id == final_ranking_id))
             return _poker_mtt_final_ranking_row_to_dict(row.first())
+
+    async def list_poker_mtt_final_rankings_by_ids(self, final_ranking_ids: list[str]) -> list[dict]:
+        if not final_ranking_ids:
+            return []
+        query = (
+            select(poker_mtt_final_rankings)
+            .where(poker_mtt_final_rankings.c.id.in_(sorted(set(final_ranking_ids))))
+            .order_by(poker_mtt_final_rankings.c.id.asc())
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_final_ranking_row_to_dict(row) for row in rows.fetchall()]
 
     async def list_poker_mtt_final_rankings_for_tournament(self, tournament_id: str) -> list[dict]:
         query = (
@@ -1425,6 +1786,112 @@ class PostgresRepository:
             .where(poker_mtt_result_entries.c.no_multiplier_reason.is_(None))
             .where(poker_mtt_result_entries.c.eligible_for_multiplier.is_(True))
             .order_by(poker_mtt_result_entries.c.locked_at.asc(), poker_mtt_result_entries.c.id.asc())
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_result_row_to_dict(row) for row in rows.fetchall()]
+
+    async def load_poker_mtt_reward_window_inputs(
+        self,
+        *,
+        lane: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        include_provisional: bool,
+        policy_bundle_version: str,
+        current_at: datetime,
+    ) -> dict:
+        window_start = _maybe_dt(window_start_at)
+        window_end = _maybe_dt(window_end_at)
+        compatible_policy_versions = poker_mtt_results.compatible_result_policy_versions(policy_bundle_version)
+        result_columns = [column.label(f"result__{column.name}") for column in poker_mtt_result_entries.c]
+        final_columns = [column.label(f"final__{column.name}") for column in poker_mtt_final_rankings.c]
+        miner_columns = [column.label(f"miner__{column.name}") for column in miners.c]
+        query = (
+            select(*result_columns, *final_columns, *miner_columns)
+            .select_from(
+                poker_mtt_result_entries.join(
+                    poker_mtt_final_rankings,
+                    poker_mtt_result_entries.c.final_ranking_id == poker_mtt_final_rankings.c.id,
+                ).join(
+                    miners,
+                    poker_mtt_result_entries.c.miner_address == miners.c.address,
+                )
+            )
+            .where(poker_mtt_result_entries.c.locked_at.is_not(None))
+            .where(poker_mtt_result_entries.c.locked_at >= window_start)
+            .where(poker_mtt_result_entries.c.locked_at < window_end)
+            .where(poker_mtt_result_entries.c.rated_or_practice == "rated")
+            .where(poker_mtt_result_entries.c.human_only.is_(True))
+            .where(poker_mtt_result_entries.c.evaluation_state == "final")
+            .where(poker_mtt_result_entries.c.evaluation_version.in_(compatible_policy_versions))
+            .where(poker_mtt_result_entries.c.evidence_state.in_(sorted(poker_mtt_results.REWARD_READY_EVIDENCE_STATES)))
+            .where(poker_mtt_result_entries.c.final_ranking_id.is_not(None))
+            .where(poker_mtt_result_entries.c.standing_snapshot_id.is_not(None))
+            .where(poker_mtt_result_entries.c.evidence_root.is_not(None))
+            .where(poker_mtt_result_entries.c.rank_state == "ranked")
+            .where(poker_mtt_result_entries.c.no_multiplier_reason.is_(None))
+            .where(poker_mtt_result_entries.c.eligible_for_multiplier.is_(True))
+            .order_by(poker_mtt_result_entries.c.locked_at.asc(), poker_mtt_result_entries.c.id.asc())
+        )
+        results: list[dict] = []
+        final_rankings_by_id: dict[str, dict] = {}
+        miners_by_address: dict[str, dict] = {}
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            for row in rows.fetchall():
+                mapping = row._mapping
+                result = _poker_mtt_result_row_to_dict(
+                    {column.name: mapping[f"result__{column.name}"] for column in poker_mtt_result_entries.c}
+                )
+                final_ranking = _poker_mtt_final_ranking_row_to_dict(
+                    {column.name: mapping[f"final__{column.name}"] for column in poker_mtt_final_rankings.c}
+                )
+                miner = _row_to_dict({column.name: mapping[f"miner__{column.name}"] for column in miners.c})
+                if result:
+                    results.append(result)
+                if final_ranking:
+                    final_rankings_by_id[final_ranking["id"]] = final_ranking
+                if miner:
+                    miners_by_address[miner["address"]] = miner
+        miner_addresses = sorted(miners_by_address)
+        rating_snapshots = await self.list_latest_poker_mtt_rating_snapshots_for_miners(miner_addresses)
+        return {
+            "results": results,
+            "final_rankings_by_id": final_rankings_by_id,
+            "miners_by_address": miners_by_address,
+            "rating_snapshots_by_miner": {row["miner_address"]: row for row in rating_snapshots},
+        }
+
+    async def list_poker_mtt_closed_reward_window_candidates(
+        self,
+        *,
+        locked_after_at: datetime,
+        locked_before_at: datetime,
+        policy_bundle_versions: list[str],
+        limit: int = 100000,
+    ) -> list[dict]:
+        locked_after = _maybe_dt(locked_after_at)
+        locked_before = _maybe_dt(locked_before_at)
+        compatible_versions: set[str] = set()
+        for policy_bundle_version in policy_bundle_versions:
+            compatible_versions.update(poker_mtt_results.compatible_result_policy_versions(policy_bundle_version))
+        query = (
+            select(poker_mtt_result_entries)
+            .where(poker_mtt_result_entries.c.locked_at.is_not(None))
+            .where(poker_mtt_result_entries.c.locked_at >= locked_after)
+            .where(poker_mtt_result_entries.c.locked_at < locked_before)
+            .where(poker_mtt_result_entries.c.rated_or_practice == "rated")
+            .where(poker_mtt_result_entries.c.human_only.is_(True))
+            .where(poker_mtt_result_entries.c.evaluation_version.in_(sorted(compatible_versions)))
+            .where(poker_mtt_result_entries.c.evidence_state.in_(sorted(poker_mtt_results.REWARD_READY_EVIDENCE_STATES)))
+            .where(poker_mtt_result_entries.c.final_ranking_id.is_not(None))
+            .where(poker_mtt_result_entries.c.standing_snapshot_id.is_not(None))
+            .where(poker_mtt_result_entries.c.evidence_root.is_not(None))
+            .where(poker_mtt_result_entries.c.no_multiplier_reason.is_(None))
+            .where(poker_mtt_result_entries.c.eligible_for_multiplier.is_(True))
+            .order_by(poker_mtt_result_entries.c.locked_at.asc(), poker_mtt_result_entries.c.id.asc())
+            .limit(limit)
         )
         async with self.engine.connect() as conn:
             rows = await conn.execute(query)

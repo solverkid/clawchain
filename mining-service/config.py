@@ -32,6 +32,8 @@ def _admin_auth_default() -> bool:
 
 @dataclass(slots=True)
 class AppSettings:
+    runtime_env: str | None = os.getenv("CLAWCHAIN_ENV")
+    bind_host: str = os.getenv("CLAWCHAIN_BIND_HOST", "127.0.0.1")
     database_url: str | None = os.getenv("CLAWCHAIN_DATABASE_URL")
     live_market_data_enabled: bool = os.getenv("CLAWCHAIN_LIVE_MARKET_DATA_ENABLED", "1") not in {"0", "false", "False"}
     market_data_timeout_seconds: float = float(os.getenv("CLAWCHAIN_MARKET_DATA_TIMEOUT_SECONDS", "8.0"))
@@ -62,6 +64,9 @@ class AppSettings:
     )
     poker_mtt_projection_artifact_page_size: int = int(
         os.getenv("CLAWCHAIN_POKER_MTT_PROJECTION_ARTIFACT_PAGE_SIZE", "5000")
+    )
+    poker_mtt_reward_window_reconcile_lookback_days: int = int(
+        os.getenv("CLAWCHAIN_POKER_MTT_REWARD_WINDOW_RECONCILE_LOOKBACK_DAYS", "35")
     )
     baseline_pm_weight: float = float(os.getenv("CLAWCHAIN_BASELINE_PM_WEIGHT", "0.85"))
     baseline_bin_weight: float = float(os.getenv("CLAWCHAIN_BASELINE_BIN_WEIGHT", "0.15"))
@@ -101,6 +106,7 @@ class AppSettings:
     )
     admin_auth_enabled: bool = _bool_env("CLAWCHAIN_ADMIN_AUTH_ENABLED", _admin_auth_default())
     admin_auth_token: str | None = os.getenv("CLAWCHAIN_ADMIN_AUTH_TOKEN")
+    allow_insecure_admin_without_auth: bool = _bool_env("CLAWCHAIN_ALLOW_INSECURE_ADMIN_WITHOUT_AUTH", False)
     cors_allowed_origins: tuple[str, ...] = field(
         default_factory=lambda: _csv_env(
             "CLAWCHAIN_CORS_ALLOWED_ORIGINS",

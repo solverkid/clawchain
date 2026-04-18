@@ -12,13 +12,21 @@ type ZMember struct {
 }
 
 type LiveSnapshot struct {
+	TournamentID         string            `json:"tournament_id"`
+	SourceMTTID          string            `json:"source_mtt_id"`
+	GameType             string            `json:"game_type"`
+	RuntimeState         string            `json:"runtime_state,omitempty"`
+	QuietPeriodSatisfied bool              `json:"quiet_period_satisfied,omitempty"`
+	Keys                 RedisKeys         `json:"keys"`
+	UserInfo             map[string]string `json:"user_info"`
+	Alive                []ZMember         `json:"alive"`
+	Died                 []string          `json:"died"`
+}
+
+type RegistrationSnapshot struct {
 	TournamentID string            `json:"tournament_id"`
 	SourceMTTID  string            `json:"source_mtt_id"`
-	GameType     string            `json:"game_type"`
-	Keys         RedisKeys         `json:"keys"`
 	UserInfo     map[string]string `json:"user_info"`
-	Alive        []ZMember         `json:"alive"`
-	Died         []string          `json:"died"`
 }
 
 type RankState string

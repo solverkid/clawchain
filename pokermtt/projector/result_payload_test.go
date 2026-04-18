@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -85,6 +86,23 @@ func TestBuildFinalRankingApplyPayloadUsesCanonicalRows(t *testing.T) {
 	}
 }
 
+func TestBuildFinalRankingApplyPayloadMatchesCrossLanguageFixture(t *testing.T) {
+	finalization := phase3ContractFinalization()
+	payload, err := BuildFinalRankingApplyPayload(finalization, ApplyOptions{
+		RatedOrPractice: "rated",
+		HumanOnly:       true,
+		FieldSize:       30,
+		LockedAt:        time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	actual, err := json.Marshal(payload)
+	require.NoError(t, err)
+	expected, err := os.ReadFile("../../tests/fixtures/poker_mtt/final_ranking_projection_from_go.json")
+	require.NoError(t, err)
+	require.JSONEq(t, string(expected), string(actual))
+}
+
 func TestBuildFinalRankingApplyPayloadRejectsUnrootedFinalization(t *testing.T) {
 	_, err := BuildFinalRankingApplyPayload(ranking.Finalization{TournamentID: "mtt"}, ApplyOptions{
 		RatedOrPractice: "rated",
@@ -94,6 +112,123 @@ func TestBuildFinalRankingApplyPayloadRejectsUnrootedFinalization(t *testing.T) 
 
 	if err == nil {
 		t.Fatalf("expected error for missing finalization root")
+	}
+}
+
+func TestBuildFinalRankingApplyPayloadRejectsMissingLockedAt(t *testing.T) {
+	_, err := BuildFinalRankingApplyPayload(phase3ContractFinalization(), ApplyOptions{
+		RatedOrPractice: "rated",
+		HumanOnly:       true,
+		FieldSize:       30,
+	})
+
+	require.ErrorContains(t, err, "missing locked_at")
+}
+
+func phase3ContractFinalization() ranking.Finalization {
+	firstRank := 1
+	secondRank := 2
+	firstScore := 90000.0
+	return ranking.Finalization{
+		TournamentID:        "mtt-phase3-contract",
+		SourceMTTID:         "donor-mtt-phase3-contract",
+		SnapshotID:          "poker_mtt_standing_snapshot:mtt-phase3-contract:abc",
+		SnapshotHash:        "sha256:snapshot",
+		Root:                "sha256:final-root",
+		PolicyBundleVersion: "poker_mtt_policy_v1",
+		Rows: []ranking.FinalRankingRow{
+			{
+				ID:                   "poker_mtt_final_ranking:mtt-phase3-contract:8:1",
+				TournamentID:         "mtt-phase3-contract",
+				SourceMTTID:          "donor-mtt-phase3-contract",
+				SourceUserID:         "8",
+				MinerAddress:         "claw18phase3",
+				EconomicUnitID:       "eu:8",
+				MemberID:             "8:1",
+				EntryNumber:          1,
+				ReentryCount:         1,
+				Rank:                 &firstRank,
+				RankState:            ranking.RankStateRanked,
+				Chip:                 90000,
+				ChipDelta:            87000,
+				Bounty:               0,
+				DefeatNum:            4,
+				FieldSizePolicy:      "exclude_waiting_no_show_from_reward_field_size",
+				StandingSnapshotID:   "poker_mtt_standing_snapshot:mtt-phase3-contract:abc",
+				StandingSnapshotHash: "sha256:snapshot",
+				EvidenceRoot:         "sha256:evidence:8",
+				EvidenceState:        "complete",
+				PolicyBundleVersion:  "poker_mtt_policy_v1",
+				SnapshotFound:        true,
+				Status:               ranking.StandingStatusAlive,
+				PlayerName:           "miner 8",
+				StartChip:            3000,
+				SourceRank:           "1",
+				SourceRankNumeric:    true,
+				ZSetScore:            &firstScore,
+			},
+			{
+				ID:                   "poker_mtt_final_ranking:mtt-phase3-contract:19:1",
+				TournamentID:         "mtt-phase3-contract",
+				SourceMTTID:          "donor-mtt-phase3-contract",
+				SourceUserID:         "19",
+				MinerAddress:         "claw119phase3",
+				EconomicUnitID:       "eu:19",
+				MemberID:             "19:1",
+				EntryNumber:          1,
+				ReentryCount:         1,
+				Rank:                 &secondRank,
+				RankState:            ranking.RankStateRanked,
+				Chip:                 0,
+				ChipDelta:            -3000,
+				DiedTime:             "2026-04-10T11:59:30Z",
+				Bounty:               0,
+				DefeatNum:            1,
+				FieldSizePolicy:      "exclude_waiting_no_show_from_reward_field_size",
+				StandingSnapshotID:   "poker_mtt_standing_snapshot:mtt-phase3-contract:abc",
+				StandingSnapshotHash: "sha256:snapshot",
+				EvidenceRoot:         "sha256:evidence:19",
+				EvidenceState:        "complete",
+				PolicyBundleVersion:  "poker_mtt_policy_v1",
+				SnapshotFound:        true,
+				Status:               ranking.StandingStatusDied,
+				PlayerName:           "miner 19",
+				StartChip:            3000,
+				SourceRank:           "2",
+				SourceRankNumeric:    true,
+			},
+			{
+				ID:                   "poker_mtt_final_ranking:mtt-phase3-contract:27:1",
+				TournamentID:         "mtt-phase3-contract",
+				SourceMTTID:          "donor-mtt-phase3-contract",
+				SourceUserID:         "27",
+				MinerAddress:         "claw127phase3",
+				EconomicUnitID:       "eu:27",
+				MemberID:             "27:1",
+				EntryNumber:          1,
+				ReentryCount:         1,
+				Rank:                 nil,
+				RankState:            ranking.RankStateWaitingNoShow,
+				Chip:                 3000,
+				ChipDelta:            0,
+				WaitingOrNoShow:      true,
+				Bounty:               0,
+				DefeatNum:            0,
+				FieldSizePolicy:      "exclude_waiting_no_show_from_reward_field_size",
+				StandingSnapshotID:   "poker_mtt_standing_snapshot:mtt-phase3-contract:abc",
+				StandingSnapshotHash: "sha256:snapshot",
+				EvidenceRoot:         "sha256:evidence:27",
+				EvidenceState:        "accepted_degraded",
+				PolicyBundleVersion:  "poker_mtt_policy_v1",
+				SnapshotFound:        false,
+				Status:               ranking.StandingStatusPending,
+				PlayerName:           "miner 27",
+				StartChip:            3000,
+				StandUpStatus:        "WAITING",
+				SourceRank:           "",
+				SourceRankNumeric:    false,
+			},
+		},
 	}
 }
 

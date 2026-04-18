@@ -159,11 +159,18 @@ class PokerMTTFinalRankingRow(BaseModel):
 
 
 class ApplyPokerMTTFinalRankingProjectionRequest(BaseModel):
+    schema_version: str
+    projection_id: str
     tournament_id: str
+    source_mtt_id: str
     rated_or_practice: str
     human_only: bool = True
     field_size: int = Field(ge=2)
     policy_bundle_version: str = "poker_mtt_v1"
+    standing_snapshot_id: str
+    standing_snapshot_hash: str
+    final_ranking_root: str
+    locked_at: datetime
     rows: list[PokerMTTFinalRankingRow]
 
 

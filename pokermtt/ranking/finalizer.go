@@ -6,39 +6,78 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
 )
 
 var ErrInvalidLiveSnapshot = errors.New("invalid poker mtt live ranking snapshot")
+var ErrFinalizationBarrier = errors.New("poker mtt finalization barrier failed")
 
 type Finalizer struct {
-	PolicyBundleVersion string
-	FieldSizePolicy     string
+	PolicyBundleVersion     string
+	FieldSizePolicy         string
+	RequireTerminalOrQuiet  bool
+	ExpectedEntrants        int
+	ExpectedAlive           *int
+	ExpectedDied            *int
+	ExpectedWaitingOrNoShow *int
+	ExpectedTotalChip       float64
+	TotalChipDriftTolerance float64
 }
 
 func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
+	return f.FinalizeWithRegistration(snapshot, RegistrationSnapshot{})
+}
+
+func (f Finalizer) FinalizeWithRegistration(snapshot LiveSnapshot, registration RegistrationSnapshot) (Finalization, error) {
 	if strings.TrimSpace(snapshot.TournamentID) == "" {
 		return Finalization{}, ErrInvalidLiveSnapshot
 	}
 	if snapshot.SourceMTTID == "" {
 		snapshot.SourceMTTID = snapshot.TournamentID
 	}
+	if err := f.validateReadinessBarrier(snapshot); err != nil {
+		return Finalization{}, err
+	}
 
-	decodedSnapshots := make(map[string]map[string]any, len(snapshot.UserInfo))
+	decodedLiveSnapshots := make(map[string]map[string]any, len(snapshot.UserInfo))
+	decodedSnapshots := make(map[string]map[string]any, len(snapshot.UserInfo)+len(registration.UserInfo))
+	liveSnapshotFound := make(map[string]bool, len(snapshot.UserInfo))
 	for memberID, raw := range snapshot.UserInfo {
 		decoded, err := decodeJSONObject(raw)
 		if err != nil {
 			return Finalization{}, fmt.Errorf("%w: user snapshot %s: %v", ErrInvalidLiveSnapshot, memberID, err)
 		}
-		decodedSnapshots[strings.TrimSpace(memberID)] = decoded
+		normalizedMemberID := normalizeMemberID(memberID, decoded)
+		decodedLiveSnapshots[normalizedMemberID] = decoded
+		decodedSnapshots[normalizedMemberID] = decoded
+		liveSnapshotFound[normalizedMemberID] = true
+	}
+
+	decodedRegistrationSnapshots := make(map[string]map[string]any, len(registration.UserInfo))
+	for memberID, raw := range registration.UserInfo {
+		decoded, err := decodeJSONObject(raw)
+		if err != nil {
+			return Finalization{}, fmt.Errorf("%w: registration snapshot %s: %v", ErrInvalidLiveSnapshot, memberID, err)
+		}
+		normalizedMemberID := normalizeMemberID(memberID, decoded)
+		if normalizedMemberID == "" {
+			return Finalization{}, fmt.Errorf("%w: registration snapshot missing member id", ErrInvalidLiveSnapshot)
+		}
+		decodedRegistrationSnapshots[normalizedMemberID] = decoded
+		if existing, ok := decodedSnapshots[normalizedMemberID]; ok {
+			decodedSnapshots[normalizedMemberID] = mergeEntries(decoded, existing)
+		} else {
+			decodedSnapshots[normalizedMemberID] = decoded
+		}
 	}
 
 	aliveRows := canonicalAliveRows(snapshot.Alive)
 	snapshotForHash := snapshot
 	snapshotForHash.Alive = aliveRows
-	snapshotHash, err := hashCanonicalJSON(canonicalSnapshot(snapshotForHash, decodedSnapshots))
+	snapshotHash, err := hashCanonicalJSON(canonicalSnapshot(snapshotForHash, decodedLiveSnapshots, decodedRegistrationSnapshots))
 	if err != nil {
 		return Finalization{}, err
 	}
@@ -61,13 +100,13 @@ func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
 
 	for aliveRankZeroBased, alive := range aliveRows {
 		memberID := strings.TrimSpace(alive.Member)
-		entry, found := decodedSnapshots[memberID]
+		entry := decodedSnapshots[memberID]
 		displayRank := aliveRankZeroBased + 1
 		score := alive.Score
-		row := normalizeRow(rowConfig, entry, memberID, StandingStatusAlive, &displayRank, found)
+		row := normalizeRow(rowConfig, entry, memberID, StandingStatusAlive, &displayRank, liveSnapshotFound[memberID])
 		row.ZSetScore = &score
 		row.SourceRankNumeric = true
-		if !found && row.Chip == 0 {
+		if !liveSnapshotFound[memberID] && row.Chip == 0 {
 			row.Chip = alive.Score
 		}
 		row.RankState = RankStateRanked
@@ -112,9 +151,9 @@ func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
 			}
 		}
 
-		snapshotEntry, found := decodedSnapshots[memberID]
+		snapshotEntry := decodedSnapshots[memberID]
 		mergedEntry := mergeEntries(snapshotEntry, diedEntry)
-		row := normalizeRow(rowConfig, mergedEntry, memberID, StandingStatusDied, &displayRank, found)
+		row := normalizeRow(rowConfig, mergedEntry, memberID, StandingStatusDied, &displayRank, liveSnapshotFound[memberID])
 		row.SourceRank = sourceRankText(diedEntry["rank"])
 		row.SourceRankNumeric = internalRankOK
 		if internalRankOK {
@@ -139,7 +178,7 @@ func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
 		return memberSortKeyLess(pendingMemberIDs[i], pendingMemberIDs[j])
 	})
 	for _, memberID := range pendingMemberIDs {
-		row := normalizeRow(rowConfig, decodedSnapshots[memberID], memberID, StandingStatusPending, nil, true)
+		row := normalizeRow(rowConfig, decodedSnapshots[memberID], memberID, StandingStatusPending, nil, liveSnapshotFound[memberID])
 		if isWaitingOrNoShow(row.StandUpStatus) {
 			row.RankState = RankStateWaitingNoShow
 			row.WaitingOrNoShow = true
@@ -150,6 +189,9 @@ func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
 	}
 
 	collapseDuplicateEconomicUnits(rows)
+	if err := f.validateFinalRows(rows); err != nil {
+		return Finalization{}, err
+	}
 	root, err := hashCanonicalJSON(canonicalRows(snapshot.TournamentID, snapshot.SourceMTTID, f.PolicyBundleVersion, rows))
 	if err != nil {
 		return Finalization{}, err
@@ -164,6 +206,72 @@ func (f Finalizer) Finalize(snapshot LiveSnapshot) (Finalization, error) {
 		PolicyBundleVersion: f.PolicyBundleVersion,
 		Rows:                rows,
 	}, nil
+}
+
+func (f Finalizer) validateReadinessBarrier(snapshot LiveSnapshot) error {
+	if !f.RequireTerminalOrQuiet {
+		return nil
+	}
+	if snapshot.QuietPeriodSatisfied || isTerminalRuntimeState(snapshot.RuntimeState) {
+		return nil
+	}
+	return fmt.Errorf("%w: runtime state %q is not terminal and quiet period is not satisfied", ErrFinalizationBarrier, snapshot.RuntimeState)
+}
+
+func (f Finalizer) validateFinalRows(rows []FinalRankingRow) error {
+	if f.ExpectedEntrants > 0 && len(rows) != f.ExpectedEntrants {
+		return fmt.Errorf("%w: entrant count mismatch expected=%d actual=%d", ErrFinalizationBarrier, f.ExpectedEntrants, len(rows))
+	}
+	if err := validateStatusCount("alive", f.ExpectedAlive, countRowsByStatus(rows, StandingStatusAlive)); err != nil {
+		return err
+	}
+	if err := validateStatusCount("died", f.ExpectedDied, countRowsByStatus(rows, StandingStatusDied)); err != nil {
+		return err
+	}
+	if err := validateStatusCount("waiting/no-show", f.ExpectedWaitingOrNoShow, countWaitingOrNoShowRows(rows)); err != nil {
+		return err
+	}
+	if f.ExpectedTotalChip > 0 {
+		totalChip := 0.0
+		for _, row := range rows {
+			totalChip += row.Chip
+		}
+		tolerance := f.TotalChipDriftTolerance
+		if tolerance < 0 {
+			tolerance = 0
+		}
+		if math.Abs(totalChip-f.ExpectedTotalChip) > tolerance {
+			return fmt.Errorf("%w: total chip drift expected=%.6f actual=%.6f tolerance=%.6f", ErrFinalizationBarrier, f.ExpectedTotalChip, totalChip, tolerance)
+		}
+	}
+	return nil
+}
+
+func validateStatusCount(label string, expected *int, actual int) error {
+	if expected == nil || *expected == actual {
+		return nil
+	}
+	return fmt.Errorf("%w: %s count mismatch expected=%d actual=%d", ErrFinalizationBarrier, label, *expected, actual)
+}
+
+func countRowsByStatus(rows []FinalRankingRow, status StandingStatus) int {
+	count := 0
+	for _, row := range rows {
+		if row.Status == status {
+			count++
+		}
+	}
+	return count
+}
+
+func countWaitingOrNoShowRows(rows []FinalRankingRow) int {
+	count := 0
+	for _, row := range rows {
+		if row.WaitingOrNoShow || row.RankState == RankStateWaitingNoShow {
+			count++
+		}
+	}
+	return count
 }
 
 func (f Finalizer) fieldSizePolicy() string {
@@ -243,6 +351,12 @@ func normalizeRow(config normalizeRowConfig, entry map[string]any, memberID stri
 		RoomID:               firstString(entry["roomID"], entry["room_id"]),
 		StartChip:            startChip,
 		StandUpStatus:        firstString(entry["standUpStatus"], entry["stand_up_status"]),
+	}
+	if row.StandUpStatus == "" {
+		registrationStatus := firstString(entry["status"], entry["registrationStatus"], entry["registration_status"])
+		if isWaitingOrNoShow(registrationStatus) {
+			row.StandUpStatus = registrationStatus
+		}
 	}
 	if isWaitingOrNoShow(row.StandUpStatus) {
 		row.WaitingOrNoShow = true
@@ -341,6 +455,14 @@ func buildMemberID(userID any, entryNumber any) string {
 		return ""
 	}
 	return fmt.Sprintf("%s:%d", normalizedUserID, normalizedEntryNumber)
+}
+
+func normalizeMemberID(memberID string, entry map[string]any) string {
+	normalized := strings.TrimSpace(memberID)
+	if normalized != "" {
+		return normalized
+	}
+	return buildMemberID(entry["userID"], entry["entryNumber"])
 }
 
 func memberSortKeyLess(left string, right string) bool {
@@ -507,6 +629,16 @@ func isWaitingOrNoShow(status string) bool {
 	}
 }
 
+func isTerminalRuntimeState(state string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(state))
+	switch normalized {
+	case "finished", "complete", "completed", "closed", "terminal", "settled":
+		return true
+	default:
+		return false
+	}
+}
+
 func sourceRankText(value any) string {
 	if value == nil {
 		return ""
@@ -527,13 +659,16 @@ func snapshotID(tournamentID string, hash string) string {
 }
 
 type canonicalSnapshotPayload struct {
-	TournamentID string              `json:"tournament_id"`
-	SourceMTTID  string              `json:"source_mtt_id"`
-	GameType     string              `json:"game_type"`
-	Keys         RedisKeys           `json:"keys"`
-	UserInfo     []canonicalKeyValue `json:"user_info"`
-	Alive        []ZMember           `json:"alive"`
-	Died         []string            `json:"died"`
+	TournamentID         string              `json:"tournament_id"`
+	SourceMTTID          string              `json:"source_mtt_id"`
+	GameType             string              `json:"game_type"`
+	RuntimeState         string              `json:"runtime_state,omitempty"`
+	QuietPeriodSatisfied bool                `json:"quiet_period_satisfied,omitempty"`
+	Keys                 RedisKeys           `json:"keys"`
+	UserInfo             []canonicalKeyValue `json:"user_info"`
+	Registration         []canonicalKeyValue `json:"registration,omitempty"`
+	Alive                []ZMember           `json:"alive"`
+	Died                 []string            `json:"died"`
 }
 
 type canonicalKeyValue struct {
@@ -541,23 +676,36 @@ type canonicalKeyValue struct {
 	Value map[string]any `json:"value"`
 }
 
-func canonicalSnapshot(snapshot LiveSnapshot, decodedSnapshots map[string]map[string]any) canonicalSnapshotPayload {
-	userInfo := make([]canonicalKeyValue, 0, len(decodedSnapshots))
-	for key, value := range decodedSnapshots {
-		userInfo = append(userInfo, canonicalKeyValue{Key: key, Value: value})
-	}
-	sort.Slice(userInfo, func(i, j int) bool {
-		return userInfo[i].Key < userInfo[j].Key
-	})
+func canonicalSnapshot(
+	snapshot LiveSnapshot,
+	decodedLiveSnapshots map[string]map[string]any,
+	decodedRegistrationSnapshots map[string]map[string]any,
+) canonicalSnapshotPayload {
+	userInfo := canonicalKeyValues(decodedLiveSnapshots)
+	registration := canonicalKeyValues(decodedRegistrationSnapshots)
 	return canonicalSnapshotPayload{
-		TournamentID: snapshot.TournamentID,
-		SourceMTTID:  snapshot.SourceMTTID,
-		GameType:     snapshot.GameType,
-		Keys:         snapshot.Keys,
-		UserInfo:     userInfo,
-		Alive:        canonicalAliveRows(snapshot.Alive),
-		Died:         append([]string(nil), snapshot.Died...),
+		TournamentID:         snapshot.TournamentID,
+		SourceMTTID:          snapshot.SourceMTTID,
+		GameType:             snapshot.GameType,
+		RuntimeState:         snapshot.RuntimeState,
+		QuietPeriodSatisfied: snapshot.QuietPeriodSatisfied,
+		Keys:                 snapshot.Keys,
+		UserInfo:             userInfo,
+		Registration:         registration,
+		Alive:                canonicalAliveRows(snapshot.Alive),
+		Died:                 append([]string(nil), snapshot.Died...),
 	}
+}
+
+func canonicalKeyValues(values map[string]map[string]any) []canonicalKeyValue {
+	items := make([]canonicalKeyValue, 0, len(values))
+	for key, value := range values {
+		items = append(items, canonicalKeyValue{Key: key, Value: value})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Key < items[j].Key
+	})
+	return items
 }
 
 type canonicalRowsPayload struct {

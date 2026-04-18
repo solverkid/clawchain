@@ -146,6 +146,17 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
     ]
     smoke_table_count = table_count_for_players(args.players, args.table_size)
     medium_table_count = table_count_for_players(args.medium_players, args.table_size)
+    burst_tournament_id = "phase3-early-table-burst"
+    burst_player_count = args.early_table_count * args.table_size
+    burst_hand_events = [
+        build_hand_event(
+            tournament_id=burst_tournament_id,
+            hand_no=hand_no,
+            player_count=burst_player_count,
+            table_size=args.table_size,
+        )
+        for hand_no in range(1, args.early_table_count + 1)
+    ]
 
     return {
         "schema_version": "poker_mtt.phase2_load.v1",
@@ -171,9 +182,16 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
             page_size=args.page_size,
         ),
         "early_table_burst": {
+            "tournament_id": burst_tournament_id,
             "table_count": args.early_table_count,
             "shape": "one_completed_hand_per_table_burst",
             "expected_min_hand_events": args.early_table_count,
+            "completed_hand_event_count": len(burst_hand_events),
+            "first_hand_id": burst_hand_events[0]["identity"]["hand_id"],
+            "last_hand_id": burst_hand_events[-1]["identity"]["hand_id"],
+            "hand_event_checksum_root": forecast_engine._hash_sequence(
+                [{"hand_id": event["identity"]["hand_id"], "checksum": event["checksum"]} for event in burst_hand_events]
+            ),
             "estimated_players_at_nine_max": args.early_table_count * args.table_size,
         },
         "observability_fields": list(forecast_engine.POKER_MTT_OBSERVABILITY_FIELDS),

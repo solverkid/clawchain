@@ -155,7 +155,12 @@ def test_poker_mtt_phase2_beta_gate_runs_evidence_to_anchor_query_confirmation()
             settlement_batch["id"],
             now=datetime(2026, 4, 10, 12, 1, 0, tzinfo=timezone.utc),
         )
-        assert len(ready_batch["anchor_payload_json"]["miner_reward_rows"]) == 2
+        anchor_artifacts = await repo.list_artifacts_for_entity("settlement_batch", ready_batch["id"])
+        anchor_rows = forecast_engine.resolve_settlement_anchor_reward_rows(
+            ready_batch["anchor_payload_json"],
+            anchor_artifacts,
+        )
+        assert len(anchor_rows) == 2
         assert ready_batch["anchor_payload_json"]["miner_reward_rows_root"].startswith("sha256:")
 
         submitted_batch = await service.submit_anchor_job(

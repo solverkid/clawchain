@@ -1203,8 +1203,43 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 - sidecar HTTP 的 start/get-room/join/reentry/cancel 可以按 idempotency key retry；bet/action 类调用不能自动 retry。
 - non-mock 30-player gate 需要硬断言：30 joined、30 ranking、30 users sent actions、1 survivor、29 finished/eliminated、0 pending，且 WS errors 只允许 bust/kick 后的已知 close reason。
 - donor token verify 缺 miner binding 时只能生成 local harness identity，不得进入 reward-bound path。
+- staging/manual release gate 使用 `make test-poker-mtt-phase3-heavy`，其 donor 侧输出会归档到 `artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json`。
 
 对应 canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
+
+2026-04-18 已落地的 projector 部分:
+
+- Go `pokermtt/projector` 生成的 final ranking payload 已和 FastAPI schema 通过同一 golden fixture 校验。
+- Mining-service final-ranking projection endpoint 已按 `projection_id` 写 artifact marker；同 root replay 返回已存在结果，不同 root 返回 409。
+- Projection 锁定时间来自 payload `locked_at`，不会因 admin request 到达时间漂移。
+
+2026-04-18 已落地的 finalizer donor-parity 部分:
+
+- `RedisStore.ReadStableFinalizationInput` 会读取 stable Redis live ranking，并可选叠加 registration/waitlist source。
+- `Finalizer.FinalizeWithRegistration` 会把 registration-only waiting/no-show 用户写入 final archive，标记为 `waiting_no_show` / `pending` / `snapshot_found=false`，但不进入 reward-bearing rank。
+- Finalizer 支持可选 terminal-or-quiet barrier、expected entrant count、alive/died/waiting count 和 total chip drift tolerance。
+
+2026-04-18 已落地的 auth / reward identity 部分:
+
+- donor `/token_verify` 不带 miner binding 时，Go authadapter 会把 principal 标记为 `AuthSourceDonorTokenVerify` + `IsSynthetic=true`，miner address 只能是 `claw1local-*` harness identity。
+- `claw1local-*` 可以完成本地 WS join/action/finalizer harness，但 mining-service final projection 会把它标记为 `reward_identity_not_bound`，不会给 locked/anchorable reward row。
+- mining-service `miners` row 现在保存 Poker MTT durable identity 字段，并在 reward-window build 时重新读取当前 miner identity；projection 后被 revoke/expire 的 identity 也会被窗口选择跳过。
+- admin routes 绑定 external host 或 non-local runtime 时必须有 bearer admin auth；sidecar/projector 对 401/403 应按永久配置/auth 错误处理，不做无限 retry。
+
+2026-04-18 已落地的 MQ / evidence recovery 部分:
+
+- completed-hand ingest 会把 donor RocketMQ source 映射为 checkpoint：`topic`、`queue`、`consumer_group`、`offset`、`biz_id`、`message_id`、`hand_id`、`replay_root`、`lag_messages`。
+- inserted / duplicate / updated / stale / conflict / dlq 都会推进 checkpoint，因此 crash 后重放同一手牌可以补齐 checkpoint，不会重复写 reward input。
+- same-version checksum mismatch 会落 durable conflict/manual-review，malformed payload 会落 DLQ；两者都会阻断 reward-ready evidence。
+- `poker_mtt_consumer_checkpoint_manifest` 现在进入 tournament evidence root，hand history 和 checkpoint 是 required；hidden/HUD 只能按 policy 降级为 `accepted_degraded`。
+- evidence artifact ID 带 manifest root，旧 evidence root 不会被 rebuild 覆盖。
+
+2026-04-18 已落地的 Phase 3 gate / artifact 部分:
+
+- `make test-poker-mtt-phase3-fast` 跑本地 unit/contract gate，不依赖 donor runtime。
+- `make test-poker-mtt-phase3-ops` 跑 sidecar retry、本地 load-contract 和 DB-load shape gate。
+- `make test-poker-mtt-phase3-heavy` 需要真实 donor sidecar/runtime、Postgres URL 和已创建的 settlement batch id；它会跑 30-player explicit join + WS random legal action + finish validation，并用 `tee` 写出 summary artifact。
+- heavy gate 的 sidecar summary 必须证明当前 ranking 已下发、动作筹码来自 WS 下发的合法 choices、比赛进入 finished 状态、最终 standings 为 1 alive / 29 died / 0 pending。
 
 ### 18.8 Git 排除口径
 
