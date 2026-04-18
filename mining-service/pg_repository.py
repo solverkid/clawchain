@@ -14,6 +14,7 @@ from models import (
     forecast_task_runs,
     forecast_submissions,
     reward_windows,
+    poker_mtt_budget_ledgers,
     settlement_batches,
     anchor_jobs,
     artifacts,
@@ -79,6 +80,34 @@ def _reward_window_values(reward_window: dict) -> dict:
     values = deepcopy(reward_window)
     for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
         if field in values and values[field] is not None:
+            values[field] = _maybe_dt(values[field])
+    return values
+
+
+def _poker_mtt_budget_ledger_values(row: dict, *, created_at: datetime | str | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    values = deepcopy(row)
+    budget_source_id = values.get("budget_source_id")
+    emission_epoch_id = values.get("emission_epoch_id")
+    reward_window_id = values.get("reward_window_id")
+    if not budget_source_id:
+        raise ValueError("missing poker mtt budget_source_id")
+    if not emission_epoch_id:
+        raise ValueError("missing poker mtt emission_epoch_id")
+    if not reward_window_id:
+        raise ValueError("missing poker mtt budget reward_window_id")
+    values["id"] = values.get("id") or f"poker_mtt_budget:{budget_source_id}:{emission_epoch_id}:{reward_window_id}"
+    values["lane"] = values.get("lane") or "poker_mtt_daily"
+    for field in ("requested_amount", "approved_amount", "paid_amount", "forfeited_amount", "rolled_amount"):
+        values[field] = int(values.get(field) or 0)
+    values["state"] = values.get("state") or "reserved"
+    values["policy_bundle_version"] = values.get("policy_bundle_version") or "poker_mtt_v1"
+    if not values.get("budget_root"):
+        raise ValueError("missing poker mtt budget_root")
+    values["created_at"] = created_at or values.get("created_at") or now
+    values["updated_at"] = values.get("updated_at") or now
+    for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
+        if values.get(field) is not None:
             values[field] = _maybe_dt(values[field])
     return values
 
@@ -279,8 +308,9 @@ def _poker_mtt_multiplier_snapshot_values(row: dict, *, created_at: datetime | s
     values["policy_bundle_version"] = values.get("policy_bundle_version") or "poker_mtt_v1"
     values["created_at"] = created_at or values.get("created_at") or now
     values["updated_at"] = values.get("updated_at") or now
-    for field in ("created_at", "updated_at"):
-        values[field] = _maybe_dt(values[field])
+    for field in ("effective_window_start_at", "effective_window_end_at", "created_at", "updated_at"):
+        if field in values and values[field] is not None:
+            values[field] = _maybe_dt(values[field])
     return values
 
 
@@ -341,6 +371,16 @@ def _hold_entry_row_to_dict(row) -> dict | None:
 
 
 def _reward_window_row_to_dict(row) -> dict | None:
+    data = _row_to_dict(row)
+    if not data:
+        return None
+    for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
+        if field in data and isinstance(data[field], datetime):
+            data[field] = data[field].isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _poker_mtt_budget_ledger_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
@@ -455,7 +495,7 @@ def _poker_mtt_multiplier_snapshot_row_to_dict(row) -> dict | None:
     data = _row_to_dict(row)
     if not data:
         return None
-    for field in ("created_at", "updated_at"):
+    for field in ("effective_window_start_at", "effective_window_end_at", "created_at", "updated_at"):
         if field in data and isinstance(data[field], datetime):
             data[field] = data[field].isoformat().replace("+00:00", "Z")
     return data
@@ -575,6 +615,18 @@ class PostgresRepository:
             )
             await conn.execute(
                 text("ALTER TABLE reward_windows ADD COLUMN IF NOT EXISTS canonical_root VARCHAR NULL")
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_budget_epoch "
+                    "ON poker_mtt_budget_ledgers (budget_source_id, emission_epoch_id)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_poker_mtt_budget_reward_window "
+                    "ON poker_mtt_budget_ledgers (reward_window_id)"
+                )
             )
             await conn.execute(
                 text("ALTER TABLE settlement_batches ADD COLUMN IF NOT EXISTS anchor_payload_json JSONB NULL")
@@ -720,6 +772,18 @@ class PostgresRepository:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_multiplier_miner_updated "
                     "ON poker_mtt_multiplier_snapshots (miner_address, updated_at)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE poker_mtt_multiplier_snapshots "
+                    "ADD COLUMN IF NOT EXISTS effective_window_start_at TIMESTAMPTZ NULL"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE poker_mtt_multiplier_snapshots "
+                    "ADD COLUMN IF NOT EXISTS effective_window_end_at TIMESTAMPTZ NULL"
                 )
             )
             await conn.execute(
@@ -945,6 +1009,58 @@ class PostgresRepository:
                 )
             )
             return [_reward_window_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_budget_ledger(self, row: dict) -> dict:
+        existing = None
+        if row.get("id"):
+            async with self.engine.connect() as conn:
+                saved = await conn.execute(
+                    select(poker_mtt_budget_ledgers).where(poker_mtt_budget_ledgers.c.id == row["id"])
+                )
+                existing = _poker_mtt_budget_ledger_row_to_dict(saved.first())
+        values = _poker_mtt_budget_ledger_values(row, created_at=existing.get("created_at") if existing else None)
+        async with self.engine.begin() as conn:
+            existing_id = await conn.execute(
+                select(poker_mtt_budget_ledgers.c.id).where(poker_mtt_budget_ledgers.c.id == values["id"])
+            )
+            if existing_id.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_budget_ledgers)
+                    .where(poker_mtt_budget_ledgers.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_budget_ledgers).values(**values))
+        async with self.engine.connect() as conn:
+            saved = await conn.execute(
+                select(poker_mtt_budget_ledgers).where(poker_mtt_budget_ledgers.c.id == values["id"])
+            )
+            return _poker_mtt_budget_ledger_row_to_dict(saved.first()) or values
+
+    async def list_poker_mtt_budget_ledgers(
+        self,
+        *,
+        budget_source_id: str | None = None,
+        emission_epoch_id: str | None = None,
+        reward_window_id: str | None = None,
+        lane: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_budget_ledgers)
+        if budget_source_id is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.budget_source_id == budget_source_id)
+        if emission_epoch_id is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.emission_epoch_id == emission_epoch_id)
+        if reward_window_id is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.reward_window_id == reward_window_id)
+        if lane is not None:
+            query = query.where(poker_mtt_budget_ledgers.c.lane == lane)
+        query = query.order_by(
+            poker_mtt_budget_ledgers.c.created_at.asc(),
+            poker_mtt_budget_ledgers.c.id.asc(),
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_poker_mtt_budget_ledger_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_settlement_batch(self, settlement_batch: dict) -> dict:
         values = _settlement_batch_values(settlement_batch)

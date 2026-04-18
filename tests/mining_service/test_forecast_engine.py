@@ -162,14 +162,18 @@ def test_models_expose_deterministic_settlement_columns():
     task_columns = set(models.forecast_task_runs.c.keys())
     reward_window_columns = set(models.reward_windows.c.keys())
     settlement_batch_columns = set(models.settlement_batches.c.keys())
+    budget_ledger_columns = set(models.poker_mtt_budget_ledgers.c.keys())
     poker_mtt_final_ranking_columns = set(models.poker_mtt_final_rankings.c.keys())
     poker_mtt_result_columns = set(models.poker_mtt_result_entries.c.keys())
+    poker_mtt_multiplier_columns = set(models.poker_mtt_multiplier_snapshots.c.keys())
 
     assert {"task_state", "degraded_reason", "void_reason", "resolution_source"} <= task_columns
     assert {"policy_bundle_version", "canonical_root"} <= reward_window_columns
     assert "policy_bundle_version" in settlement_batch_columns
+    assert {"budget_source_id", "emission_epoch_id", "approved_amount", "budget_root"} <= budget_ledger_columns
     assert {"rank_state", "chip_delta", "locked_at", "anchorable_at"} <= poker_mtt_final_ranking_columns
     assert {"rank_state", "chip_delta", "locked_at", "anchorable_at"} <= poker_mtt_result_columns
+    assert {"effective_window_start_at", "effective_window_end_at"} <= poker_mtt_multiplier_columns
     assert (
         normalize_database_url("postgresql+asyncpg://clawchain:pw@127.0.0.1:55432/clawchain")
         == "postgresql+asyncpg://clawchain:pw@127.0.0.1:55432/clawchain"
@@ -1832,12 +1836,18 @@ def test_build_poker_mtt_reward_window_rejects_no_positive_weights():
         assert reward_window["state"] == "no_positive_weight"
         assert reward_window["total_reward_amount"] == 0
         assert reward_window["settlement_batch_id"] is None
-        assert artifact["payload_json"]["budget_disposition"] == {
+        budget_disposition = artifact["payload_json"]["budget_disposition"]
+        assert {
+            key: budget_disposition[key]
+            for key in ("forfeited_amount", "paid_amount", "requested_reward_pool_amount", "state")
+        } == {
             "forfeited_amount": 100,
             "paid_amount": 0,
             "requested_reward_pool_amount": 100,
             "state": "no_positive_weight",
         }
+        assert budget_disposition["budget_enforcement"] == "disabled"
+        assert budget_disposition["budget_root"].startswith("sha256:")
         assert all(row["gross_reward_amount"] == 0 for row in artifact["payload_json"]["miner_reward_rows"])
 
     import asyncio

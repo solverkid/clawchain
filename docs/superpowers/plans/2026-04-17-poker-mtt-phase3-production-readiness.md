@@ -303,27 +303,35 @@ Commit: `git commit -m "feat(settlement): confirm anchors through external query
 - Modify: `mining-service/forecast_engine.py`
 - Test: `tests/mining_service/test_poker_mtt_reward_economics.py`
 
-- [ ] **Step 1: Write failing economics tests**
+- [x] **Step 1: Write failing economics tests**
 
 Budget source missing/oversized rejects; daily plus weekly cannot exceed same emission slice; stable performer versus lucky spike behaves according to versioned aggregation policy; multiplier cannot affect same-window payout.
 
-- [ ] **Step 2: Add budget ledger**
+- [x] **Step 2: Add budget ledger**
 
 Track `budget_source_id`, emission epoch/range, lane caps, daily/weekly split, unused/forfeited/rolled amount, and budget root.
 
-- [ ] **Step 3: Freeze aggregation policy**
+- [x] **Step 3: Freeze aggregation policy**
 
 Replace implicit unversioned `max()` with explicit policy, preferably capped top-K or trimmed mean unless product freezes best-of-window.
 
-- [ ] **Step 4: Add effective-window multiplier**
+- [x] **Step 4: Add effective-window multiplier**
 
 Store before/after/effective window snapshots. Reward windows use prior finalized multiplier snapshots only.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_reward_economics.py tests/mining_service/test_poker_mtt_reward_gating.py`
 
 Commit: `git commit -m "feat(pokermtt): harden reward economics"`
+
+2026-04-18 implementation note:
+
+- Added `tests/mining_service/test_poker_mtt_reward_economics.py` covering missing/oversized budget config, shared daily/weekly emission slices, capped aggregation against lucky spike, and next-window multiplier snapshot timing.
+- Added `poker_mtt_budget_ledgers` to models, FakeRepository, and PostgresRepository with budget source, emission epoch, lane, reward window, settlement batch, requested/approved/paid/forfeited/rolled amounts, and `budget_root`.
+- `build_poker_mtt_reward_window` now reserves budget before settlement when enforcement is enabled and rejects daily/weekly windows that exceed the same configured epoch slice.
+- Reward-window projection now records `aggregation_policy_version`, `budget_disposition`, and `budget_root`; default aggregation is `capped_top3_mean_v1`, with `max_score_v1` only available explicitly.
+- `poker_mtt_multiplier_snapshots` now persist `effective_window_start_at` and `effective_window_end_at` as the next UTC daily window after source result lock/completion.
 
 ### Task 8: Promote Sidecar Finish And Observability Gates
 

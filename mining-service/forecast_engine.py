@@ -26,6 +26,7 @@ POKER_MTT_PROJECTION_ROOT_FIELDS = (
     "final_ranking_root",
     "evidence_root",
     "multiplier_snapshot_root",
+    "budget_root",
     "miner_reward_rows_root",
     "projection_root",
 )
@@ -86,6 +87,11 @@ class ForecastSettings:
     poker_mtt_weekly_policy_bundle_version: str = "poker_mtt_weekly_policy_v1"
     poker_mtt_projection_artifact_page_size: int = 5000
     poker_mtt_reward_window_reconcile_lookback_days: int = 35
+    poker_mtt_budget_enforcement_enabled: bool = False
+    poker_mtt_budget_source_id: str | None = None
+    poker_mtt_emission_epoch_id: str | None = None
+    poker_mtt_emission_epoch_budget_amount: int = 0
+    poker_mtt_reward_aggregation_policy_version: str = "capped_top3_mean_v1"
     baseline_pm_weight: float = 0.85
     baseline_bin_weight: float = 0.15
     min_p_yes_bps: int = 1500
@@ -899,6 +905,7 @@ def _poker_mtt_projection_roots(payload: dict, *, reward_window_id: str) -> dict
         "final_ranking_root": payload["final_ranking_root"],
         "evidence_root": payload["evidence_root"],
         "multiplier_snapshot_root": payload["multiplier_snapshot_root"],
+        "budget_root": payload["budget_root"],
         "projection_root": payload["projection_root"],
     }
 
@@ -909,6 +916,72 @@ def _default_poker_mtt_policy_bundle_version(settings: ForecastSettings, lane: s
     if lane == "poker_mtt_weekly":
         return getattr(settings, "poker_mtt_weekly_policy_bundle_version", "poker_mtt_weekly_policy_v1")
     return POLICY_BUNDLE_VERSION
+
+
+def _poker_mtt_multiplier_effective_window(value: datetime) -> tuple[datetime, datetime]:
+    current = as_utc_datetime(value).replace(microsecond=0)
+    next_start = datetime(current.year, current.month, current.day, tzinfo=timezone.utc) + timedelta(days=1)
+    return next_start, next_start + timedelta(days=1)
+
+
+def _poker_mtt_reward_aggregation_policy_version(settings: ForecastSettings) -> str:
+    return getattr(settings, "poker_mtt_reward_aggregation_policy_version", "capped_top3_mean_v1") or "capped_top3_mean_v1"
+
+
+def _poker_mtt_aggregate_reward_weights(
+    selected_results: list[dict],
+    *,
+    policy_version: str,
+) -> tuple[dict[str, float], dict[str, int], dict[str, str]]:
+    grouped: dict[str, list[dict]] = {}
+    for result in selected_results:
+        economic_unit_id = result.get("economic_unit_id") or result["miner_address"]
+        grouped.setdefault(economic_unit_id, []).append(result)
+
+    score_weights: dict[str, float] = {}
+    submission_counts: dict[str, int] = {}
+    representative_miners: dict[str, str] = {}
+    for economic_unit_id, rows in grouped.items():
+        scored_rows = sorted(
+            (
+                {
+                    "miner_address": row["miner_address"],
+                    "score": max(0.0, float(row.get("total_score", 0.0) or 0.0)),
+                }
+                for row in rows
+            ),
+            key=lambda item: (-item["score"], item["miner_address"]),
+        )
+        submission_counts[economic_unit_id] = len(scored_rows)
+        representative_miners[economic_unit_id] = scored_rows[0]["miner_address"]
+        if policy_version == "max_score_v1":
+            score_weights[economic_unit_id] = scored_rows[0]["score"]
+        elif policy_version == "capped_top3_mean_v1":
+            top_scores = [item["score"] for item in scored_rows[:3]]
+            score_weights[economic_unit_id] = round(sum(top_scores) / max(1, len(top_scores)), 6)
+        else:
+            raise ValueError(f"unsupported poker mtt reward aggregation policy: {policy_version}")
+    return score_weights, submission_counts, representative_miners
+
+
+def _poker_mtt_budget_root(payload: dict) -> str:
+    return _hash_payload(
+        {
+            "budget_source_id": payload.get("budget_source_id"),
+            "emission_epoch_id": payload.get("emission_epoch_id"),
+            "lane": payload.get("lane"),
+            "reward_window_id": payload.get("reward_window_id"),
+            "window_start_at": payload.get("window_start_at"),
+            "window_end_at": payload.get("window_end_at"),
+            "requested_amount": int(payload.get("requested_amount") or 0),
+            "approved_amount": int(payload.get("approved_amount") or 0),
+            "paid_amount": int(payload.get("paid_amount") or 0),
+            "forfeited_amount": int(payload.get("forfeited_amount") or 0),
+            "rolled_amount": int(payload.get("rolled_amount") or 0),
+            "state": payload.get("state"),
+            "policy_bundle_version": payload.get("policy_bundle_version"),
+        }
+    )
 
 
 def _expected_settlement_anchor(anchor_job: dict, settlement_batch: dict) -> dict:
@@ -2661,6 +2734,7 @@ class ForecastMiningService:
         if float(multiplier_before) == float(multiplier_after):
             return None
         current = as_utc_datetime(now).replace(microsecond=0)
+        effective_window_start, effective_window_end = _poker_mtt_multiplier_effective_window(current)
         return await self.repo.save_poker_mtt_multiplier_snapshot(
             {
                 "id": f"poker_mtt_multiplier:{source_result_id}",
@@ -2669,6 +2743,8 @@ class ForecastMiningService:
                 "multiplier_before": float(multiplier_before),
                 "multiplier_after": float(multiplier_after),
                 "rolling_score": rolling_score,
+                "effective_window_start_at": isoformat_z(effective_window_start),
+                "effective_window_end_at": isoformat_z(effective_window_end),
                 "policy_bundle_version": policy_bundle_version,
                 "created_at": isoformat_z(current),
                 "updated_at": isoformat_z(current),
@@ -3247,6 +3323,101 @@ class ForecastMiningService:
             "entries": saved_rows,
         }
 
+    async def _prepare_poker_mtt_budget_ledger(
+        self,
+        *,
+        budget_disposition: dict,
+        lane: str,
+        reward_window_id: str,
+        window_start_at: datetime,
+        window_end_at: datetime,
+        policy_bundle_version: str,
+        current: datetime,
+    ) -> tuple[dict, dict | None]:
+        requested_amount = int(budget_disposition.get("requested_reward_pool_amount") or 0)
+        paid_amount = int(budget_disposition.get("paid_amount") or 0)
+        forfeited_amount = int(budget_disposition.get("forfeited_amount") or 0)
+        approved_amount = paid_amount
+        base_payload = {
+            "budget_source_id": getattr(self.settings, "poker_mtt_budget_source_id", None) or "unbudgeted",
+            "emission_epoch_id": getattr(self.settings, "poker_mtt_emission_epoch_id", None) or "unbudgeted",
+            "lane": lane,
+            "reward_window_id": reward_window_id,
+            "window_start_at": isoformat_z(window_start_at),
+            "window_end_at": isoformat_z(window_end_at),
+            "requested_amount": requested_amount,
+            "approved_amount": approved_amount,
+            "paid_amount": paid_amount,
+            "forfeited_amount": forfeited_amount,
+            "rolled_amount": 0,
+            "state": budget_disposition.get("state") or "paid",
+            "policy_bundle_version": policy_bundle_version,
+        }
+
+        if not getattr(self.settings, "poker_mtt_budget_enforcement_enabled", False):
+            budget_root = _poker_mtt_budget_root(base_payload)
+            return (
+                {
+                    **budget_disposition,
+                    "budget_source_id": None,
+                    "emission_epoch_id": None,
+                    "budget_root": budget_root,
+                    "budget_enforcement": "disabled",
+                },
+                None,
+            )
+
+        budget_source_id = getattr(self.settings, "poker_mtt_budget_source_id", None)
+        emission_epoch_id = getattr(self.settings, "poker_mtt_emission_epoch_id", None)
+        epoch_budget_amount = int(getattr(self.settings, "poker_mtt_emission_epoch_budget_amount", 0) or 0)
+        if not budget_source_id:
+            raise ValueError("poker mtt budget_source_id is required when budget enforcement is enabled")
+        if not emission_epoch_id:
+            raise ValueError("poker mtt emission_epoch_id is required when budget enforcement is enabled")
+        if epoch_budget_amount <= 0:
+            raise ValueError("poker mtt emission epoch budget must be positive")
+
+        existing_ledgers = await self.repo.list_poker_mtt_budget_ledgers(
+            budget_source_id=budget_source_id,
+            emission_epoch_id=emission_epoch_id,
+        )
+        prior_approved_amount = sum(
+            int(row.get("approved_amount") or 0)
+            for row in existing_ledgers
+            if row.get("reward_window_id") != reward_window_id and row.get("state") not in {"cancelled", "rejected"}
+        )
+        if prior_approved_amount + approved_amount > epoch_budget_amount:
+            raise ValueError("poker mtt reward window exceeds emission epoch budget")
+
+        ledger_payload = {
+            **base_payload,
+            "budget_source_id": budget_source_id,
+            "emission_epoch_id": emission_epoch_id,
+        }
+        budget_root = _poker_mtt_budget_root(ledger_payload)
+        ledger = {
+            "id": f"poker_mtt_budget:{budget_source_id}:{emission_epoch_id}:{reward_window_id}",
+            **ledger_payload,
+            "settlement_batch_id": None,
+            "budget_root": budget_root,
+            "created_at": isoformat_z(current),
+            "updated_at": isoformat_z(current),
+        }
+        return (
+            {
+                **budget_disposition,
+                "budget_source_id": budget_source_id,
+                "emission_epoch_id": emission_epoch_id,
+                "emission_epoch_budget_amount": epoch_budget_amount,
+                "approved_amount": approved_amount,
+                "budget_used_before": prior_approved_amount,
+                "budget_remaining_after": epoch_budget_amount - prior_approved_amount - approved_amount,
+                "budget_root": budget_root,
+                "budget_enforcement": "enabled",
+            },
+            ledger,
+        )
+
     async def build_poker_mtt_reward_window(
         self,
         *,
@@ -3285,6 +3456,7 @@ class ForecastMiningService:
             or (existing_window.get("policy_bundle_version") if existing_window else None)
             or _default_poker_mtt_policy_bundle_version(self.settings, lane)
         )
+        aggregation_policy_version = _poker_mtt_reward_aggregation_policy_version(self.settings)
         window_inputs = await self.repo.load_poker_mtt_reward_window_inputs(
             lane=lane,
             window_start_at=window_start,
@@ -3340,7 +3512,12 @@ class ForecastMiningService:
                 existing_projection_payload.get("input_snapshot_root") == input_snapshot_root
                 and existing_projection_payload.get("reward_pool_amount") == reward_pool_amount
                 and existing_projection_payload.get("policy_bundle_version") == resolved_policy_bundle_version
+                and existing_projection_payload.get("aggregation_policy_version") == aggregation_policy_version
                 and existing_projection_payload.get("include_provisional") is include_provisional
+                and (
+                    not getattr(self.settings, "poker_mtt_budget_enforcement_enabled", False)
+                    or existing_projection_payload.get("budget_root")
+                )
                 and (
                     existing_window.get("settlement_batch_id")
                     or existing_window.get("state") == "no_positive_weight"
@@ -3350,22 +3527,10 @@ class ForecastMiningService:
 
         tournament_ids = sorted({result["tournament_id"] for result in selected_results})
 
-        score_weights: dict[str, float] = {}
-        submission_counts: dict[str, int] = {}
-        representative_miners: dict[str, str] = {}
-        for result in selected_results:
-            economic_unit_id = result.get("economic_unit_id") or result["miner_address"]
-            candidate_weight = max(0.0, float(result.get("total_score", 0.0) or 0.0))
-            previous_weight = score_weights.get(economic_unit_id)
-            if economic_unit_id not in representative_miners or candidate_weight > previous_weight or (
-                candidate_weight == previous_weight and result["miner_address"] < representative_miners[economic_unit_id]
-            ):
-                representative_miners[economic_unit_id] = result["miner_address"]
-            submission_counts[economic_unit_id] = submission_counts.get(economic_unit_id, 0) + 1
-            score_weights[economic_unit_id] = max(
-                score_weights.get(economic_unit_id, 0.0),
-                candidate_weight,
-            )
+        score_weights, submission_counts, representative_miners = _poker_mtt_aggregate_reward_weights(
+            selected_results,
+            policy_version=aggregation_policy_version,
+        )
 
         economic_unit_ids = sorted(score_weights)
         miner_addresses = sorted(representative_miners[economic_unit_id] for economic_unit_id in economic_unit_ids)
@@ -3409,6 +3574,15 @@ class ForecastMiningService:
                             "updated_at": isoformat_z(current),
                         }
                     )
+        budget_disposition, budget_ledger = await self._prepare_poker_mtt_budget_ledger(
+            budget_disposition=budget_disposition,
+            lane=lane,
+            reward_window_id=resolved_reward_window_id,
+            window_start_at=window_start,
+            window_end_at=window_end,
+            policy_bundle_version=resolved_policy_bundle_version,
+            current=current,
+        )
         miner_reward_rows = [
             {
                 "miner_address": representative_miners[economic_unit_id],
@@ -3496,6 +3670,8 @@ class ForecastMiningService:
             reward_window_changed = False
         else:
             saved = await self.repo.save_reward_window(candidate_window)
+        if budget_ledger is not None:
+            await self.repo.save_poker_mtt_budget_ledger(budget_ledger)
         await self._upsert_reward_window_artifact(saved, current)
         poker_mtt_result_ids = sorted(result["id"] for result in selected_results)
         projection_payload = {
@@ -3505,6 +3681,7 @@ class ForecastMiningService:
             "window_end_at": saved["window_end_at"],
             "reward_pool_amount": reward_pool_amount,
             "policy_bundle_version": resolved_policy_bundle_version,
+            "aggregation_policy_version": aggregation_policy_version,
             "include_provisional": include_provisional,
             "tournament_ids": tournament_ids,
             "poker_mtt_result_ids_root": _hash_sequence(poker_mtt_result_ids),
@@ -3512,6 +3689,7 @@ class ForecastMiningService:
             "input_snapshot_root": input_snapshot_root,
             "miner_reward_rows": miner_reward_rows,
             "budget_disposition": budget_disposition,
+            "budget_root": budget_disposition["budget_root"],
             "final_ranking_root": _hash_sequence(final_ranking_refs),
             "evidence_root": _hash_sequence(evidence_refs),
             "rating_snapshot_root": _hash_sequence(rating_snapshot_rows),
@@ -3540,6 +3718,14 @@ class ForecastMiningService:
         ):
             await self._build_settlement_batches(current)
         returned = await self.repo.get_reward_window(saved["id"]) or saved
+        if budget_ledger is not None and returned.get("settlement_batch_id") != budget_ledger.get("settlement_batch_id"):
+            budget_ledger = await self.repo.save_poker_mtt_budget_ledger(
+                {
+                    **budget_ledger,
+                    "settlement_batch_id": returned.get("settlement_batch_id"),
+                    "updated_at": isoformat_z(current),
+                }
+            )
         return _summarize_reward_window_response(returned, projection_artifact)
 
     async def record_poker_mtt_correction(

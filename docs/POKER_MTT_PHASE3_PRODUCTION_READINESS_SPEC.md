@@ -178,9 +178,9 @@ Current blockers:
 - 2026-04-18 Task 5 已把 20k check 提升到 real service path：`build_poker_mtt_reward_window()` 通过 bulk input snapshot 覆盖 300 / 20k rows、响应体大小、page artifacts 和 root reconstruction。
 - Reward-window build 的 per-result final-ranking lookup、per-miner reward identity lookup、per-miner rating snapshot lookup 已移除；Postgres repository 有 bulk/join input path，FakeRepository 有同等 contract。
 - Automatic reconcile 已改成 lookback-bounded closed-window candidate query，不再扫描全部历史 poker MTT results。
-- Reward pool amount is direct input/config, not yet tied to a production budget ledger.
-- Current aggregation uses max score per economic unit, which may over-reward one lucky window result.
-- Multiplier can update immediately, creating same-window feedback risk.
+- Reward pool amount is now tied to an optional production budget ledger when `poker_mtt_budget_enforcement_enabled` is on.
+- Window aggregation is versioned. Default `capped_top3_mean_v1` reduces lucky single-result spikes while preserving backward-compatible `max_score_v1` as an explicit policy.
+- Multiplier snapshots now record the next UTC daily effective window, so payout/reputation consumers can avoid same-window feedback.
 
 Acceptance:
 
@@ -190,10 +190,10 @@ Acceptance:
 - Root reconstruction validates exactly 20k rows from page artifacts.
 - Local/staging RSS delta under 512 MB; p50/p95/p99 latency captured in artifacts.
 - Automatic reconcile uses bounded/indexed closed-window query and has EXPLAIN evidence.
-- Budget ledger exists with `budget_source_id`, emission epoch/range, daily/weekly split, unused/forfeited/rolled amount, and lane cap.
-- Daily plus weekly payouts cannot exceed the configured emission slice.
-- Window aggregation policy is explicit and versioned. The default should not silently be `max()` unless product explicitly freezes "best-of-window".
-- Multiplier snapshots have `effective_window_id` or `effective_at` and cannot affect the same window's payout.
+- Budget ledger exists with `budget_source_id`, `emission_epoch_id`, lane, reward window, settlement batch, requested/approved/paid/forfeited/rolled amounts, and `budget_root`.
+- Daily plus weekly payouts share the same configured emission slice and reject over-budget windows before settlement.
+- Window aggregation policy is explicit and versioned. Default: `capped_top3_mean_v1`.
+- Multiplier snapshots have `effective_window_start_at` / `effective_window_end_at` and are treated as later-window inputs.
 
 2026-04-18 Task 5 closeout:
 
@@ -203,6 +203,14 @@ Acceptance:
 - Unchanged rebuilds compare `input_snapshot_root` and return the existing projection without reward-window update or artifact rewrite.
 - Main projection artifacts no longer need to inline 20k `poker_mtt_result_ids`; large responses return root/count/sample for oversized lists and page refs for reward rows.
 - Added `scripts/poker_mtt/run_phase3_db_load_check.sh` as the repeatable local/staging entry point for the Phase 3 load contract.
+
+2026-04-18 Task 7 closeout:
+
+- Added `poker_mtt_budget_ledgers` and repository APIs for budget reservations. Enforcement requires `budget_source_id`, `emission_epoch_id`, and a positive epoch budget before payout approval.
+- Daily and weekly Poker MTT windows now consume the same emission epoch slice; same reward window rebuilds are excluded from double-counting, while any other approved ledger in the epoch counts against the cap.
+- Reward-window projection artifacts now include `aggregation_policy_version`, `budget_disposition`, and `budget_root`. The default aggregation policy is `capped_top3_mean_v1`; `max_score_v1` is only available as an explicit policy.
+- `poker_mtt_multiplier_snapshots` now persist `effective_window_start_at` and `effective_window_end_at`, computed as the next UTC daily window after the source result is locked/completed.
+- Added focused economics tests for missing/oversized budgets, shared daily/weekly budget slices, stable grinder versus lucky spike aggregation, and multiplier effective-window timing.
 
 ### G5 - Settlement External Query And Bounded Anchor Artifacts
 

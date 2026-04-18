@@ -28,6 +28,15 @@ class MiningRepository(Protocol):
     async def save_reward_window(self, reward_window: dict) -> dict: ...
     async def get_reward_window(self, reward_window_id: str) -> dict | None: ...
     async def list_reward_windows(self) -> list[dict]: ...
+    async def save_poker_mtt_budget_ledger(self, row: dict) -> dict: ...
+    async def list_poker_mtt_budget_ledgers(
+        self,
+        *,
+        budget_source_id: str | None = None,
+        emission_epoch_id: str | None = None,
+        reward_window_id: str | None = None,
+        lane: str | None = None,
+    ) -> list[dict]: ...
     async def save_settlement_batch(self, settlement_batch: dict) -> dict: ...
     async def get_settlement_batch(self, settlement_batch_id: str) -> dict | None: ...
     async def list_settlement_batches(self) -> list[dict]: ...
@@ -157,6 +166,7 @@ class FakeRepository:
         self._submissions: dict[tuple[str, str], dict] = {}
         self._hold_entries: dict[str, dict] = {}
         self._reward_windows: dict[str, dict] = {}
+        self._poker_mtt_budget_ledgers: dict[str, dict] = {}
         self._settlement_batches: dict[str, dict] = {}
         self._anchor_jobs: dict[str, dict] = {}
         self._artifacts: dict[str, dict] = {}
@@ -321,6 +331,33 @@ class FakeRepository:
             ),
             reverse=True,
         )
+        return items
+
+    async def save_poker_mtt_budget_ledger(self, row: dict) -> dict:
+        ledger = _normalize_poker_mtt_budget_ledger(row)
+        current = deepcopy(self._poker_mtt_budget_ledgers.get(ledger["id"], {}))
+        current.update(deepcopy(ledger))
+        self._poker_mtt_budget_ledgers[ledger["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_budget_ledgers(
+        self,
+        *,
+        budget_source_id: str | None = None,
+        emission_epoch_id: str | None = None,
+        reward_window_id: str | None = None,
+        lane: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_budget_ledgers.values()]
+        if budget_source_id is not None:
+            items = [item for item in items if item.get("budget_source_id") == budget_source_id]
+        if emission_epoch_id is not None:
+            items = [item for item in items if item.get("emission_epoch_id") == emission_epoch_id]
+        if reward_window_id is not None:
+            items = [item for item in items if item.get("reward_window_id") == reward_window_id]
+        if lane is not None:
+            items = [item for item in items if item.get("lane") == lane]
+        items.sort(key=lambda item: (item.get("created_at") or "", item.get("id") or ""))
         return items
 
     async def save_settlement_batch(self, settlement_batch: dict) -> dict:
@@ -1091,7 +1128,46 @@ def _normalize_poker_mtt_multiplier_snapshot(row: dict) -> dict:
         "multiplier_before": float(row.get("multiplier_before") or 1.0),
         "multiplier_after": float(row.get("multiplier_after") or 1.0),
         "rolling_score": row.get("rolling_score"),
+        "effective_window_start_at": row.get("effective_window_start_at"),
+        "effective_window_end_at": row.get("effective_window_end_at"),
         "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _normalize_poker_mtt_budget_ledger(row: dict) -> dict:
+    budget_source_id = row.get("budget_source_id")
+    emission_epoch_id = row.get("emission_epoch_id")
+    reward_window_id = row.get("reward_window_id")
+    if not budget_source_id:
+        raise ValueError("missing poker mtt budget_source_id")
+    if not emission_epoch_id:
+        raise ValueError("missing poker mtt emission_epoch_id")
+    if not reward_window_id:
+        raise ValueError("missing poker mtt budget reward_window_id")
+    requested_amount = int(row.get("requested_amount") or 0)
+    approved_amount = int(row.get("approved_amount") or 0)
+    paid_amount = int(row.get("paid_amount") or 0)
+    forfeited_amount = int(row.get("forfeited_amount") or 0)
+    rolled_amount = int(row.get("rolled_amount") or 0)
+    return {
+        "id": row.get("id") or f"poker_mtt_budget:{budget_source_id}:{emission_epoch_id}:{reward_window_id}",
+        "budget_source_id": budget_source_id,
+        "emission_epoch_id": emission_epoch_id,
+        "lane": row.get("lane") or "poker_mtt_daily",
+        "reward_window_id": reward_window_id,
+        "settlement_batch_id": row.get("settlement_batch_id"),
+        "window_start_at": row.get("window_start_at"),
+        "window_end_at": row.get("window_end_at"),
+        "requested_amount": requested_amount,
+        "approved_amount": approved_amount,
+        "paid_amount": paid_amount,
+        "forfeited_amount": forfeited_amount,
+        "rolled_amount": rolled_amount,
+        "state": row.get("state") or "reserved",
+        "policy_bundle_version": row.get("policy_bundle_version") or "poker_mtt_v1",
+        "budget_root": row.get("budget_root"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }

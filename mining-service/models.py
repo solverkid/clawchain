@@ -134,6 +134,32 @@ reward_windows = Table(
 )
 
 
+poker_mtt_budget_ledgers = Table(
+    "poker_mtt_budget_ledgers",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("budget_source_id", String, nullable=False),
+    Column("emission_epoch_id", String, nullable=False),
+    Column("lane", String, nullable=False),
+    Column("reward_window_id", String, nullable=False),
+    Column("settlement_batch_id", String, nullable=True),
+    Column("window_start_at", DateTime(timezone=True), nullable=False),
+    Column("window_end_at", DateTime(timezone=True), nullable=False),
+    Column("requested_amount", Integer, nullable=False, default=0),
+    Column("approved_amount", Integer, nullable=False, default=0),
+    Column("paid_amount", Integer, nullable=False, default=0),
+    Column("forfeited_amount", Integer, nullable=False, default=0),
+    Column("rolled_amount", Integer, nullable=False, default=0),
+    Column("state", String, nullable=False, default="reserved"),
+    Column("policy_bundle_version", String, nullable=False),
+    Column("budget_root", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_budget_epoch", "budget_source_id", "emission_epoch_id"),
+    Index("ix_poker_mtt_budget_reward_window", "reward_window_id"),
+)
+
+
 settlement_batches = Table(
     "settlement_batches",
     metadata,
@@ -450,6 +476,8 @@ poker_mtt_multiplier_snapshots = Table(
     Column("multiplier_before", Float, nullable=False),
     Column("multiplier_after", Float, nullable=False),
     Column("rolling_score", Float, nullable=True),
+    Column("effective_window_start_at", DateTime(timezone=True), nullable=True),
+    Column("effective_window_end_at", DateTime(timezone=True), nullable=True),
     Column("policy_bundle_version", String, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -574,6 +602,7 @@ TABLES = {
     "forecast_task_runs": forecast_task_runs,
     "forecast_submissions": forecast_submissions,
     "reward_windows": reward_windows,
+    "poker_mtt_budget_ledgers": poker_mtt_budget_ledgers,
     "settlement_batches": settlement_batches,
     "anchor_jobs": anchor_jobs,
     "artifacts": artifacts,
