@@ -1,9 +1,14 @@
-.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase3-ops lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
+.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase3-fast test-poker-mtt-phase3-ops test-poker-mtt-phase3-heavy lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
 ARENA_DATABASE_URL ?= postgres://arena:arena@127.0.0.1:55432/arena?sslmode=disable
 ARENA_TEST_DATABASE_URL ?= $(ARENA_DATABASE_URL)
+POKER_MTT_PHASE3_ARTIFACT_DIR ?= artifacts/poker-mtt/phase3
+POKER_MTT_PHASE3_POSTGRES_URL ?= $(CLAWCHAIN_DATABASE_URL)
+POKER_MTT_PHASE3_CLAWCHAIND ?= ./build/clawchaind
+POKER_MTT_PHASE3_CHAIN_ARGS ?=
+POKER_MTT_PHASE3_HARNESS_ARGS ?=
 
 LDFLAGS := -X github.com/cosmos/cosmos-sdk/version.Name=clawchain \
            -X github.com/cosmos/cosmos-sdk/version.AppName=clawchaind \
@@ -56,11 +61,25 @@ test-poker-mtt-phase1:
 	@go test ./x/settlement/... -run 'TestAnchor' -v
 	@npm --prefix website test
 
+test-poker-mtt-phase3-fast:
+	@echo "Running Poker MTT Phase 3 fast unit/contract gates..."
+	@go test ./authadapter ./pokermtt/... ./x/settlement/... ./x/reputation/... -v
+	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=mining-service python3 -m pytest tests/mining_service tests/poker_mtt -p no:cacheprovider -q
+
 test-poker-mtt-phase3-ops:
 	@echo "Running Poker MTT Phase 3 ops gates..."
 	@go test ./pokermtt/sidecar -v
 	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=mining-service python3 -m pytest tests/mining_service/test_poker_mtt_load_contract.py -q
 	@bash scripts/poker_mtt/run_phase3_db_load_check.sh --local
+
+test-poker-mtt-phase3-heavy:
+	@echo "Running Poker MTT Phase 3 heavy/manual staging gates..."
+	@test -n "$(POKER_MTT_PHASE3_POSTGRES_URL)" || (echo "Set CLAWCHAIN_DATABASE_URL or POKER_MTT_PHASE3_POSTGRES_URL for the 20k DB load artifact." >&2; exit 2)
+	@test -n "$(POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID)" || (echo "Set POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID after creating a local-chain settlement anchor." >&2; exit 2)
+	@mkdir -p '$(POKER_MTT_PHASE3_ARTIFACT_DIR)'
+	@bash scripts/poker_mtt/run_phase3_db_load_check.sh --postgres-url '$(POKER_MTT_PHASE3_POSTGRES_URL)' | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/db-load-20k.log'
+	@python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30 $(POKER_MTT_PHASE3_HARNESS_ARGS) | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/non-mock-30-finish-summary.json'
+	@'$(POKER_MTT_PHASE3_CLAWCHAIND)' query settlement settlement-anchor '$(POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID)' --output json $(POKER_MTT_PHASE3_CHAIN_ARGS) | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/settlement-anchor-query-receipt.json'
 
 # Run linter
 lint:
@@ -115,7 +134,9 @@ help:
 	@echo "  test       - Run all tests"
 	@echo "  test-arena - Run arena package tests"
 	@echo "  test-poker-mtt-phase1 - Run Poker MTT Phase 1 scoped gate"
+	@echo "  test-poker-mtt-phase3-fast - Run Poker MTT Phase 3 fast unit/contract gates"
 	@echo "  test-poker-mtt-phase3-ops - Run Poker MTT Phase 3 sidecar/load ops gates"
+	@echo "  test-poker-mtt-phase3-heavy - Run Poker MTT Phase 3 staging/manual gates and write artifacts"
 	@echo "  lint       - Run linter"
 	@echo "  tidy       - Tidy go.mod dependencies"
 	@echo "  proto-gen  - Generate protobuf code"

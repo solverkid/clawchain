@@ -915,6 +915,27 @@ Phase 3 production-readiness 进一步要求：
 - Phase 3 Task 6 已补 `x/settlement` gRPC/gateway/CLI query 以及 mining-service confirmation-state persistence；20k settlement anchor rows 进入 `settlement_anchor_miner_reward_rows_page` artifacts，admin/list response 仍需保持 < 256 KB。
 - 30-player non-mock sidecar gate 必须成为 hard assertion，不再只记录 smoke summary。2026-04-18 Task 8 已在 `non_mock_play_harness.py --until-finish` 中加入 `validate_finish_summary()`。
 - `make test-poker-mtt-phase3-ops` 是本地 Phase 3 ops gate：sidecar retry tests、load contract tests、Phase 3 DB load check。
+- `make test-poker-mtt-phase3-fast` 是合并前 fast gate：Go authadapter/Poker MTT/settlement/reputation packages，加 mining-service / poker_mtt Python contract tests。
+- `make test-poker-mtt-phase3-heavy` 是 staging/manual gate：20k DB load、30-player non-mock WS play-to-finish、local-chain settlement query receipt。
+
+Phase 3 artifact locations:
+
+```text
+artifacts/poker-mtt/phase3/db-load-20k.log
+artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json
+artifacts/poker-mtt/phase3/settlement-anchor-query-receipt.json
+```
+
+Expected evidence inside those artifacts:
+
+- 20k reward-window response under 256 KB
+- exactly 4 reward-row page artifacts at 5,000 rows per page
+- SQL count / rebuild / bounded reconcile assertions from `test_poker_mtt_phase3_db_load.py`
+- RSS or peak-memory sample from the load contract
+- 30 joined users, 30 current-ranking receipts, users sending legal chip actions, 1 survivor, 29 eliminated, 0 pending
+- settlement query response matching settlement batch id, canonical root, anchor payload hash, lane, policy, reward roots, reputation delta root, and terminal confirmation state
+
+`artifacts/` is ignored by git. Attach these files to release review or staging run records; do not commit local evidence blobs.
 
 Canonical Phase 3 spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 

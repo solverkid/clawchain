@@ -591,6 +591,13 @@ tournament result
 - external `x/settlement` query proof 和 bounded anchor artifacts
 - window-level `reputation_delta` dry-run，仍不直接写 `x/reputation`
 
+2026-04-18 Phase 3 收口口径：
+
+- `make test-poker-mtt-phase3-fast` 是本地合并前 gate
+- `make test-poker-mtt-phase3-heavy` 是 staging/manual release evidence gate
+- heavy gate 证据写入 `artifacts/poker-mtt/phase3/`，但不进 git
+- reward-bearing rollout 仍要单独 release review，明确 budget source、operator roles、chain submitter、monitoring 和 rollback
+
 面向用户只展示:
 
 - 当前 MTT 状态

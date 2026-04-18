@@ -415,23 +415,30 @@ Commit: `git commit -m "feat(pokermtt): draft window reputation deltas"`
 - Modify: `docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md`
 - Modify: `Makefile`
 
-- [ ] **Step 1: Add fast and heavy gates**
+- [x] **Step 1: Add fast and heavy gates**
 
 Fast gate covers unit/contracts. Heavy/manual gate covers Postgres 20k, sidecar 30-player finish, and settlement local chain query proof.
 
-- [ ] **Step 2: Add artifact locations**
+- [x] **Step 2: Add artifact locations**
 
 Document where load result JSON, SQL counts, RSS samples, EXPLAIN plans, replay roots, and settlement receipts are written.
 
-- [ ] **Step 3: Add production release checklist**
+- [x] **Step 3: Add production release checklist**
 
 Rollout remains disabled until a separate release review approves budget source, operator roles, chain submitter, monitoring, and rollback.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `git diff --check && rg -n "Phase 3|POKER_MTT_PHASE3|reward-bound|settlement query|20k" docs`
 
 Commit: `git commit -m "docs(pokermtt): finalize phase3 readiness plan"`
+
+2026-04-18 implementation note:
+
+- Added `make test-poker-mtt-phase3-fast` for local unit/contract coverage and `make test-poker-mtt-phase3-heavy` for staging/manual evidence.
+- Heavy gate writes `db-load-20k.log`, `non-mock-30-finish-summary.json`, and `settlement-anchor-query-receipt.json` under `artifacts/poker-mtt/phase3/`.
+- `.gitignore` now excludes `artifacts/`, keeping release evidence out of source commits while documenting exactly where it is produced.
+- Phase 3 spec, harness contract, sidecar integration doc, and lepoker-auth reference now agree that reward-bearing rollout still requires a separate release review.
 
 ---
 

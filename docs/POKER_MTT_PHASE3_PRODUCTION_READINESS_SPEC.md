@@ -277,6 +277,16 @@ Acceptance:
 - `POKER_MTT_OBSERVABILITY_FIELDS` includes reward-window selected/omitted counts, artifact page count, MQ lag, and DLQ count in addition to hand/HUD/query/settlement fields.
 - `make test-poker-mtt-phase3-ops` is the local one-command ops gate for sidecar retry, harness/load contract, and Phase 3 DB-backed reward-window scale checks.
 
+2026-04-18 Task 10 gate closeout:
+
+- `make test-poker-mtt-phase3-fast` is the fast local gate. It runs Go authadapter/Poker MTT/settlement/reputation packages and all mining-service plus poker_mtt Python contract tests.
+- `make test-poker-mtt-phase3-heavy` is the staging/manual gate. It requires `POKER_MTT_PHASE3_POSTGRES_URL` or `CLAWCHAIN_DATABASE_URL`, `POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID`, a running donor sidecar/runtime, and a local-chain node reachable by `POKER_MTT_PHASE3_CLAWCHAIND`.
+- Heavy-gate evidence is written under `artifacts/poker-mtt/phase3/` by default:
+  - `db-load-20k.log`
+  - `non-mock-30-finish-summary.json`
+  - `settlement-anchor-query-receipt.json`
+- `artifacts/` is intentionally ignored by git; release evidence should be attached to the release review, not committed into the repository.
+
 ---
 
 ## 5. Implementation Waves
@@ -304,5 +314,14 @@ Phase 3 passes only when:
 - settlement proof uses external query, not tx success
 - reward selection is identity-bound and policy-bound
 - all docs point to this spec as the Phase 3 source of truth
+
+Production/reward-bearing rollout remains disabled until a separate release review explicitly approves:
+
+- budget source id, emission epoch id, and epoch cap
+- settlement operator role, chain submitter key custody, and fallback tx policy
+- donor sidecar deployment version, admin auth mode, and reward-bound identity authority
+- metrics/log sink evidence for required Poker MTT observability fields
+- rollback plan for donor runtime, mining-service reward windows, settlement anchoring, and chain submitter
+- signed artifact bundle containing the heavy-gate outputs listed above
 
 Only after that should `poker_mtt_daily` / `poker_mtt_weekly` be considered for reward-bearing staging rollout.

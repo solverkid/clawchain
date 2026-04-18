@@ -1203,6 +1203,7 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 - sidecar HTTP 的 start/get-room/join/reentry/cancel 可以按 idempotency key retry；bet/action 类调用不能自动 retry。
 - non-mock 30-player gate 需要硬断言：30 joined、30 ranking、30 users sent actions、1 survivor、29 finished/eliminated、0 pending，且 WS errors 只允许 bust/kick 后的已知 close reason。
 - donor token verify 缺 miner binding 时只能生成 local harness identity，不得进入 reward-bound path。
+- staging/manual release gate 使用 `make test-poker-mtt-phase3-heavy`，其 donor 侧输出会归档到 `artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json`。
 
 对应 canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 
@@ -1232,6 +1233,13 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 - same-version checksum mismatch 会落 durable conflict/manual-review，malformed payload 会落 DLQ；两者都会阻断 reward-ready evidence。
 - `poker_mtt_consumer_checkpoint_manifest` 现在进入 tournament evidence root，hand history 和 checkpoint 是 required；hidden/HUD 只能按 policy 降级为 `accepted_degraded`。
 - evidence artifact ID 带 manifest root，旧 evidence root 不会被 rebuild 覆盖。
+
+2026-04-18 已落地的 Phase 3 gate / artifact 部分:
+
+- `make test-poker-mtt-phase3-fast` 跑本地 unit/contract gate，不依赖 donor runtime。
+- `make test-poker-mtt-phase3-ops` 跑 sidecar retry、本地 load-contract 和 DB-load shape gate。
+- `make test-poker-mtt-phase3-heavy` 需要真实 donor sidecar/runtime、Postgres URL 和已创建的 settlement batch id；它会跑 30-player explicit join + WS random legal action + finish validation，并用 `tee` 写出 summary artifact。
+- heavy gate 的 sidecar summary 必须证明当前 ranking 已下发、动作筹码来自 WS 下发的合法 choices、比赛进入 finished 状态、最终 standings 为 1 alive / 29 died / 0 pending。
 
 ### 18.8 Git 排除口径
 
