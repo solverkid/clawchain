@@ -260,31 +260,39 @@ Commit: `git commit -m "perf(pokermtt): prove db backed reward window scale"`
 - Test: `tests/mining_service/test_chain_adapter.py`
 - Test: `tests/mining_service/test_forecast_engine.py`
 
-- [ ] **Step 1: Write failing external query tests**
+- [x] **Step 1: Write failing external query tests**
 
 Test gRPC/gateway/CLI query returns stored anchor state and mining-service confirmation refuses tx-only success.
 
-- [ ] **Step 2: Generate/wire query path**
+- [x] **Step 2: Generate/wire query path**
 
 Replace placeholder query registration and stub CLI with real query server and client.
 
-- [ ] **Step 3: Expand confirmation fields or artifact proof**
+- [x] **Step 3: Expand confirmation fields or artifact proof**
 
 Either add first-class fields or require artifact retrieval/hash proof for window, page roots, budget, submitter, policy, counts, and correction lineage.
 
-- [ ] **Step 4: Bound anchor payloads**
+- [x] **Step 4: Bound anchor payloads**
 
 Settlement batches and admin list endpoints return summaries/page refs for 20k rows, not inline full rows.
 
-- [ ] **Step 5: Add terminal mismatch states**
+- [x] **Step 5: Add terminal mismatch states**
 
 Persist `typed_state_missing`, `root_mismatch`, `metadata_mismatch`, `fallback_memo_only`, and `confirmed` distinctly.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `go test ./x/settlement/... -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_chain_adapter.py tests/mining_service/test_forecast_engine.py`
 
 Commit: `git commit -m "feat(settlement): confirm anchors through external query"`
+
+2026-04-18 implementation note:
+
+- Added generated gogo query protobuf output for `x/settlement` and wired `SettlementAnchor` through gRPC server registration, gateway route, and CLI query.
+- Added Go coverage for keeper query, gateway route, and CLI query against an in-memory gRPC server.
+- Mining-service confirmation now normalizes and persists `anchor_jobs.chain_confirmation_status`; tx-only, fallback-memo-only, root drift, and metadata drift are not accepted as anchored.
+- Settlement anchor payloads now page large `miner_reward_rows` into `settlement_anchor_miner_reward_rows_page` artifacts while the main payload/admin response keeps root/page refs.
+- Added 20k settlement-anchor response-size/root-reconstruction coverage and admin list bounded-response coverage.
 
 ### Task 7: Harden Reward Economics And Multiplier Timing
 

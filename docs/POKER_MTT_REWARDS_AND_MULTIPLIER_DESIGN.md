@@ -1425,7 +1425,7 @@ Phase 3 完成前，仍保持:
 4. **Auth / identity**: non-local/shared runtime fail closed；donor token 只证明 user，不证明 reward-bound miner；`claw1local-*` 和 synthetic identity 不能进 reward window。
 5. **20k DB path**: `POST /admin/poker-mtt/reward-windows/build` 真实 Postgres path under 30 SQL statements，response under 256 KB，20k rows 通过 4 个 5,000-row page artifacts 重建 root。
 6. **Budget / aggregation / multiplier**: daily/weekly payout 受同一 emission slice 约束；window aggregation policy 版本化；multiplier 只能按后续窗口生效。
-7. **Settlement query**: external query 比对 batch id、root/hash、lane、policy、window、page roots、amount/count、submitter、correction lineage；tx success 不等于 anchored。
+7. **Settlement query**: external query 已能通过 gRPC/gateway/CLI 读取 stored anchor state；当前比对 batch id、root/hash、lane、policy、window/reward roots、amount，后续 budget/correction lineage 在 Task 7/9 补齐；tx success 不等于 anchored。
 8. **Ops gate**: 30-player non-mock WS explicit join/action-to-finish 是 hard gate；2,000-table burst 必须生成 completed-hand/finalizer inputs；observability 必须真实 emit。
 9. **Reputation delta**: 只做窗口级 dry-run artifact root。`x/reputation` 写入等 settlement、identity、budget、correction gates 稳定后再单独 review。
 
@@ -1462,6 +1462,14 @@ Phase 3 完成前，仍保持:
 - Unchanged rebuild 用 `input_snapshot_root` 判定幂等，不更新 reward window，也不重写 artifact rows。
 - 自动 daily/weekly reconcile 改成 lookback-bounded closed-window candidate query，不再调用 `list_poker_mtt_results()` 全量扫描历史。
 - `scripts/poker_mtt/run_phase3_db_load_check.sh` 是当前可重复执行的 Phase 3 load contract 入口。
+
+2026-04-18 Task 6 closeout:
+
+- `x/settlement` 的 `SettlementAnchor` query 已从 placeholder 提升为 generated gogo gRPC server/client、gateway route 和 CLI query；mining-service 可以按 stored anchor state 做确认。
+- Tx inclusion 不再等于 anchored：确认必须匹配 batch id、canonical root、anchor payload hash 以及当前 first-class metadata；tx-only / fallback-memo-only / root drift / metadata drift 都会拒绝确认。
+- `anchor_jobs.chain_confirmation_status` 持久化 normalized 状态：`confirmed`、`typed_state_missing`、`fallback_memo_only`、`root_mismatch`、`metadata_mismatch`、`failed`、`pending`。
+- Settlement anchor payload 不再内联 20k `miner_reward_rows`；主 anchor artifact/API response 保留 `miner_reward_rows_root`、`artifact_page_count`、`artifact_pages`，实际 rows 进入 `settlement_anchor_miner_reward_rows_page` artifacts。
+- `/admin/settlement-batches` 默认返回 bounded summary，所以即使历史 payload 曾经内联大字段，也不会通过 admin path 重新膨胀响应。
 
 2026-04-18 Task 2 closeout:
 

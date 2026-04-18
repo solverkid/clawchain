@@ -198,6 +198,63 @@ def test_phase3_reward_window_build_pages_20k_rows_and_keeps_response_small():
     asyncio.run(scenario())
 
 
+def test_phase3_settlement_anchor_pages_20k_rows_and_keeps_admin_response_small():
+    async def scenario():
+        repo = CountingPokerMTTRepository()
+        _seed_reward_ready_rows(repo, 20_000)
+        service = _service(repo, poker_mtt_settlement_anchoring_enabled=True)
+
+        reward_window = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=WINDOW_START,
+            window_end_at=WINDOW_END,
+            reward_pool_amount=20_000,
+            include_provisional=False,
+            policy_bundle_version=POLICY_VERSION,
+            now=BUILD_NOW,
+        )
+        batch = await repo.get_settlement_batch(reward_window["settlement_batch_id"])
+        anchored = await service.retry_anchor_settlement_batch(
+            batch["id"],
+            now=BUILD_NOW + timedelta(minutes=1),
+        )
+
+        encoded = json.dumps(anchored, sort_keys=True, default=str).encode("utf-8")
+        assert len(encoded) < 256 * 1024
+        assert anchored["anchor_payload_json"]["artifact_page_count"] == 4
+        assert anchored["anchor_payload_json"]["miner_reward_rows_root"].startswith("sha256:")
+        assert "miner_reward_rows" not in anchored["anchor_payload_json"]
+
+        artifacts = await repo.list_artifacts_for_entity("settlement_batch", anchored["id"])
+        main_artifact = next(item for item in artifacts if item["kind"] == "settlement_anchor_payload")
+        pages = [item for item in artifacts if item["kind"] == "settlement_anchor_miner_reward_rows_page"]
+        assert len(pages) == 4
+        rows = forecast_engine.resolve_settlement_anchor_reward_rows(main_artifact["payload_json"], pages)
+        assert len(rows) == 20_000
+        assert forecast_engine._hash_sequence(rows) == anchored["anchor_payload_json"]["miner_reward_rows_root"]
+
+        app = server.create_app(
+            settings=forecast_engine.ForecastSettings(
+                poker_mtt_projection_artifact_page_size=5000,
+                poker_mtt_settlement_anchoring_enabled=True,
+            ),
+            repository=repo,
+            now_fn=lambda: BUILD_NOW + timedelta(minutes=2),
+        )
+        with TestClient(app) as client:
+            response = client.get("/admin/settlement-batches")
+
+        assert response.status_code == 200
+        payload = response.json()
+        admin_encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        assert len(admin_encoded) < 256 * 1024
+        admin_batch = payload["items"][0]
+        assert admin_batch["anchor_payload_json"]["artifact_page_count"] == 4
+        assert "miner_reward_rows" not in admin_batch["anchor_payload_json"]
+
+    asyncio.run(scenario())
+
+
 def test_phase3_reward_window_rebuild_is_idempotent_without_artifact_rewrites():
     async def scenario():
         repo = CountingPokerMTTRepository()
@@ -268,13 +325,14 @@ def test_phase3_models_expose_reward_window_scale_indexes():
 
 
 def _service(repo: FakeRepository, **settings_overrides) -> forecast_engine.ForecastMiningService:
+    settings = {
+        "poker_mtt_projection_artifact_page_size": 5000,
+        "poker_mtt_settlement_anchoring_enabled": False,
+    }
+    settings.update(settings_overrides)
     return forecast_engine.ForecastMiningService(
         repo,
-        forecast_engine.ForecastSettings(
-            poker_mtt_projection_artifact_page_size=5000,
-            poker_mtt_settlement_anchoring_enabled=False,
-            **settings_overrides,
-        ),
+        forecast_engine.ForecastSettings(**settings),
     )
 
 

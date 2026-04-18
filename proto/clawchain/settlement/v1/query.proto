@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package clawchain.settlement.v1;
 
+import "gogoproto/gogo.proto";
 import "google/api/annotations.proto";
-import "clawchain/settlement/v1/tx.proto";
 
 option go_package = "github.com/clawchain/clawchain/x/settlement/types;types";
 
@@ -14,7 +14,7 @@ service Query {
 }
 
 message QuerySettlementAnchorRequest {
-  string settlement_batch_id = 1;
+  string settlement_batch_id = 1 [(gogoproto.customname) = "SettlementBatchID"];
 }
 
 message QuerySettlementAnchorResponse {
@@ -22,16 +22,16 @@ message QuerySettlementAnchorResponse {
 }
 
 message SettlementAnchor {
-  string settlement_batch_id = 1;
-  string anchor_job_id = 2;
+  string settlement_batch_id = 1 [(gogoproto.customname) = "SettlementBatchID"];
+  string anchor_job_id = 2 [(gogoproto.customname) = "AnchorJobID"];
   string submitter = 3;
   string lane = 4;
   string schema_version = 5;
   string policy_bundle_version = 6;
   string canonical_root = 7;
   string anchor_payload_hash = 8;
-  string reward_window_ids_root = 9;
-  string task_run_ids_root = 10;
+  string reward_window_ids_root = 9 [(gogoproto.customname) = "RewardWindowIDsRoot"];
+  string task_run_ids_root = 10 [(gogoproto.customname) = "TaskRunIDsRoot"];
   string miner_reward_rows_root = 11;
   string window_end_at = 12;
   uint64 total_reward_amount = 13;

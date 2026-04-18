@@ -37,6 +37,25 @@ POKER_MTT_OBSERVABILITY_FIELDS = (
     "poker_mtt.settlement_anchor.confirmation_state",
 )
 POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT = 500
+SETTLEMENT_ANCHOR_PAGE_ARTIFACT_KIND = "settlement_anchor_miner_reward_rows_page"
+CHAIN_CONFIRMATION_STATUS_ALIASES = {
+    "typed_tx_accepted_state_missing": "typed_state_missing",
+    "fallback_memo_tx_accepted_no_typed_state": "fallback_memo_only",
+    "root_hash_mismatch": "root_mismatch",
+    "settlement_batch_mismatch": "root_mismatch",
+    "anchor_metadata_mismatch": "metadata_mismatch",
+    "confirmed": "confirmed",
+    "failed": "failed",
+    "pending": "pending",
+    "state_missing": "typed_state_missing",
+}
+TERMINAL_CHAIN_CONFIRMATION_STATES = {
+    "typed_state_missing",
+    "fallback_memo_only",
+    "root_mismatch",
+    "metadata_mismatch",
+    "failed",
+}
 POKER_MTT_EVIDENCE_REQUIRED_KINDS = {
     poker_mtt_evidence.FINAL_RANKING_MANIFEST_KIND,
     poker_mtt_evidence.HAND_HISTORY_MANIFEST_KIND,
@@ -607,12 +626,18 @@ def build_paged_poker_mtt_projection_payload(payload: dict, *, page_size: int = 
     return projected, pages
 
 
-def resolve_poker_mtt_projection_reward_rows(payload: dict, artifacts: list[dict]) -> list[dict]:
+def _resolve_miner_reward_rows_from_artifacts(
+    payload: dict,
+    artifacts: list[dict],
+    *,
+    page_kind: str,
+    error_prefix: str,
+) -> list[dict]:
     inline_rows = list(payload.get("miner_reward_rows") or [])
     if inline_rows:
         expected_root = payload.get("miner_reward_rows_root")
         if expected_root and _hash_sequence(inline_rows) != expected_root:
-            raise ValueError("poker mtt projection miner reward rows root mismatch")
+            raise ValueError(f"{error_prefix} miner reward rows root mismatch")
         return inline_rows
 
     page_refs = list(payload.get("artifact_pages") or [])
@@ -621,7 +646,7 @@ def resolve_poker_mtt_projection_reward_rows(payload: dict, artifacts: list[dict
 
     pages_by_index = {}
     for artifact in artifacts:
-        if artifact.get("kind") != "poker_mtt_reward_window_projection_page":
+        if artifact.get("kind") != page_kind:
             continue
         page_payload = artifact.get("payload_json") or {}
         pages_by_index[page_payload.get("page_index")] = page_payload
@@ -631,19 +656,37 @@ def resolve_poker_mtt_projection_reward_rows(payload: dict, artifacts: list[dict
         page_index = page_ref["page_index"]
         page_payload = pages_by_index.get(page_index)
         if page_payload is None:
-            raise ValueError("poker mtt projection page artifact missing")
+            raise ValueError(f"{error_prefix} page artifact missing")
         page_rows = list(page_payload.get("miner_reward_rows") or [])
         page_root = _hash_sequence(page_rows)
         if page_root != page_ref.get("page_root") or page_root != page_payload.get("page_root"):
-            raise ValueError("poker mtt projection page root mismatch")
+            raise ValueError(f"{error_prefix} page root mismatch")
         if len(page_rows) != int(page_ref.get("row_count", 0) or 0):
-            raise ValueError("poker mtt projection page row count mismatch")
+            raise ValueError(f"{error_prefix} page row count mismatch")
         rows.extend(page_rows)
 
     expected_root = payload.get("miner_reward_rows_root")
     if expected_root and _hash_sequence(rows) != expected_root:
-        raise ValueError("poker mtt projection miner reward rows root mismatch")
+        raise ValueError(f"{error_prefix} miner reward rows root mismatch")
     return rows
+
+
+def resolve_poker_mtt_projection_reward_rows(payload: dict, artifacts: list[dict]) -> list[dict]:
+    return _resolve_miner_reward_rows_from_artifacts(
+        payload,
+        artifacts,
+        page_kind="poker_mtt_reward_window_projection_page",
+        error_prefix="poker mtt projection",
+    )
+
+
+def resolve_settlement_anchor_reward_rows(payload: dict, artifacts: list[dict]) -> list[dict]:
+    return _resolve_miner_reward_rows_from_artifacts(
+        payload,
+        artifacts,
+        page_kind=SETTLEMENT_ANCHOR_PAGE_ARTIFACT_KIND,
+        error_prefix="settlement anchor",
+    )
 
 
 def _reward_window_payload(reward_window: dict) -> dict:
@@ -784,6 +827,34 @@ def _summarize_reward_window_response(reward_window: dict, projection_artifact: 
     return response
 
 
+def _summarize_settlement_anchor_payload(payload: dict) -> dict:
+    response = deepcopy(payload)
+    for field in ("reward_window_ids", "task_run_ids"):
+        values = list(response.get(field) or [])
+        if len(values) <= POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT:
+            continue
+        response[f"{field}_root"] = _hash_sequence(sorted(values))
+        response[f"{field}_count"] = len(values)
+        response[f"{field}_sample"] = sorted(values)[:10]
+        response.pop(field, None)
+
+    miner_reward_rows = list(response.get("miner_reward_rows") or [])
+    if len(miner_reward_rows) > POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT:
+        response["miner_reward_rows_root"] = _hash_sequence(miner_reward_rows)
+        response["miner_reward_rows_count"] = len(miner_reward_rows)
+        response["miner_reward_rows_sample"] = miner_reward_rows[:10]
+        response.pop("miner_reward_rows", None)
+    return response
+
+
+def _summarize_settlement_batch_response(settlement_batch: dict) -> dict:
+    response = deepcopy(settlement_batch)
+    payload = response.get("anchor_payload_json")
+    if payload:
+        response["anchor_payload_json"] = _summarize_settlement_anchor_payload(payload)
+    return response
+
+
 def _reward_window_storage_matches(existing: dict, candidate: dict) -> bool:
     compared_fields = (
         "id",
@@ -856,6 +927,12 @@ def _expected_settlement_anchor(anchor_job: dict, settlement_batch: dict) -> dic
         "window_end_at": settlement_batch.get("window_end_at"),
         "total_reward_amount": settlement_batch.get("total_reward_amount", 0),
     }
+
+
+def _normalize_chain_confirmation_status(status: str | None) -> str:
+    if not status:
+        return "pending"
+    return CHAIN_CONFIRMATION_STATUS_ALIASES.get(status, status)
 
 
 def _canonical_poker_mtt_projection_rows(rows: Iterable[dict]) -> list[dict]:
@@ -1728,6 +1805,10 @@ class ForecastMiningService:
         }
         if poker_projection_roots:
             anchor_payload_json["poker_projection_roots"] = poker_projection_roots
+        anchor_payload_json, anchor_pages = build_paged_poker_mtt_projection_payload(
+            anchor_payload_json,
+            page_size=getattr(self.settings, "poker_mtt_projection_artifact_page_size", 5000),
+        )
         anchor_payload_hash = _hash_payload(anchor_payload_json)
         existing_canonical_root = batch.get("canonical_root")
         existing_anchor_payload_hash = batch.get("anchor_payload_hash")
@@ -1736,22 +1817,21 @@ class ForecastMiningService:
                 raise ValueError("settlement batch canonical root conflict")
             if batch.get("state") in {"anchor_ready", "anchor_submitted", "anchored"}:
                 await self._upsert_settlement_anchor_artifact(batch, current)
-                return batch
-        saved = await self.repo.save_settlement_batch(
-            {
-                **batch,
-                "state": "anchor_ready",
-                "anchor_job_id": None,
-                "policy_bundle_version": policy_bundle_version,
-                "anchor_schema_version": ANCHOR_PAYLOAD_SCHEMA_VERSION,
-                "canonical_root": canonical_root,
-                "anchor_payload_json": anchor_payload_json,
-                "anchor_payload_hash": anchor_payload_hash,
-                "updated_at": isoformat_z(current),
-            }
-        )
-        await self._upsert_settlement_anchor_artifact(saved, current)
-        return saved
+                return _summarize_settlement_batch_response(batch)
+        candidate_batch = {
+            **batch,
+            "state": "anchor_ready",
+            "anchor_job_id": None,
+            "policy_bundle_version": policy_bundle_version,
+            "anchor_schema_version": ANCHOR_PAYLOAD_SCHEMA_VERSION,
+            "canonical_root": canonical_root,
+            "anchor_payload_json": anchor_payload_json,
+            "anchor_payload_hash": anchor_payload_hash,
+            "updated_at": isoformat_z(current),
+        }
+        await self._upsert_settlement_anchor_artifact(candidate_batch, current, pages=anchor_pages)
+        saved = await self.repo.save_settlement_batch(candidate_batch)
+        return _summarize_settlement_batch_response(saved)
 
     async def list_anchor_jobs(self, *, now: datetime | None = None) -> list[dict]:
         await self.reconcile(now)
@@ -2044,7 +2124,19 @@ class ForecastMiningService:
                     "confirmed": False,
                     "confirmation_status": "typed_tx_accepted_state_missing",
                 }
-        confirmation_status = receipt.get("confirmation_status") or "pending"
+        raw_confirmation_status = receipt.get("confirmation_status") or "pending"
+        chain_confirmation_status = _normalize_chain_confirmation_status(raw_confirmation_status)
+        receipt = {
+            **receipt,
+            "chain_confirmation_status": chain_confirmation_status,
+        }
+        anchor_job = await self.repo.save_anchor_job(
+            {
+                **anchor_job,
+                "chain_confirmation_status": chain_confirmation_status,
+                "updated_at": isoformat_z(current),
+            }
+        )
         receipt_payload = {
             "receipt": receipt,
             "anchor_job_id": resolved_anchor_job_id,
@@ -2063,10 +2155,10 @@ class ForecastMiningService:
             }
         )
 
-        if confirmation_status == "confirmed":
+        if chain_confirmation_status == "confirmed":
             saved_job = await self.mark_anchor_job_anchored(resolved_anchor_job_id, now=current)
-        elif confirmation_status == "failed":
-            failure_reason = receipt.get("raw_log") or f"chain tx failed with code {receipt.get('code')}"
+        elif chain_confirmation_status in TERMINAL_CHAIN_CONFIRMATION_STATES:
+            failure_reason = receipt.get("raw_log") or f"chain anchor confirmation {raw_confirmation_status}"
             saved_job = await self.mark_anchor_job_failed(
                 resolved_anchor_job_id,
                 failure_reason=failure_reason,
@@ -2078,7 +2170,7 @@ class ForecastMiningService:
         return {
             "anchor_job_id": resolved_anchor_job_id,
             "settlement_batch_id": anchor_job["settlement_batch_id"],
-            "chain_confirmation_status": confirmation_status,
+            "chain_confirmation_status": chain_confirmation_status,
             "anchor_job_state": saved_job.get("state"),
             "tx_hash": tx_hash,
             "chain_height": receipt.get("height"),
@@ -2134,6 +2226,7 @@ class ForecastMiningService:
                 "anchor_payload_hash": batch["anchor_payload_hash"],
                 "broadcast_status": None,
                 "broadcast_tx_hash": None,
+                "chain_confirmation_status": None,
                 "last_broadcast_at": None,
                 "failure_reason": None,
                 "submitted_at": isoformat_z(current),
@@ -2171,6 +2264,7 @@ class ForecastMiningService:
             {
                 **anchor_job,
                 "state": "anchored",
+                "chain_confirmation_status": "confirmed",
                 "anchored_at": isoformat_z(current),
                 "failure_reason": None,
                 "updated_at": isoformat_z(current),
@@ -4105,12 +4199,18 @@ class ForecastMiningService:
         saved = await self.repo.save_artifacts_bulk(artifact_rows)
         return next(row for row in saved if row["id"] == artifact_id)
 
-    async def _upsert_settlement_anchor_artifact(self, settlement_batch: dict, now: datetime) -> dict:
+    async def _upsert_settlement_anchor_artifact(
+        self,
+        settlement_batch: dict,
+        now: datetime,
+        *,
+        pages: list[dict] | None = None,
+    ) -> dict:
         payload = settlement_batch.get("anchor_payload_json")
         if not payload:
             return {}
         artifact_id = f"art:settlement_batch:{settlement_batch['id']}:anchor"
-        return await self.repo.save_artifact(
+        artifact_rows = [
             {
                 "id": artifact_id,
                 "kind": "settlement_anchor_payload",
@@ -4121,7 +4221,22 @@ class ForecastMiningService:
                 "created_at": isoformat_z(now),
                 "updated_at": isoformat_z(now),
             }
-        )
+        ]
+        for page in pages or []:
+            artifact_rows.append(
+                {
+                    "id": f"art:settlement_batch:{settlement_batch['id']}:anchor:miner_rewards:{page['page_index']}",
+                    "kind": SETTLEMENT_ANCHOR_PAGE_ARTIFACT_KIND,
+                    "entity_type": "settlement_batch",
+                    "entity_id": settlement_batch["id"],
+                    "payload_json": page,
+                    "payload_hash": page["page_root"],
+                    "created_at": isoformat_z(now),
+                    "updated_at": isoformat_z(now),
+                }
+            )
+        saved = await self.repo.save_artifacts_bulk(artifact_rows)
+        return next(row for row in saved if row["id"] == artifact_id)
 
     async def _apply_fast_task_participation(self, task: dict, submissions: list[dict], now: datetime) -> None:
         publish_at = parse_time(task["publish_at"])

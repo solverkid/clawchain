@@ -24,12 +24,12 @@ func (q queryServer) SettlementAnchor(
 	req *types.QuerySettlementAnchorRequest,
 ) (*types.QuerySettlementAnchorResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
-	if req == nil || req.SettlementBatchId == "" {
+	if req == nil || req.SettlementBatchID == "" {
 		return nil, fmt.Errorf("invalid request: settlement_batch_id required")
 	}
-	anchor, found := q.Keeper.GetSettlementAnchor(ctx, req.SettlementBatchId)
+	anchor, found := q.Keeper.GetSettlementAnchor(ctx, req.SettlementBatchID)
 	if !found {
-		return nil, fmt.Errorf("settlement anchor not found: %s", req.SettlementBatchId)
+		return nil, fmt.Errorf("settlement anchor not found: %s", req.SettlementBatchID)
 	}
-	return &types.QuerySettlementAnchorResponse{Anchor: *anchor}, nil
+	return &types.QuerySettlementAnchorResponse{Anchor: anchor}, nil
 }

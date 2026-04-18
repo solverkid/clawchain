@@ -86,8 +86,8 @@ func settlementAnchorMatchesMsg(anchor *types.SettlementAnchor, msg *types.MsgAn
 		anchor.PolicyBundleVersion == msg.PolicyBundleVersion &&
 		anchor.CanonicalRoot == msg.CanonicalRoot &&
 		anchor.AnchorPayloadHash == msg.AnchorPayloadHash &&
-		anchor.RewardWindowIdsRoot == msg.RewardWindowIdsRoot &&
-		anchor.TaskRunIdsRoot == msg.TaskRunIdsRoot &&
+		anchor.RewardWindowIDsRoot == msg.RewardWindowIdsRoot &&
+		anchor.TaskRunIDsRoot == msg.TaskRunIdsRoot &&
 		anchor.MinerRewardRowsRoot == msg.MinerRewardRowsRoot &&
 		anchor.WindowEndAt == msg.WindowEndAt &&
 		anchor.TotalRewardAmount == msg.TotalRewardAmount

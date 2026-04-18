@@ -627,6 +627,10 @@ Alpha 当前最小 operator 查询面。
   - `confirmed`
   - `pending`
   - `failed`
+  - `typed_state_missing`
+  - `fallback_memo_only`
+  - `root_mismatch`
+  - `metadata_mismatch`
 - `anchor_job_state`
 - `tx_hash`
 - `chain_height`
@@ -640,7 +644,10 @@ Alpha 当前最小 operator 查询面。
 - 当前通过 RPC `tx(hash=...)` 查询已广播 tx 的链上结果
 - 该路径只消费已持久化的 `broadcast_tx_hash`
 - 若 tx 已确认且 `code = 0`：
-  - 自动把 `anchor_job` 和所属 batch 推进到 `anchored`
+  - 仍必须通过 settlement anchor query 读到 stored typed state，并匹配 batch/root/hash/metadata 后才把 `anchor_job` 和所属 batch 推进到 `anchored`
+- 若 tx 已确认但 typed state 缺失、fallback memo only、root/hash drift 或 metadata drift：
+  - 写入 normalized `chain_confirmation_status`
+  - 推进到 `anchor_failed`，等待显式 retry/new anchor job
 - 若 tx 已确认但 `code != 0`：
   - 自动把 `anchor_job` 和所属 batch 推进到 `anchor_failed`
 - 若 tx 仍未查到：
@@ -652,8 +659,8 @@ Poker MTT Evidence Phase 2 的目标语义更严格：
 
 - typed `x/settlement` anchor 不能只靠 `tx code = 0` 标记完成
 - 服务端必须通过 settlement anchor query 验证 batch id、canonical root、anchor payload hash、lane、policy、window、reward roots 与本地计划一致
-- fallback memo tx 如果保留，只能标记为 fallback/memo confirmed，不能等同于 typed `x/settlement` anchored
-- 这个加强项落在 `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md` 的 settlement anchor query / verification 任务
+- fallback memo tx 如果保留，只能标记为 `fallback_memo_only`，不能等同于 typed `x/settlement` anchored
+- Phase 3 Task 6 已把该加强项落到 generated gRPC/gateway/CLI query、service confirmation 和 tests；真实 local-chain smoke artifact 仍属于 release checklist。
 
 ## 4.21 `POST /admin/anchor-jobs/reconcile-chain`
 
@@ -900,6 +907,7 @@ Phase 3 production-readiness 进一步要求：
 - automatic reconcile 必须走 bounded closed-window query，不能调用全量 `list_poker_mtt_results()` 后内存分组。
 - settlement batch/admin response 不能通过 `anchor_payload_json` 重新内联 20k `miner_reward_rows`；默认只返回 summary/root/page refs。
 - external settlement query 必须能通过 gRPC/gateway/CLI 读取 stored anchor state，并让 mining-service 完成 typed full-field confirmation。
+- Phase 3 Task 6 已补 `x/settlement` gRPC/gateway/CLI query 以及 mining-service confirmation-state persistence；20k settlement anchor rows 进入 `settlement_anchor_miner_reward_rows_page` artifacts，admin/list response 仍需保持 < 256 KB。
 - 30-player non-mock sidecar gate 必须成为 hard assertion，不再只记录 smoke summary。
 
 Canonical Phase 3 spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`

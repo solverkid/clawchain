@@ -603,6 +603,9 @@ class PostgresRepository:
                 text("ALTER TABLE anchor_jobs ADD COLUMN IF NOT EXISTS broadcast_tx_hash VARCHAR NULL")
             )
             await conn.execute(
+                text("ALTER TABLE anchor_jobs ADD COLUMN IF NOT EXISTS chain_confirmation_status VARCHAR NULL")
+            )
+            await conn.execute(
                 text("ALTER TABLE anchor_jobs ADD COLUMN IF NOT EXISTS last_broadcast_at TIMESTAMPTZ NULL")
             )
             await conn.execute(

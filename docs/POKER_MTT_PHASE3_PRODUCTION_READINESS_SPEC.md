@@ -206,22 +206,27 @@ Acceptance:
 
 ### G5 - Settlement External Query And Bounded Anchor Artifacts
 
-Current blockers:
+Implemented 2026-04-18 Task 6:
 
-- `x/settlement` query registration is a no-op placeholder; CLI query is stubbed.
-- Default mining-service confirmer checks tx inclusion but does not fetch stored `x/settlement` state.
-- Current tx/query fields do not cover all documented Phase 3 confirmation fields.
-- Anchor payload can inline all reward rows and re-expand 20k payloads through settlement/admin paths.
-- Metadata mismatches can remain pending instead of terminal/degraded states.
+- `x/settlement` now has generated gogo `Query` protobuf types, registered gRPC query server, gateway route, and CLI `settlement-anchor` query for stored anchor state.
+- Mining-service chain confirmation refuses tx-only success, compares queried anchor metadata against the expected settlement batch, and persists normalized confirmation statuses on `anchor_jobs`.
+- Large settlement anchor payloads no longer inline 20k `miner_reward_rows`; the main anchor artifact stores roots/page refs, and `settlement_anchor_miner_reward_rows_page` artifacts store bounded pages.
+- `/admin/settlement-batches` returns bounded summaries by default, so an existing oversized anchor payload cannot re-expand API responses.
+- Explicit confirmation states are persisted as `confirmed`, `typed_state_missing`, `fallback_memo_only`, `root_mismatch`, `metadata_mismatch`, `failed`, or `pending`.
+
+Remaining blockers:
+
+- The current first-class tx/query fields cover the core anchor contract; budget roots, correction lineage, and full submitter authorization context still need Task 7/9 economics/reputation lineage to be meaningful.
+- Production confirmer still needs real local-chain smoke evidence in the final Phase 3 release checklist; unit coverage now proves the gRPC/gateway/CLI query surface and service-side refusal semantics.
 
 Acceptance:
 
-- Generate and wire gRPC query server, gateway, and CLI for `SettlementAnchor`.
-- Production confirmer waits for tx inclusion, queries stored anchor state, normalizes proto JSON casing, and compares all required fields.
+- Generate and wire gRPC query server, gateway, and CLI for `SettlementAnchor`. Done for the lightweight module build with `query.pb.go` plus manual gateway registration.
+- Production confirmer waits for tx inclusion, queries stored anchor state, normalizes proto JSON casing, and compares all required fields available in the current anchor contract.
 - Confirmation covers batch id, canonical root, anchor payload hash, lane, policy, window start/end, reward roots, page roots, total amount, row count, submitter/authorization context, and correction lineage.
 - If fields stay inside `anchor_payload_hash` rather than first-class tx fields, artifact retrieval and hash verification must be part of confirmation.
 - Mismatch statuses are explicit: `pending`, `tx_failed`, `typed_state_missing`, `root_mismatch`, `metadata_mismatch`, `fallback_memo_only`, `confirmed`.
-- Settlement/admin response surfaces summaries by default and page/artifact refs for large rows.
+- Settlement/admin response surfaces summaries by default and page/artifact refs for large rows. Verified with 20k rows and a response-size guard.
 - Fallback memo tx never equals typed anchored state.
 
 ### G6 - Reputation Delta, Not Direct Reputation Writes

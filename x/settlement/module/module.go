@@ -1,6 +1,7 @@
 package module
 
 import (
+	"context"
 	"encoding/json"
 
 	gwruntime "github.com/grpc-ecosystem/grpc-gateway/runtime"
@@ -35,7 +36,11 @@ func (AppModuleBasic) RegisterInterfaces(registry codectypes.InterfaceRegistry) 
 	types.RegisterInterfaces(registry)
 }
 
-func (AppModuleBasic) RegisterGRPCGatewayRoutes(_ client.Context, _ *gwruntime.ServeMux) {}
+func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *gwruntime.ServeMux) {
+	if err := types.RegisterQueryHandlerClient(context.Background(), mux, types.NewQueryClient(clientCtx)); err != nil {
+		panic(err)
+	}
+}
 
 func (AppModuleBasic) GetTxCmd() *cobra.Command {
 	return settlementcli.NewTxCmd()

@@ -1,11 +1,12 @@
 package cli
 
 import (
-	"fmt"
+	"encoding/json"
 
 	"github.com/spf13/cobra"
 
 	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/client/flags"
 
 	"github.com/clawchain/clawchain/x/settlement/types"
 )
@@ -23,15 +24,29 @@ func NewQueryCmd() *cobra.Command {
 }
 
 func NewSettlementAnchorQueryCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "settlement-anchor [settlement_batch_id]",
 		Short: "Query a settlement anchor by settlement batch id",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if _, err := client.GetClientQueryContext(cmd); err != nil {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
 				return err
 			}
-			return fmt.Errorf("settlement anchor query client is not wired in this lightweight module build: %s", args[0])
+			resp, err := types.NewQueryClient(clientCtx).SettlementAnchor(
+				cmd.Context(),
+				&types.QuerySettlementAnchorRequest{SettlementBatchID: args[0]},
+			)
+			if err != nil {
+				return err
+			}
+			payload, err := json.Marshal(resp)
+			if err != nil {
+				return err
+			}
+			return clientCtx.PrintRaw(payload)
 		},
 	}
+	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
 }

@@ -143,7 +143,7 @@ func TestQuerySettlementAnchorReturnsStoredAnchor(t *testing.T) {
 	queryServer := keeper.NewQueryServerImpl(k)
 	resp, err := queryServer.SettlementAnchor(
 		sdk.WrapSDKContext(ctx),
-		&types.QuerySettlementAnchorRequest{SettlementBatchId: msg.SettlementBatchId},
+		&types.QuerySettlementAnchorRequest{SettlementBatchID: msg.SettlementBatchId},
 	)
 
 	require.NoError(t, err)

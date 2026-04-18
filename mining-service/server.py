@@ -19,6 +19,7 @@ from forecast_engine import (
     ForecastMiningService,
     ForecastSettings,
     _hash_payload,
+    _summarize_settlement_batch_response,
     build_signature_hash,
     utc_now,
 )
@@ -779,7 +780,7 @@ def create_app(
     async def get_settlement_batches():
         await service().reconcile(now())
         items = await app.state.repository.list_settlement_batches()
-        return {"items": items}
+        return {"items": [_summarize_settlement_batch_response(item) for item in items]}
 
     @app.get("/admin/anchor-jobs")
     async def get_anchor_jobs():

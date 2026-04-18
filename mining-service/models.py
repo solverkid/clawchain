@@ -167,6 +167,7 @@ anchor_jobs = Table(
     Column("anchor_payload_hash", String, nullable=False),
     Column("broadcast_status", String, nullable=True),
     Column("broadcast_tx_hash", String, nullable=True),
+    Column("chain_confirmation_status", String, nullable=True),
     Column("last_broadcast_at", DateTime(timezone=True), nullable=True),
     Column("failure_reason", Text, nullable=True),
     Column("submitted_at", DateTime(timezone=True), nullable=False),
