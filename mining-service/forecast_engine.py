@@ -36,6 +36,7 @@ POKER_MTT_OBSERVABILITY_FIELDS = (
     "poker_mtt.reward_window.query.duration_ms",
     "poker_mtt.settlement_anchor.confirmation_state",
 )
+POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT = 500
 POKER_MTT_EVIDENCE_REQUIRED_KINDS = {
     poker_mtt_evidence.FINAL_RANKING_MANIFEST_KIND,
     poker_mtt_evidence.HAND_HISTORY_MANIFEST_KIND,
@@ -65,6 +66,7 @@ class ForecastSettings:
     poker_mtt_daily_policy_bundle_version: str = "poker_mtt_daily_policy_v1"
     poker_mtt_weekly_policy_bundle_version: str = "poker_mtt_weekly_policy_v1"
     poker_mtt_projection_artifact_page_size: int = 5000
+    poker_mtt_reward_window_reconcile_lookback_days: int = 35
     baseline_pm_weight: float = 0.85
     baseline_bin_weight: float = 0.15
     min_p_yes_bps: int = 1500
@@ -673,6 +675,144 @@ def _materialize_reward_window(reward_window: dict) -> tuple[dict, dict]:
         "canonical_root": _hash_payload(payload),
     }
     return materialized, payload
+
+
+def _poker_mtt_reward_window_input_root(
+    *,
+    selected_results: list[dict],
+    final_rankings_by_id: dict[str, dict],
+    miners_by_address: dict[str, dict],
+    rating_snapshots_by_miner: dict[str, dict],
+) -> str:
+    result_refs = []
+    miner_refs = []
+    final_ranking_refs = []
+    rating_refs = []
+    for result in sorted(selected_results, key=lambda item: item["id"]):
+        result_refs.append(
+            {
+                "id": result["id"],
+                "tournament_id": result.get("tournament_id"),
+                "miner_address": result.get("miner_address"),
+                "economic_unit_id": result.get("economic_unit_id"),
+                "final_rank": result.get("final_rank"),
+                "total_score": result.get("total_score"),
+                "final_ranking_id": result.get("final_ranking_id"),
+                "standing_snapshot_id": result.get("standing_snapshot_id"),
+                "standing_snapshot_hash": result.get("standing_snapshot_hash"),
+                "evidence_root": result.get("evidence_root"),
+                "evidence_state": result.get("evidence_state"),
+                "evaluation_version": result.get("evaluation_version"),
+                "locked_at": result.get("locked_at"),
+                "anchorable_at": result.get("anchorable_at"),
+            }
+        )
+        final_ranking = final_rankings_by_id.get(result.get("final_ranking_id"))
+        if final_ranking:
+            final_ranking_refs.append(
+                {
+                    "id": final_ranking.get("id"),
+                    "tournament_id": final_ranking.get("tournament_id"),
+                    "miner_address": final_ranking.get("miner_address") or final_ranking.get("source_user_id"),
+                    "rank": final_ranking.get("rank"),
+                    "rank_state": final_ranking.get("rank_state"),
+                    "standing_snapshot_id": final_ranking.get("standing_snapshot_id"),
+                    "standing_snapshot_hash": final_ranking.get("standing_snapshot_hash"),
+                    "evidence_root": final_ranking.get("evidence_root"),
+                    "evidence_state": final_ranking.get("evidence_state"),
+                    "policy_bundle_version": final_ranking.get("policy_bundle_version"),
+                }
+            )
+        miner = miners_by_address.get(result.get("miner_address"))
+        if miner:
+            miner_refs.append(
+                {
+                    "address": miner.get("address"),
+                    "economic_unit_id": miner.get("economic_unit_id"),
+                    "poker_mtt_user_id": miner.get("poker_mtt_user_id"),
+                    "poker_mtt_auth_source": miner.get("poker_mtt_auth_source"),
+                    "poker_mtt_reward_bound": miner.get("poker_mtt_reward_bound"),
+                    "poker_mtt_reward_bound_at": miner.get("poker_mtt_reward_bound_at"),
+                    "poker_mtt_is_synthetic": miner.get("poker_mtt_is_synthetic"),
+                    "poker_mtt_identity_expires_at": miner.get("poker_mtt_identity_expires_at"),
+                    "poker_mtt_identity_revoked_at": miner.get("poker_mtt_identity_revoked_at"),
+                }
+            )
+        rating_snapshot = rating_snapshots_by_miner.get(result.get("miner_address"))
+        if rating_snapshot:
+            rating_refs.append(
+                {
+                    "id": rating_snapshot.get("id"),
+                    "miner_address": rating_snapshot.get("miner_address"),
+                    "window_start_at": rating_snapshot.get("window_start_at"),
+                    "window_end_at": rating_snapshot.get("window_end_at"),
+                    "public_rating": rating_snapshot.get("public_rating"),
+                    "public_rank": rating_snapshot.get("public_rank"),
+                    "confidence": rating_snapshot.get("confidence"),
+                    "policy_bundle_version": rating_snapshot.get("policy_bundle_version"),
+                }
+            )
+    return _hash_payload(
+        {
+            "result_refs": result_refs,
+            "final_ranking_refs": sorted(final_ranking_refs, key=lambda item: item["id"] or ""),
+            "miner_refs": sorted(miner_refs, key=lambda item: item["address"] or ""),
+            "rating_refs": sorted(rating_refs, key=lambda item: item["miner_address"] or ""),
+        }
+    )
+
+
+def _summarize_reward_window_response(reward_window: dict, projection_artifact: dict | None = None) -> dict:
+    response = deepcopy(reward_window)
+    for field in ("task_run_ids", "miner_addresses"):
+        values = list(response.get(field) or [])
+        if len(values) <= POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT:
+            continue
+        response[f"{field}_root"] = _hash_sequence(sorted(values))
+        response[f"{field}_count"] = len(values)
+        response[f"{field}_sample"] = sorted(values)[:10]
+        response.pop(field, None)
+    if projection_artifact:
+        projection_payload = projection_artifact.get("payload_json") or {}
+        response.update(
+            {
+                "artifact_page_count": projection_payload.get("artifact_page_count", 1),
+                "miner_reward_rows_root": projection_payload.get("miner_reward_rows_root"),
+                "projection_artifact_id": projection_artifact.get("id"),
+            }
+        )
+    return response
+
+
+def _reward_window_storage_matches(existing: dict, candidate: dict) -> bool:
+    compared_fields = (
+        "id",
+        "lane",
+        "state",
+        "window_start_at",
+        "window_end_at",
+        "task_count",
+        "submission_count",
+        "miner_count",
+        "total_reward_amount",
+        "settlement_batch_id",
+        "policy_bundle_version",
+        "canonical_root",
+        "task_run_ids",
+        "miner_addresses",
+    )
+    return all(existing.get(field) == candidate.get(field) for field in compared_fields)
+
+
+def _poker_mtt_projection_artifact_from_refs(artifacts: list[dict]) -> dict | None:
+    return next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.get("kind") == "poker_mtt_reward_window_projection"
+        ),
+        None,
+    )
 
 
 def _poker_mtt_reward_window_id(lane: str, window_start: datetime, window_end: datetime) -> str:
@@ -3035,14 +3175,37 @@ class ForecastMiningService:
             raise ValueError("window_end_at must be after window_start_at")
 
         current = as_utc_datetime(now or utc_now()).replace(microsecond=0)
-        selected_results = []
-        for result in await self.repo.list_poker_mtt_results_for_reward_window(
+        resolved_reward_window_id = reward_window_id or _poker_mtt_reward_window_id(lane, window_start, window_end)
+        existing_window = await self.repo.get_reward_window(resolved_reward_window_id)
+        existing_projection_artifact = None
+        if existing_window:
+            existing_artifacts = await self.repo.list_artifacts_for_entity("reward_window", resolved_reward_window_id)
+            existing_projection_artifact = _poker_mtt_projection_artifact_from_refs(existing_artifacts)
+            if existing_window.get("settlement_batch_id"):
+                existing_batch = await self.repo.get_settlement_batch(existing_window["settlement_batch_id"])
+                if existing_batch and existing_batch.get("state") not in {None, "open"}:
+                    return _summarize_reward_window_response(existing_window, existing_projection_artifact)
+
+        resolved_policy_bundle_version = (
+            policy_bundle_version
+            or (existing_window.get("policy_bundle_version") if existing_window else None)
+            or _default_poker_mtt_policy_bundle_version(self.settings, lane)
+        )
+        window_inputs = await self.repo.load_poker_mtt_reward_window_inputs(
             lane=lane,
             window_start_at=window_start,
             window_end_at=window_end,
             include_provisional=include_provisional,
-            policy_bundle_version=policy_bundle_version or _default_poker_mtt_policy_bundle_version(self.settings, lane),
-        ):
+            policy_bundle_version=resolved_policy_bundle_version,
+            current_at=current,
+        )
+        candidate_results = list(window_inputs.get("results") or [])
+        final_rankings_by_id = dict(window_inputs.get("final_rankings_by_id") or {})
+        miners_by_address = dict(window_inputs.get("miners_by_address") or {})
+        rating_snapshots_by_miner = dict(window_inputs.get("rating_snapshots_by_miner") or {})
+
+        selected_results = []
+        for result in candidate_results:
             locked_at = result.get("locked_at")
             anchorable_at = result.get("anchorable_at") or locked_at
             if not anchorable_at or as_utc_datetime(anchorable_at) > current:
@@ -3051,7 +3214,7 @@ class ForecastMiningService:
                 final_rank = int(result.get("final_rank"))
             except (TypeError, ValueError):
                 continue
-            final_ranking = await self.repo.get_poker_mtt_final_ranking(result["final_ranking_id"])
+            final_ranking = final_rankings_by_id.get(result["final_ranking_id"])
             if final_ranking is None:
                 continue
             if not _poker_mtt_final_ranking_matches_legacy_result(
@@ -3063,7 +3226,7 @@ class ForecastMiningService:
                 policy_bundle_version=result["evaluation_version"],
             ):
                 continue
-            miner = await self.repo.get_miner(result["miner_address"])
+            miner = miners_by_address.get(result["miner_address"])
             if _poker_mtt_reward_identity_blocker(miner, current):
                 continue
             selected_results.append(result)
@@ -3071,17 +3234,26 @@ class ForecastMiningService:
         if not selected_results:
             raise ValueError("no poker mtt results found for reward window")
 
-        resolved_reward_window_id = reward_window_id or _poker_mtt_reward_window_id(lane, window_start, window_end)
-        existing_window = await self.repo.get_reward_window(resolved_reward_window_id)
-        if existing_window and existing_window.get("settlement_batch_id"):
-            existing_batch = await self.repo.get_settlement_batch(existing_window["settlement_batch_id"])
-            if existing_batch and existing_batch.get("state") not in {None, "open"}:
-                return existing_window
-        resolved_policy_bundle_version = (
-            policy_bundle_version
-            or (existing_window.get("policy_bundle_version") if existing_window else None)
-            or _default_poker_mtt_policy_bundle_version(self.settings, lane)
+        input_snapshot_root = _poker_mtt_reward_window_input_root(
+            selected_results=selected_results,
+            final_rankings_by_id=final_rankings_by_id,
+            miners_by_address=miners_by_address,
+            rating_snapshots_by_miner=rating_snapshots_by_miner,
         )
+        if existing_window and existing_projection_artifact:
+            existing_projection_payload = existing_projection_artifact.get("payload_json") or {}
+            if (
+                existing_projection_payload.get("input_snapshot_root") == input_snapshot_root
+                and existing_projection_payload.get("reward_pool_amount") == reward_pool_amount
+                and existing_projection_payload.get("policy_bundle_version") == resolved_policy_bundle_version
+                and existing_projection_payload.get("include_provisional") is include_provisional
+                and (
+                    existing_window.get("settlement_batch_id")
+                    or existing_window.get("state") == "no_positive_weight"
+                )
+            ):
+                return _summarize_reward_window_response(existing_window, existing_projection_artifact)
+
         tournament_ids = sorted({result["tournament_id"] for result in selected_results})
 
         score_weights: dict[str, float] = {}
@@ -3189,10 +3361,9 @@ class ForecastMiningService:
         )
         rating_snapshot_rows = []
         for miner_address in miner_addresses:
-            snapshots = await self.repo.list_poker_mtt_rating_snapshots(miner_address=miner_address)
-            if not snapshots:
+            snapshot = rating_snapshots_by_miner.get(miner_address)
+            if not snapshot:
                 continue
-            snapshot = snapshots[0]
             rating_snapshot_rows.append(
                 {
                     "rating_snapshot_id": snapshot["id"],
@@ -3206,28 +3377,33 @@ class ForecastMiningService:
             )
         rating_snapshot_rows.sort(key=lambda item: (item["miner_address"], item["rating_snapshot_id"]))
 
-        saved = await self.repo.save_reward_window(
-            _materialize_reward_window(
-                {
-                    "id": resolved_reward_window_id,
-                    "lane": lane,
-                    "state": reward_window_state,
-                    "window_start_at": isoformat_z(window_start),
-                    "window_end_at": isoformat_z(window_end),
-                    "task_count": len(tournament_ids),
-                    "submission_count": len(selected_results),
-                    "miner_count": len(miner_addresses),
-                    "total_reward_amount": saved_reward_amount,
-                    "settlement_batch_id": existing_window.get("settlement_batch_id") if existing_window and has_positive_weight else None,
-                    "task_run_ids": tournament_ids,
-                    "miner_addresses": miner_addresses,
-                    "policy_bundle_version": resolved_policy_bundle_version,
-                    "created_at": existing_window.get("created_at", isoformat_z(current)) if existing_window else isoformat_z(current),
-                    "updated_at": isoformat_z(current),
-                }
-            )[0]
+        candidate_window, _ = _materialize_reward_window(
+            {
+                "id": resolved_reward_window_id,
+                "lane": lane,
+                "state": reward_window_state,
+                "window_start_at": isoformat_z(window_start),
+                "window_end_at": isoformat_z(window_end),
+                "task_count": len(tournament_ids),
+                "submission_count": len(selected_results),
+                "miner_count": len(miner_addresses),
+                "total_reward_amount": saved_reward_amount,
+                "settlement_batch_id": existing_window.get("settlement_batch_id") if existing_window and has_positive_weight else None,
+                "task_run_ids": tournament_ids,
+                "miner_addresses": miner_addresses,
+                "policy_bundle_version": resolved_policy_bundle_version,
+                "created_at": existing_window.get("created_at", isoformat_z(current)) if existing_window else isoformat_z(current),
+                "updated_at": isoformat_z(current),
+            }
         )
+        reward_window_changed = True
+        if existing_window and _reward_window_storage_matches(existing_window, candidate_window):
+            saved = existing_window
+            reward_window_changed = False
+        else:
+            saved = await self.repo.save_reward_window(candidate_window)
         await self._upsert_reward_window_artifact(saved, current)
+        poker_mtt_result_ids = sorted(result["id"] for result in selected_results)
         projection_payload = {
             "reward_window_id": saved["id"],
             "lane": lane,
@@ -3237,7 +3413,9 @@ class ForecastMiningService:
             "policy_bundle_version": resolved_policy_bundle_version,
             "include_provisional": include_provisional,
             "tournament_ids": tournament_ids,
-            "poker_mtt_result_ids": sorted(result["id"] for result in selected_results),
+            "poker_mtt_result_ids_root": _hash_sequence(poker_mtt_result_ids),
+            "poker_mtt_result_count": len(selected_results),
+            "input_snapshot_root": input_snapshot_root,
             "miner_reward_rows": miner_reward_rows,
             "budget_disposition": budget_disposition,
             "final_ranking_root": _hash_sequence(final_ranking_refs),
@@ -3246,22 +3424,29 @@ class ForecastMiningService:
             "multiplier_snapshot_root": _hash_sequence(multiplier_snapshot_rows),
             **(projection_metadata or {}),
         }
+        if len(poker_mtt_result_ids) <= POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT:
+            projection_payload["poker_mtt_result_ids"] = poker_mtt_result_ids
         projection_payload["projection_root"] = _hash_payload(projection_payload)
+        existing_projection_root = (
+            (existing_projection_artifact.get("payload_json") or {}).get("projection_root")
+            if existing_projection_artifact
+            else None
+        )
         projection_artifact = await self._upsert_poker_mtt_reward_window_projection_artifact(
             reward_window=saved,
             now=current,
             payload=projection_payload,
         )
-        if has_positive_weight:
+        projection_changed = existing_projection_root != projection_payload["projection_root"]
+        if has_positive_weight and (
+            reward_window_changed
+            or projection_changed
+            or not existing_window
+            or not existing_window.get("settlement_batch_id")
+        ):
             await self._build_settlement_batches(current)
         returned = await self.repo.get_reward_window(saved["id"]) or saved
-        projection_artifact_payload = projection_artifact.get("payload_json") or {}
-        return {
-            **returned,
-            "artifact_page_count": projection_artifact_payload.get("artifact_page_count", 1),
-            "miner_reward_rows_root": projection_artifact_payload.get("miner_reward_rows_root"),
-            "projection_artifact_id": projection_artifact.get("id"),
-        }
+        return _summarize_reward_window_response(returned, projection_artifact)
 
     async def record_poker_mtt_correction(
         self,
@@ -3684,15 +3869,25 @@ class ForecastMiningService:
             ("poker_mtt_daily", int(getattr(self.settings, "poker_mtt_daily_reward_pool_amount", 0) or 0), _day_bucket_start, timedelta(days=1)),
             ("poker_mtt_weekly", int(getattr(self.settings, "poker_mtt_weekly_reward_pool_amount", 0) or 0), _week_bucket_start, timedelta(days=7)),
         ]
-        all_results = await self.repo.list_poker_mtt_results()
         current = now.astimezone(timezone.utc).replace(microsecond=0)
+        active_lane_configs = [config for config in lane_configs if config[1] > 0]
+        if not active_lane_configs:
+            return
+        lookback_days = int(getattr(self.settings, "poker_mtt_reward_window_reconcile_lookback_days", 35) or 35)
+        candidate_results = await self.repo.list_poker_mtt_closed_reward_window_candidates(
+            locked_after_at=current - timedelta(days=max(1, lookback_days)),
+            locked_before_at=current,
+            policy_bundle_versions=[
+                _default_poker_mtt_policy_bundle_version(self.settings, lane)
+                for lane, _, _, _ in active_lane_configs
+            ],
+        )
 
-        for lane, reward_pool_amount, bucket_fn, window_size in lane_configs:
-            if reward_pool_amount <= 0:
-                continue
+        for lane, reward_pool_amount, bucket_fn, window_size in active_lane_configs:
+            lane_policy_bundle_version = _default_poker_mtt_policy_bundle_version(self.settings, lane)
 
             grouped_results: dict[datetime, list[dict]] = {}
-            for result in all_results:
+            for result in candidate_results:
                 locked_at = result.get("locked_at")
                 if not locked_at:
                     continue
@@ -3700,7 +3895,10 @@ class ForecastMiningService:
                     continue
                 if result.get("human_only") is not True:
                     continue
-                if not result.get("evaluation_version"):
+                if not poker_mtt_results.result_policy_matches_reward_window(
+                    result_policy_bundle_version=result.get("evaluation_version"),
+                    reward_policy_bundle_version=lane_policy_bundle_version,
+                ):
                     continue
                 if result.get("evidence_state") not in poker_mtt_results.REWARD_READY_EVIDENCE_STATES:
                     continue
@@ -3738,7 +3936,7 @@ class ForecastMiningService:
                     window_end_at=window_end,
                     reward_pool_amount=reward_pool_amount,
                     include_provisional=provisional_count > 0,
-                    policy_bundle_version=_default_poker_mtt_policy_bundle_version(self.settings, lane),
+                    policy_bundle_version=lane_policy_bundle_version,
                     projection_metadata={
                         "completeness_mode": "watermark_release" if provisional_count > 0 else "all_final",
                         "provisional_result_count": provisional_count,
@@ -3851,18 +4049,21 @@ class ForecastMiningService:
     async def _upsert_reward_window_artifact(self, reward_window: dict, now: datetime) -> dict:
         artifact_id = f"art:reward_window:{reward_window['id']}:membership"
         materialized_reward_window, payload = _materialize_reward_window(reward_window)
-        return await self.repo.save_artifact(
-            {
-                "id": artifact_id,
-                "kind": "reward_window_membership",
-                "entity_type": "reward_window",
-                "entity_id": materialized_reward_window["id"],
-                "payload_json": payload,
-                "payload_hash": materialized_reward_window["canonical_root"],
-                "created_at": isoformat_z(now),
-                "updated_at": isoformat_z(now),
-            }
+        rows = await self.repo.save_artifacts_bulk(
+            [
+                {
+                    "id": artifact_id,
+                    "kind": "reward_window_membership",
+                    "entity_type": "reward_window",
+                    "entity_id": materialized_reward_window["id"],
+                    "payload_json": payload,
+                    "payload_hash": materialized_reward_window["canonical_root"],
+                    "created_at": isoformat_z(now),
+                    "updated_at": isoformat_z(now),
+                }
+            ]
         )
+        return rows[0]
 
     async def _upsert_poker_mtt_reward_window_projection_artifact(
         self,
@@ -3875,8 +4076,21 @@ class ForecastMiningService:
             payload,
             page_size=getattr(self.settings, "poker_mtt_projection_artifact_page_size", 5000),
         )
+        artifact_id = f"art:reward_window:{reward_window['id']}:poker_mtt_projection"
+        artifact_rows = [
+            {
+                "id": artifact_id,
+                "kind": "poker_mtt_reward_window_projection",
+                "entity_type": "reward_window",
+                "entity_id": reward_window["id"],
+                "payload_json": payload,
+                "payload_hash": _hash_payload(payload),
+                "created_at": isoformat_z(now),
+                "updated_at": isoformat_z(now),
+            }
+        ]
         for page in pages:
-            await self.repo.save_artifact(
+            artifact_rows.append(
                 {
                     "id": f"art:reward_window:{reward_window['id']}:poker_mtt_projection:miner_rewards:{page['page_index']}",
                     "kind": "poker_mtt_reward_window_projection_page",
@@ -3888,19 +4102,8 @@ class ForecastMiningService:
                     "updated_at": isoformat_z(now),
                 }
             )
-        artifact_id = f"art:reward_window:{reward_window['id']}:poker_mtt_projection"
-        return await self.repo.save_artifact(
-            {
-                "id": artifact_id,
-                "kind": "poker_mtt_reward_window_projection",
-                "entity_type": "reward_window",
-                "entity_id": reward_window["id"],
-                "payload_json": payload,
-                "payload_hash": _hash_payload(payload),
-                "created_at": isoformat_z(now),
-                "updated_at": isoformat_z(now),
-            }
-        )
+        saved = await self.repo.save_artifacts_bulk(artifact_rows)
+        return next(row for row in saved if row["id"] == artifact_id)
 
     async def _upsert_settlement_anchor_artifact(self, settlement_batch: dict, now: datetime) -> dict:
         payload = settlement_batch.get("anchor_payload_json")

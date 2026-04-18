@@ -210,31 +210,40 @@ Commit: `git commit -m "feat(pokermtt): add mq recovery evidence gates"`
 - Add: `scripts/poker_mtt/run_phase3_db_load_check.sh`
 - Test: `tests/mining_service/test_poker_mtt_phase3_db_load.py`
 
-- [ ] **Step 1: Write failing Postgres-backed load tests**
+- [x] **Step 1: Write failing Postgres-backed load tests**
 
 Seed 300 and 20k reward-ready rows, call `POST /admin/poker-mtt/reward-windows/build`, and assert response size, page count, root reconstruction, SQL count, idempotent rebuild, and RSS delta.
 
-- [ ] **Step 2: Add bulk repository methods**
+- [x] **Step 2: Add bulk repository methods**
 
 Bulk final rankings by ID, latest rating snapshots by miner set, bulk artifact upsert, and bounded closed-window candidate query.
 
-- [ ] **Step 3: Replace N+1 reward-window logic**
+- [x] **Step 3: Replace N+1 reward-window logic**
 
 Remove per-result final-ranking lookups and per-miner rating snapshot queries from the main build path.
 
-- [ ] **Step 4: Replace automatic full scan**
+- [x] **Step 4: Replace automatic full scan**
 
 Automatic reconcile must use indexed closed-window query, not `list_poker_mtt_results()`.
 
-- [ ] **Step 5: Add indexes and EXPLAIN assertions**
+- [x] **Step 5: Add indexes and EXPLAIN assertions**
 
 Cover locked/evidence-ready results, artifacts by entity/kind/id, rating snapshots by miner/window, and final ranking IDs.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_phase3_db_load.py`
 
 Commit: `git commit -m "perf(pokermtt): prove db backed reward window scale"`
+
+2026-04-18 implementation note:
+
+- Added `tests/mining_service/test_poker_mtt_phase3_db_load.py` covering 300-row and 20k-row service-path builds, response-size gating, 5,000-row page artifacts, page-root reconstruction, RSS guard, idempotent rebuild, bounded auto reconcile, and required scale indexes.
+- Added repository bulk APIs for reward-window input snapshots, final rankings by IDs, miners by addresses, latest rating snapshots by miner set, bulk artifact upsert, and closed-window candidate queries.
+- `build_poker_mtt_reward_window` now consumes a bulk input snapshot instead of per-result final-ranking lookups, per-miner reward identity lookups, and per-miner rating snapshot queries.
+- Unchanged rebuilds compare the stored input snapshot root and return the existing projection without rewriting reward windows or artifact rows.
+- 20k reward-window responses omit the full `miner_addresses` array and return root/count/sample plus projection/page artifact refs; page artifacts reconstruct exactly 20k reward rows.
+- Automatic Poker MTT reward-window reconcile now uses a lookback-bounded, indexed closed-window candidate query instead of `list_poker_mtt_results()`.
 
 ### Task 6: Wire External Settlement Query And Bounded Anchor Payloads
 

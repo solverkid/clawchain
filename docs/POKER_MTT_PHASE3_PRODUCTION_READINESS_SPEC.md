@@ -175,9 +175,9 @@ Acceptance:
 
 Current blockers:
 
-- Current 20k check is offline shape, not `POST /admin/poker-mtt/reward-windows/build`.
-- Reward-window build still does per-result final-ranking lookup and per-miner rating snapshot lookup.
-- Automatic reconcile scans all historical poker MTT results.
+- 2026-04-18 Task 5 已把 20k check 提升到 real service path：`build_poker_mtt_reward_window()` 通过 bulk input snapshot 覆盖 300 / 20k rows、响应体大小、page artifacts 和 root reconstruction。
+- Reward-window build 的 per-result final-ranking lookup、per-miner reward identity lookup、per-miner rating snapshot lookup 已移除；Postgres repository 有 bulk/join input path，FakeRepository 有同等 contract。
+- Automatic reconcile 已改成 lookback-bounded closed-window candidate query，不再扫描全部历史 poker MTT results。
 - Reward pool amount is direct input/config, not yet tied to a production budget ledger.
 - Current aggregation uses max score per economic unit, which may over-reward one lucky window result.
 - Multiplier can update immediately, creating same-window feedback risk.
@@ -194,6 +194,15 @@ Acceptance:
 - Daily plus weekly payouts cannot exceed the configured emission slice.
 - Window aggregation policy is explicit and versioned. The default should not silently be `max()` unless product explicitly freezes "best-of-window".
 - Multiplier snapshots have `effective_window_id` or `effective_at` and cannot affect the same window's payout.
+
+2026-04-18 Task 5 closeout:
+
+- Added service-path load coverage for 300 and 20k reward-ready rows. The 20k case returns 4 page artifacts at 5,000 rows/page, keeps the response under 256 KB, reconstructs all rows from page artifacts, and guards build-time Python memory with a 512 MB peak threshold.
+- Added repository APIs: `load_poker_mtt_reward_window_inputs`, `list_poker_mtt_final_rankings_by_ids`, `list_miners_by_addresses`, `list_latest_poker_mtt_rating_snapshots_for_miners`, `save_artifacts_bulk`, and `list_poker_mtt_closed_reward_window_candidates`.
+- Added indexes for reward-window-ready result selection, artifact entity/kind lookup, final-ranking joins, and rating snapshot miner/window reads.
+- Unchanged rebuilds compare `input_snapshot_root` and return the existing projection without reward-window update or artifact rewrite.
+- Main projection artifacts no longer need to inline 20k `poker_mtt_result_ids`; large responses return root/count/sample for oversized lists and page refs for reward rows.
+- Added `scripts/poker_mtt/run_phase3_db_load_check.sh` as the repeatable local/staging entry point for the Phase 3 load contract.
 
 ### G5 - Settlement External Query And Bounded Anchor Artifacts
 

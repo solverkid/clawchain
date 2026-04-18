@@ -1397,7 +1397,7 @@ Phase 3 的目标:
 - 补 registration / waitlist / no-show donor parity，Redis live ranking 不能单独作为 final archive
 - 把 hand history / HUD / hidden eval / MQ checkpoint 做成 policy-owned evidence readiness
 - 把 admin auth、projector auth、durable reward-bound identity 做成 fail-closed production gate
-- 把 20k reward-window 从 offline shape test 提升到 Postgres-backed service path
+- 20k reward-window 已从 offline shape test 提升到 service-path load contract；真实 staging Postgres artifact 作为上线前证据补充
 - 把 reward budget、window aggregation、multiplier effective-window 做成版本化经济合同
 - 把 `x/settlement` 从 keeper/local proof 提升到 external gRPC/gateway/CLI query proof
 - 只产出 window-level `reputation_delta` draft，不直接写 `x/reputation`
@@ -1454,6 +1454,15 @@ Phase 3 完成前，仍保持:
 - open conflict、open DLQ、checkpoint lag 都会使 evidence result 进入 `blocked`。
 - evidence artifacts 改成 content-addressed ID，manifest root 变化后旧 artifact 仍可读取，便于 replay / audit / ELO/HUD 复算。
 
+2026-04-18 Task 5 closeout:
+
+- 20k reward-window gate 已从 offline shape test 升级为 service-path load test：`build_poker_mtt_reward_window()` 覆盖 300 / 20k reward-ready rows、4 个 5,000-row page artifacts、response < 256 KB、root reconstruction 和 memory guard。
+- Reward-window selection 改为 bulk input snapshot：一次性读取 candidate results、final rankings、reward-bound miner identities、latest rating snapshots，不再按 result/miner 做 N+1。
+- 大窗口 response 不再返回完整 20k `miner_addresses`；返回 root/count/sample，并通过 projection artifact + page artifacts 获取完整 reward rows。
+- Unchanged rebuild 用 `input_snapshot_root` 判定幂等，不更新 reward window，也不重写 artifact rows。
+- 自动 daily/weekly reconcile 改成 lookback-bounded closed-window candidate query，不再调用 `list_poker_mtt_results()` 全量扫描历史。
+- `scripts/poker_mtt/run_phase3_db_load_check.sh` 是当前可重复执行的 Phase 3 load contract 入口。
+
 2026-04-18 Task 2 closeout:
 
 - Donor parity finalizer gate 已补 registration/waitlist/no-show snapshot merge。
@@ -1488,7 +1497,7 @@ Phase 3 完成前，仍保持:
 2. 补 registration / waitlist / no-show final archive parity
 3. 补 admin fail-closed、resolved admin principal、durable reward-bound identity
 4. 补 MQ checkpoint / replay / DLQ / lag 和 policy-owned evidence readiness
-5. 把 20k reward-window 验收迁到真实 Postgres service path，并消掉 N+1 / full historical scan
+5. 20k reward-window 已迁到 service path，并消掉 N+1 / full historical scan；后续只需要接真实 staging Postgres load artifact
 6. 补 settlement external query、bounded anchor artifacts、terminal mismatch states
 7. 冻结 budget ledger、aggregation policy、multiplier effective-window
 8. 把 sidecar retry、30-player finish gate、2,000-table burst、real observability 做成 CI/manual gates

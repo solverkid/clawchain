@@ -187,6 +187,7 @@ artifacts = Table(
     Column("payload_hash", String, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_artifacts_entity_kind_id", "entity_type", "entity_id", "kind"),
 )
 
 
@@ -511,6 +512,7 @@ poker_mtt_final_rankings = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("tournament_id", "member_id", name="uq_poker_mtt_final_ranking_tournament_member"),
+    Index("ix_poker_mtt_final_rankings_window_join", "id", "tournament_id", "miner_address", "policy_bundle_version"),
 )
 
 
@@ -554,6 +556,14 @@ poker_mtt_result_entries = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Index("ix_poker_mtt_results_locked_reward_window", "locked_at", "rated_or_practice", "human_only", "evaluation_state"),
+    Index(
+        "ix_poker_mtt_results_reward_window_ready",
+        "locked_at",
+        "evaluation_version",
+        "evidence_state",
+        "rank_state",
+        "eligible_for_multiplier",
+    ),
     UniqueConstraint("tournament_id", "miner_address", name="uq_poker_mtt_result_tournament_miner"),
 )
 
