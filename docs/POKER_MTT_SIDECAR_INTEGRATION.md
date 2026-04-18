@@ -1225,6 +1225,14 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 - mining-service `miners` row 现在保存 Poker MTT durable identity 字段，并在 reward-window build 时重新读取当前 miner identity；projection 后被 revoke/expire 的 identity 也会被窗口选择跳过。
 - admin routes 绑定 external host 或 non-local runtime 时必须有 bearer admin auth；sidecar/projector 对 401/403 应按永久配置/auth 错误处理，不做无限 retry。
 
+2026-04-18 已落地的 MQ / evidence recovery 部分:
+
+- completed-hand ingest 会把 donor RocketMQ source 映射为 checkpoint：`topic`、`queue`、`consumer_group`、`offset`、`biz_id`、`message_id`、`hand_id`、`replay_root`、`lag_messages`。
+- inserted / duplicate / updated / stale / conflict / dlq 都会推进 checkpoint，因此 crash 后重放同一手牌可以补齐 checkpoint，不会重复写 reward input。
+- same-version checksum mismatch 会落 durable conflict/manual-review，malformed payload 会落 DLQ；两者都会阻断 reward-ready evidence。
+- `poker_mtt_consumer_checkpoint_manifest` 现在进入 tournament evidence root，hand history 和 checkpoint 是 required；hidden/HUD 只能按 policy 降级为 `accepted_degraded`。
+- evidence artifact ID 带 manifest root，旧 evidence root 不会被 rebuild 覆盖。
+
 ### 18.8 Git 排除口径
 
 `lepoker-gameserver` 是独立 donor repo，不随 ClawChain 提交。

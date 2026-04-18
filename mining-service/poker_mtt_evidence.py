@@ -10,12 +10,13 @@ EVIDENCE_MANIFEST_SCHEMA_VERSION = "poker_mtt.evidence_manifest.v1"
 FINAL_RANKING_MANIFEST_KIND = "poker_mtt_final_ranking_manifest"
 HAND_HISTORY_MANIFEST_KIND = "poker_mtt_hand_history_manifest"
 HIDDEN_EVAL_MANIFEST_KIND = "poker_mtt_hidden_eval_manifest"
+CONSUMER_CHECKPOINT_MANIFEST_KIND = "poker_mtt_consumer_checkpoint_manifest"
 STUB_MANIFEST_KINDS = {
     HAND_HISTORY_MANIFEST_KIND,
     "poker_mtt_short_term_hud_manifest",
     "poker_mtt_long_term_hud_manifest",
     HIDDEN_EVAL_MANIFEST_KIND,
-    "poker_mtt_consumer_checkpoint_manifest",
+    CONSUMER_CHECKPOINT_MANIFEST_KIND,
 }
 FINAL_RANKING_FIXED_DECIMAL_FIELDS = {"chip", "chip_delta", "bounty", "start_chip", "zset_score"}
 HAND_HISTORY_ROW_SORT_KEYS = ("tournament_id", "table_id", "hand_no", "hand_id")
@@ -70,6 +71,24 @@ def build_hidden_eval_manifest(
         tournament_id=tournament_id,
         rows=[_normalize_hidden_eval_row(row) for row in rows],
         row_sort_keys=HIDDEN_EVAL_ROW_SORT_KEYS,
+        policy_bundle_version=policy_bundle_version,
+        evidence_state="complete",
+        generated_at=generated_at,
+    )
+
+
+def build_consumer_checkpoint_manifest(
+    *,
+    tournament_id: str,
+    rows: Sequence[dict],
+    policy_bundle_version: str,
+    generated_at: datetime | str,
+) -> dict:
+    return build_manifest(
+        kind=CONSUMER_CHECKPOINT_MANIFEST_KIND,
+        tournament_id=tournament_id,
+        rows=[_normalize_checkpoint_row(row) for row in rows],
+        row_sort_keys=("topic", "consumer_group", "queue"),
         policy_bundle_version=policy_bundle_version,
         evidence_state="complete",
         generated_at=generated_at,
@@ -172,3 +191,21 @@ def _normalize_hidden_eval_row(row: dict) -> dict:
         }
     )
     return normalized
+
+
+def _normalize_checkpoint_row(row: dict) -> dict:
+    return canonicalize(
+        {
+            "tournament_id": row.get("tournament_id"),
+            "topic": row.get("topic"),
+            "queue": row.get("queue"),
+            "consumer_group": row.get("consumer_group"),
+            "last_offset": row.get("last_offset"),
+            "last_message_id": row.get("last_message_id"),
+            "last_biz_id": row.get("last_biz_id"),
+            "last_hand_id": row.get("last_hand_id"),
+            "last_ingest_state": row.get("last_ingest_state"),
+            "replay_root": row.get("replay_root"),
+            "lag_messages": int(row.get("lag_messages") or 0),
+        }
+    )

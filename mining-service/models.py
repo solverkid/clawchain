@@ -288,6 +288,80 @@ poker_mtt_hand_events = Table(
 )
 
 
+poker_mtt_mq_checkpoints = Table(
+    "poker_mtt_mq_checkpoints",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=True),
+    Column("topic", String, nullable=False),
+    Column("queue", String, nullable=False),
+    Column("consumer_group", String, nullable=False),
+    Column("last_offset", Integer, nullable=True),
+    Column("last_message_id", String, nullable=True),
+    Column("last_biz_id", String, nullable=True),
+    Column("last_hand_id", String, nullable=True),
+    Column("last_ingest_state", String, nullable=False),
+    Column("replay_root", String, nullable=False),
+    Column("lag_messages", Integer, nullable=False, default=0),
+    Column("lag_watermark_at", DateTime(timezone=True), nullable=True),
+    Column("source_json", JSONB, nullable=False, default=dict),
+    Column("last_processed_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_mq_checkpoints_tournament", "tournament_id"),
+    Index("ix_poker_mtt_mq_checkpoints_group_queue", "topic", "consumer_group", "queue"),
+)
+
+
+poker_mtt_mq_conflicts = Table(
+    "poker_mtt_mq_conflicts",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=True),
+    Column("hand_id", String, nullable=True),
+    Column("topic", String, nullable=False),
+    Column("queue", String, nullable=False),
+    Column("consumer_group", String, nullable=False),
+    Column("offset", Integer, nullable=True),
+    Column("message_id", String, nullable=True),
+    Column("biz_id", String, nullable=True),
+    Column("version", Integer, nullable=True),
+    Column("checksum", String, nullable=True),
+    Column("previous_checksum", String, nullable=True),
+    Column("conflict_reason", String, nullable=False),
+    Column("state", String, nullable=False, default="manual_review"),
+    Column("payload_json", JSONB, nullable=False, default=dict),
+    Column("previous_payload_json", JSONB, nullable=True),
+    Column("source_json", JSONB, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_mq_conflicts_tournament_state", "tournament_id", "state"),
+    Index("ix_poker_mtt_mq_conflicts_hand", "hand_id"),
+)
+
+
+poker_mtt_mq_dlq = Table(
+    "poker_mtt_mq_dlq",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tournament_id", String, nullable=True),
+    Column("topic", String, nullable=False),
+    Column("queue", String, nullable=False),
+    Column("consumer_group", String, nullable=False),
+    Column("offset", Integer, nullable=True),
+    Column("message_id", String, nullable=True),
+    Column("biz_id", String, nullable=True),
+    Column("dlq_reason", String, nullable=False),
+    Column("state", String, nullable=False, default="open"),
+    Column("payload_json", JSONB, nullable=False, default=dict),
+    Column("source_json", JSONB, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_poker_mtt_mq_dlq_tournament_state", "tournament_id", "state"),
+    Index("ix_poker_mtt_mq_dlq_group_queue", "topic", "consumer_group", "queue"),
+)
+
+
 poker_mtt_short_term_hud_snapshots = Table(
     "poker_mtt_short_term_hud_snapshots",
     metadata,
@@ -497,6 +571,9 @@ TABLES = {
     "arena_result_entries": arena_result_entries,
     "poker_mtt_tournaments": poker_mtt_tournaments,
     "poker_mtt_hand_events": poker_mtt_hand_events,
+    "poker_mtt_mq_checkpoints": poker_mtt_mq_checkpoints,
+    "poker_mtt_mq_conflicts": poker_mtt_mq_conflicts,
+    "poker_mtt_mq_dlq": poker_mtt_mq_dlq,
     "poker_mtt_short_term_hud_snapshots": poker_mtt_short_term_hud_snapshots,
     "poker_mtt_long_term_hud_snapshots": poker_mtt_long_term_hud_snapshots,
     "poker_mtt_hidden_eval_entries": poker_mtt_hidden_eval_entries,

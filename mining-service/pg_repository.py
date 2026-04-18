@@ -21,6 +21,9 @@ from models import (
     arena_result_entries,
     poker_mtt_tournaments,
     poker_mtt_hand_events,
+    poker_mtt_mq_checkpoints,
+    poker_mtt_mq_conflicts,
+    poker_mtt_mq_dlq,
     poker_mtt_short_term_hud_snapshots,
     poker_mtt_long_term_hud_snapshots,
     poker_mtt_hidden_eval_entries,
@@ -148,6 +151,14 @@ def _poker_mtt_hand_event_values(event: dict, *, created_at: datetime | str | No
         raise ValueError("missing poker mtt hand_id")
     for field in ("created_at", "updated_at"):
         values[field] = _maybe_dt(values[field])
+    return values
+
+
+def _mq_row_values(row: dict) -> dict:
+    values = deepcopy(row)
+    for field in ("created_at", "updated_at", "last_processed_at", "lag_watermark_at"):
+        if field in values and values[field] is not None:
+            values[field] = _maybe_dt(values[field])
     return values
 
 
@@ -1173,6 +1184,99 @@ class PostgresRepository:
         async with self.engine.connect() as conn:
             rows = await conn.execute(query)
             return [_poker_mtt_hand_event_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_mq_checkpoint(self, checkpoint: dict) -> dict:
+        values = _mq_row_values(checkpoint)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(poker_mtt_mq_checkpoints.c.id).where(poker_mtt_mq_checkpoints.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_mq_checkpoints)
+                    .where(poker_mtt_mq_checkpoints.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_mq_checkpoints).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_mq_checkpoints).where(poker_mtt_mq_checkpoints.c.id == values["id"]))
+            return _row_to_dict(row.first()) or values
+
+    async def list_poker_mtt_mq_checkpoints(self, *, tournament_id: str | None = None) -> list[dict]:
+        query = select(poker_mtt_mq_checkpoints)
+        if tournament_id is not None:
+            query = query.where(poker_mtt_mq_checkpoints.c.tournament_id == tournament_id)
+        query = query.order_by(
+            poker_mtt_mq_checkpoints.c.topic.asc(),
+            poker_mtt_mq_checkpoints.c.consumer_group.asc(),
+            poker_mtt_mq_checkpoints.c.queue.asc(),
+        )
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_mq_conflict(self, conflict: dict) -> dict:
+        values = _mq_row_values(conflict)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(poker_mtt_mq_conflicts.c.id).where(poker_mtt_mq_conflicts.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_mq_conflicts)
+                    .where(poker_mtt_mq_conflicts.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_mq_conflicts).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_mq_conflicts).where(poker_mtt_mq_conflicts.c.id == values["id"]))
+            return _row_to_dict(row.first()) or values
+
+    async def list_poker_mtt_mq_conflicts(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_mq_conflicts)
+        if tournament_id is not None:
+            query = query.where(poker_mtt_mq_conflicts.c.tournament_id == tournament_id)
+        if state is not None:
+            query = query.where(poker_mtt_mq_conflicts.c.state == state)
+        query = query.order_by(poker_mtt_mq_conflicts.c.created_at.asc(), poker_mtt_mq_conflicts.c.id.asc())
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_row_to_dict(row) for row in rows.fetchall()]
+
+    async def save_poker_mtt_mq_dlq(self, dlq: dict) -> dict:
+        values = _mq_row_values(dlq)
+        async with self.engine.begin() as conn:
+            existing = await conn.execute(select(poker_mtt_mq_dlq.c.id).where(poker_mtt_mq_dlq.c.id == values["id"]))
+            if existing.scalar_one_or_none():
+                await conn.execute(
+                    update(poker_mtt_mq_dlq)
+                    .where(poker_mtt_mq_dlq.c.id == values["id"])
+                    .values(**values)
+                )
+            else:
+                await conn.execute(insert(poker_mtt_mq_dlq).values(**values))
+        async with self.engine.connect() as conn:
+            row = await conn.execute(select(poker_mtt_mq_dlq).where(poker_mtt_mq_dlq.c.id == values["id"]))
+            return _row_to_dict(row.first()) or values
+
+    async def list_poker_mtt_mq_dlq(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        query = select(poker_mtt_mq_dlq)
+        if tournament_id is not None:
+            query = query.where(poker_mtt_mq_dlq.c.tournament_id == tournament_id)
+        if state is not None:
+            query = query.where(poker_mtt_mq_dlq.c.state == state)
+        query = query.order_by(poker_mtt_mq_dlq.c.created_at.asc(), poker_mtt_mq_dlq.c.id.asc())
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(query)
+            return [_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict:
         values = _poker_mtt_hud_snapshot_values(row)

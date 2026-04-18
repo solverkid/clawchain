@@ -165,31 +165,40 @@ Commit: `git commit -m "feat(pokermtt): enforce reward-bound identity"`
 - Test: `tests/mining_service/test_poker_mtt_mq_recovery.py`
 - Test: `tests/mining_service/test_poker_mtt_evidence.py`
 
-- [ ] **Step 1: Write failing MQ recovery tests**
+- [x] **Step 1: Write failing MQ recovery tests**
 
 Cover duplicate message, lower stale version, higher version supersession, same-version checksum conflict persisted, malformed payload DLQ, crash after hand/HUD write before checkpoint, deterministic replay root, lag/watermark blocking reward readiness.
 
-- [ ] **Step 2: Add checkpoint/conflict/DLQ models**
+- [x] **Step 2: Add checkpoint/conflict/DLQ models**
 
 Model topic/queue, consumer group, offset, donor `bizId`, message ID, replay root, lag, conflict reason, and DLQ reason.
 
-- [ ] **Step 3: Persist checksum conflicts**
+- [x] **Step 3: Persist checksum conflicts**
 
 Same hand/version with checksum drift must create durable conflict/manual-review state and block reward readiness.
 
-- [ ] **Step 4: Make evidence readiness policy-owned**
+- [x] **Step 4: Make evidence readiness policy-owned**
 
 Required components and degraded allowlist come from policy, not caller convenience. Missing required roots cannot return `complete`.
 
-- [ ] **Step 5: Version evidence artifacts**
+- [x] **Step 5: Version evidence artifacts**
 
 Use content-addressed or versioned artifact IDs so old roots remain retrievable after rebuilds.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_mq_recovery.py tests/mining_service/test_poker_mtt_evidence.py tests/mining_service/test_poker_mtt_reward_gating.py`
 
 Commit: `git commit -m "feat(pokermtt): add mq recovery evidence gates"`
+
+2026-04-18 implementation note:
+
+- Added MQ recovery coverage for duplicate replay, higher-version supersession, lower-version stale replay, crash after hand write before checkpoint, deterministic replay roots, same-version checksum conflict persistence, malformed payload DLQ, checkpoint lag blocking, and caller-degraded policy rejection.
+- Added durable MQ checkpoint/conflict/DLQ repository models and Postgres tables keyed by topic, queue, consumer group, donor `bizId`, message ID, hand ID, offset, replay root, lag, and manual-review/DLQ reason.
+- `ingest_poker_mtt_hand_event` now writes checkpoint state after inserted/duplicate/updated/stale/conflict/DLQ outcomes, persists checksum conflicts as `manual_review`, and turns malformed payloads into DLQ rows rather than crashing the consumer.
+- Evidence readiness is now policy-owned: final ranking, hand history, consumer checkpoint, hidden eval, and short/long HUD are the policy component set; only hidden/HUD manifests are policy-allowlisted for `accepted_degraded`. Caller-provided `accepted_degraded_kinds` cannot degrade required hand/checkpoint components.
+- Open MQ conflicts, open DLQ rows, or checkpoint lag return `evidence_state=blocked`.
+- Evidence artifacts are content-addressed by manifest root, so old manifest roots remain retrievable after rebuilds.
 
 ### Task 5: Prove 20k DB-Backed Reward Window Path
 

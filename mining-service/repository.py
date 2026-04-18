@@ -58,6 +58,22 @@ class MiningRepository(Protocol):
     async def save_poker_mtt_hand_event(self, event: dict) -> dict: ...
     async def get_poker_mtt_hand_event(self, hand_id: str) -> dict | None: ...
     async def list_poker_mtt_hand_events_for_tournament(self, tournament_id: str) -> list[dict]: ...
+    async def save_poker_mtt_mq_checkpoint(self, checkpoint: dict) -> dict: ...
+    async def list_poker_mtt_mq_checkpoints(self, *, tournament_id: str | None = None) -> list[dict]: ...
+    async def save_poker_mtt_mq_conflict(self, conflict: dict) -> dict: ...
+    async def list_poker_mtt_mq_conflicts(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]: ...
+    async def save_poker_mtt_mq_dlq(self, dlq: dict) -> dict: ...
+    async def list_poker_mtt_mq_dlq(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]: ...
     async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict: ...
     async def list_poker_mtt_hud_snapshots(
         self,
@@ -126,6 +142,9 @@ class FakeRepository:
         self._arena_results: dict[str, dict] = {}
         self._poker_mtt_tournaments: dict[str, dict] = {}
         self._poker_mtt_hand_events: dict[str, dict] = {}
+        self._poker_mtt_mq_checkpoints: dict[str, dict] = {}
+        self._poker_mtt_mq_conflicts: dict[str, dict] = {}
+        self._poker_mtt_mq_dlq: dict[str, dict] = {}
         self._poker_mtt_hud_snapshots: dict[str, dict] = {}
         self._poker_mtt_hidden_eval_entries: dict[str, dict] = {}
         self._poker_mtt_rating_snapshots: dict[str, dict] = {}
@@ -464,6 +483,59 @@ class FakeRepository:
             if event.get("tournament_id") == tournament_id
         ]
         items.sort(key=lambda item: (item.get("table_id") or "", item.get("hand_no") or 0, item.get("hand_id") or ""))
+        return items
+
+    async def save_poker_mtt_mq_checkpoint(self, checkpoint: dict) -> dict:
+        current = deepcopy(self._poker_mtt_mq_checkpoints.get(checkpoint["id"], {}))
+        current.update(deepcopy(checkpoint))
+        self._poker_mtt_mq_checkpoints[checkpoint["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_mq_checkpoints(self, *, tournament_id: str | None = None) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_mq_checkpoints.values()]
+        if tournament_id is not None:
+            items = [row for row in items if row.get("tournament_id") == tournament_id]
+        items.sort(key=lambda row: (row.get("topic") or "", row.get("consumer_group") or "", row.get("queue") or ""))
+        return items
+
+    async def save_poker_mtt_mq_conflict(self, conflict: dict) -> dict:
+        current = deepcopy(self._poker_mtt_mq_conflicts.get(conflict["id"], {}))
+        current.update(deepcopy(conflict))
+        self._poker_mtt_mq_conflicts[conflict["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_mq_conflicts(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_mq_conflicts.values()]
+        if tournament_id is not None:
+            items = [row for row in items if row.get("tournament_id") == tournament_id]
+        if state is not None:
+            items = [row for row in items if row.get("state") == state]
+        items.sort(key=lambda row: (row.get("created_at") or "", row.get("id") or ""))
+        return items
+
+    async def save_poker_mtt_mq_dlq(self, dlq: dict) -> dict:
+        current = deepcopy(self._poker_mtt_mq_dlq.get(dlq["id"], {}))
+        current.update(deepcopy(dlq))
+        self._poker_mtt_mq_dlq[dlq["id"]] = current
+        return deepcopy(current)
+
+    async def list_poker_mtt_mq_dlq(
+        self,
+        *,
+        tournament_id: str | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        items = [deepcopy(row) for row in self._poker_mtt_mq_dlq.values()]
+        if tournament_id is not None:
+            items = [row for row in items if row.get("tournament_id") == tournament_id]
+        if state is not None:
+            items = [row for row in items if row.get("state") == state]
+        items.sort(key=lambda row: (row.get("created_at") or "", row.get("id") or ""))
         return items
 
     async def save_poker_mtt_hud_snapshot(self, row: dict) -> dict:

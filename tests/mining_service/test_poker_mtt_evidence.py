@@ -175,6 +175,8 @@ def test_service_persists_stable_tournament_evidence_manifests():
             tournament_id="mtt-evidence-1",
             policy_bundle_version="poker_mtt_v1",
             accepted_degraded_kinds=[
+                "poker_mtt_consumer_checkpoint_manifest",
+                "poker_mtt_hand_history_manifest",
                 "poker_mtt_hidden_eval_manifest",
                 "poker_mtt_short_term_hud_manifest",
                 "poker_mtt_long_term_hud_manifest",
@@ -185,6 +187,8 @@ def test_service_persists_stable_tournament_evidence_manifests():
             tournament_id="mtt-evidence-1",
             policy_bundle_version="poker_mtt_v1",
             accepted_degraded_kinds=[
+                "poker_mtt_hand_history_manifest",
+                "poker_mtt_consumer_checkpoint_manifest",
                 "poker_mtt_long_term_hud_manifest",
                 "poker_mtt_short_term_hud_manifest",
                 "poker_mtt_hidden_eval_manifest",
@@ -193,6 +197,11 @@ def test_service_persists_stable_tournament_evidence_manifests():
         )
         artifacts = await repo.list_artifacts_for_entity("poker_mtt_tournament", "mtt-evidence-1")
 
+        assert first["evidence_state"] == "blocked"
+        assert first["blocked_reasons"] == [
+            "missing_required:poker_mtt_consumer_checkpoint_manifest",
+            "missing_required:poker_mtt_hand_history_manifest",
+        ]
         assert first["evidence_root"] == second["evidence_root"]
         assert sorted(artifact["kind"] for artifact in artifacts) == [
             "poker_mtt_final_ranking_manifest",
@@ -218,7 +227,10 @@ def test_service_uses_real_hand_history_manifest_when_hand_events_exist():
                 **final_ranking_row("1:1", rank=1, chip=Decimal("7000.75")),
             }
         )
-        await repo.save_poker_mtt_hand_event(completed_hand_event("mtt-evidence-1", "table-1", 1))
+        await service.ingest_poker_mtt_hand_event(
+            completed_hand_event("mtt-evidence-1", "table-1", 1),
+            now=datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc),
+        )
 
         result = await service.build_poker_mtt_evidence_manifests(
             tournament_id="mtt-evidence-1",
@@ -232,10 +244,137 @@ def test_service_uses_real_hand_history_manifest_when_hand_events_exist():
         )
         artifacts = await repo.list_artifacts_for_entity("poker_mtt_tournament", "mtt-evidence-1")
         hand_manifest = next(artifact for artifact in artifacts if artifact["kind"] == "poker_mtt_hand_history_manifest")
+        checkpoint_manifest = next(
+            artifact for artifact in artifacts if artifact["kind"] == "poker_mtt_consumer_checkpoint_manifest"
+        )
 
         assert result["evidence_state"] == "accepted_degraded"
         assert hand_manifest["payload_json"]["evidence_state"] == "complete"
         assert hand_manifest["payload_json"]["row_count"] == 1
+        assert checkpoint_manifest["payload_json"]["evidence_state"] == "complete"
+        assert checkpoint_manifest["payload_json"]["row_count"] == 1
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_evidence_policy_rejects_caller_degraded_required_mq_components():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await repo.save_poker_mtt_final_ranking(
+            {
+                "id": "poker_mtt_final_ranking:mtt-evidence-required:1:1",
+                **final_ranking_row("1:1", rank=1, chip=Decimal("7000.75")),
+                "tournament_id": "mtt-evidence-required",
+            }
+        )
+
+        result = await service.build_poker_mtt_evidence_manifests(
+            tournament_id="mtt-evidence-required",
+            policy_bundle_version="poker_mtt_v1",
+            accepted_degraded_kinds=[
+                "poker_mtt_hand_history_manifest",
+                "poker_mtt_consumer_checkpoint_manifest",
+                "poker_mtt_hidden_eval_manifest",
+                "poker_mtt_short_term_hud_manifest",
+                "poker_mtt_long_term_hud_manifest",
+            ],
+            now=datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert result["evidence_state"] == "blocked"
+        assert "missing_required:poker_mtt_hand_history_manifest" in result["blocked_reasons"]
+        assert "missing_required:poker_mtt_consumer_checkpoint_manifest" in result["blocked_reasons"]
+        assert "poker_mtt_hand_history_manifest" not in result["policy_degraded_kinds"]
+        assert "poker_mtt_consumer_checkpoint_manifest" not in result["policy_degraded_kinds"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_evidence_policy_blocks_open_mq_conflicts_and_checkpoint_lag():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await repo.save_poker_mtt_final_ranking(
+            {
+                "id": "poker_mtt_final_ranking:mtt-evidence-1:1:1",
+                **final_ranking_row("1:1", rank=1, chip=Decimal("7000.75")),
+            }
+        )
+        first_hand = completed_hand_event("mtt-evidence-1", "table-1", 1)
+        lagged_hand = completed_hand_event("mtt-evidence-1", "table-1", 1)
+        lagged_hand["source"]["offset"] = 2
+        lagged_hand["source"]["message_id"] = "msg-lagged-conflict"
+        lagged_hand["source"]["biz_id"] = "biz-lagged-conflict"
+        lagged_hand["source"]["lag_messages"] = 3
+        lagged_hand["payload"]["pot"] = 999
+        lagged_hand["checksum"] = canonical.canonical_hash(lagged_hand["payload"])
+
+        await service.ingest_poker_mtt_hand_event(first_hand, now=datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc))
+        conflict = await service.ingest_poker_mtt_hand_event(
+            lagged_hand,
+            now=datetime(2026, 4, 10, 12, 1, 0, tzinfo=timezone.utc),
+        )
+        result = await service.build_poker_mtt_evidence_manifests(
+            tournament_id="mtt-evidence-1",
+            policy_bundle_version="poker_mtt_v1",
+            accepted_degraded_kinds=[
+                "poker_mtt_hidden_eval_manifest",
+                "poker_mtt_short_term_hud_manifest",
+                "poker_mtt_long_term_hud_manifest",
+            ],
+            now=datetime(2026, 4, 10, 12, 2, 0, tzinfo=timezone.utc),
+        )
+
+        assert conflict["state"] == "conflict"
+        assert result["evidence_state"] == "blocked"
+        assert "mq_conflict_manual_review" in result["blocked_reasons"]
+        assert "mq_checkpoint_lag" in result["blocked_reasons"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_evidence_artifacts_are_content_addressed_and_old_roots_remain_retrievable():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await repo.save_poker_mtt_final_ranking(
+            {
+                "id": "poker_mtt_final_ranking:mtt-evidence-versions:1:1",
+                **final_ranking_row("1:1", rank=1, chip=Decimal("7000.75")),
+                "tournament_id": "mtt-evidence-versions",
+            }
+        )
+        first = await service.build_poker_mtt_evidence_manifests(
+            tournament_id="mtt-evidence-versions",
+            policy_bundle_version="poker_mtt_v1",
+            now=datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        await repo.save_poker_mtt_final_ranking(
+            {
+                "id": "poker_mtt_final_ranking:mtt-evidence-versions:2:1",
+                **final_ranking_row("2:1", rank=2, chip=Decimal("2000.25")),
+                "tournament_id": "mtt-evidence-versions",
+            }
+        )
+        second = await service.build_poker_mtt_evidence_manifests(
+            tournament_id="mtt-evidence-versions",
+            policy_bundle_version="poker_mtt_v1",
+            now=datetime(2026, 4, 10, 12, 5, 0, tzinfo=timezone.utc),
+        )
+        first_final_ref = next(ref for ref in first["artifact_refs"] if ref["kind"] == "poker_mtt_final_ranking_manifest")
+        second_final_ref = next(ref for ref in second["artifact_refs"] if ref["kind"] == "poker_mtt_final_ranking_manifest")
+
+        assert first_final_ref["payload_hash"] != second_final_ref["payload_hash"]
+        assert first_final_ref["artifact_id"] != second_final_ref["artifact_id"]
+        assert await repo.get_artifact(first_final_ref["artifact_id"]) is not None
+        assert await repo.get_artifact(second_final_ref["artifact_id"]) is not None
 
     import asyncio
 

@@ -1444,6 +1444,16 @@ Phase 3 完成前，仍保持:
 - miner durable identity 已进入 mining-service row：`poker_mtt_user_id`、`poker_mtt_auth_source`、`poker_mtt_reward_bound`、`poker_mtt_reward_bound_at`、`poker_mtt_is_synthetic`、`poker_mtt_identity_expires_at`、`poker_mtt_identity_revoked_at`。
 - final ranking projection 和 reward-window selection 都会拒绝 missing / synthetic / not-bound / expired / revoked / `claw1local-*` identity；因此本地 mock 30 人可以跑完整游戏，但不能直接进入 payout window。
 
+2026-04-18 Task 4 closeout:
+
+- completed-hand MQ ingest 已有 durable checkpoint：topic / queue / consumer group / offset / donor `bizId` / message id / hand id / replay root / lag 都会保存。
+- duplicate replay、higher-version update、lower-version stale replay 都会推进 checkpoint；如果先写 hand/HUD 后 crash，没有 checkpoint 的 replay 会以 duplicate 修复 checkpoint。
+- same hand/version checksum drift 会落 `poker_mtt_mq_conflicts`，状态为 `manual_review`，并阻断 evidence readiness。
+- malformed hand payload 会落 `poker_mtt_mq_dlq` 并 checkpoint 为 `dlq`，consumer 不再因为坏消息直接崩掉。
+- evidence readiness 改成 policy-owned：hand history 和 consumer checkpoint 是 required，不接受 caller degrade；hidden eval 和 short/long HUD 可由 policy 降级，但只能得到 `accepted_degraded`，不能冒充 `complete`。
+- open conflict、open DLQ、checkpoint lag 都会使 evidence result 进入 `blocked`。
+- evidence artifacts 改成 content-addressed ID，manifest root 变化后旧 artifact 仍可读取，便于 replay / audit / ELO/HUD 复算。
+
 2026-04-18 Task 2 closeout:
 
 - Donor parity finalizer gate 已补 registration/waitlist/no-show snapshot merge。

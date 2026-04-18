@@ -132,6 +132,17 @@ Acceptance:
 - Hidden eval rows are keyed by policy/evidence/seed/baseline and cannot unlock a projection under a different policy.
 - Evidence artifacts become content-addressed or versioned so old roots remain retrievable after rebuilds.
 
+2026-04-18 implementation status:
+
+- Mining service now persists MQ checkpoints, conflicts, and DLQ rows with topic, queue, consumer group, offset, donor `bizId`, message ID, hand ID, replay root, lag, and source payload metadata.
+- Hand ingest writes checkpoint state for inserted, duplicate, updated, stale, conflict, and DLQ outcomes. A replay after a crash between hand write and checkpoint write repairs the missing checkpoint via duplicate ingest.
+- Same hand/version checksum drift is persisted as `manual_review` conflict and blocks evidence readiness.
+- Malformed completed-hand payloads are persisted to DLQ and checkpointed as `dlq` instead of crashing the consumer loop.
+- Evidence readiness is policy-owned: hand history and consumer checkpoint cannot be caller-degraded; hidden eval and short/long HUD can be policy-degraded but still produce `accepted_degraded`, not `complete`.
+- Open conflicts, open DLQ rows, or nonzero checkpoint lag produce `evidence_state=blocked`.
+- Evidence artifacts are content-addressed by manifest root so old roots remain retrievable after rebuilds.
+- Remaining G2 production hardening: hidden eval still needs a stricter seed/baseline/evidence policy binding before high-value rollout.
+
 ### G3 - Auth, Admin, Identity, And Abuse Boundaries
 
 Current blockers:

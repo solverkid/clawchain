@@ -36,6 +36,19 @@ POKER_MTT_OBSERVABILITY_FIELDS = (
     "poker_mtt.reward_window.query.duration_ms",
     "poker_mtt.settlement_anchor.confirmation_state",
 )
+POKER_MTT_EVIDENCE_REQUIRED_KINDS = {
+    poker_mtt_evidence.FINAL_RANKING_MANIFEST_KIND,
+    poker_mtt_evidence.HAND_HISTORY_MANIFEST_KIND,
+    poker_mtt_evidence.HIDDEN_EVAL_MANIFEST_KIND,
+    poker_mtt_evidence.CONSUMER_CHECKPOINT_MANIFEST_KIND,
+    poker_mtt_hud.SHORT_TERM_HUD_MANIFEST_KIND,
+    poker_mtt_hud.LONG_TERM_HUD_MANIFEST_KIND,
+}
+POKER_MTT_EVIDENCE_DEGRADED_ALLOWLIST = {
+    poker_mtt_evidence.HIDDEN_EVAL_MANIFEST_KIND,
+    poker_mtt_hud.SHORT_TERM_HUD_MANIFEST_KIND,
+    poker_mtt_hud.LONG_TERM_HUD_MANIFEST_KIND,
+}
 
 
 @dataclass(slots=True)
@@ -178,6 +191,79 @@ def _apply_poker_mtt_reward_identity_block(projected: dict, reason: str) -> None
             "risk_flags": risk_flags,
         }
     )
+
+
+def _source_first(source: dict, *keys: str, default=None):  # noqa: ANN001
+    for key in keys:
+        value = source.get(key)
+        if value is not None and str(value).strip() != "":
+            return value
+    return default
+
+
+def _optional_int(value) -> int | None:  # noqa: ANN001
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _poker_mtt_mq_metadata(event: dict) -> dict:
+    source = deepcopy(event.get("source") or {})
+    identity = event.get("identity") or {}
+    topic = str(_source_first(source, "topic", "rocketmq_topic", default="unknown_topic"))
+    queue = str(_source_first(source, "queue", "queue_id", "queueId", "message_queue", default="default"))
+    consumer_group = str(_source_first(source, "consumer_group", "consumerGroup", default="clawchain-poker-mtt-hands"))
+    tournament_id = (
+        identity.get("tournament_id")
+        or source.get("source_mtt_id")
+        or source.get("mtt_id")
+        or event.get("tournament_id")
+    )
+    hand_id = identity.get("hand_id") or event.get("hand_id")
+    return {
+        "topic": topic,
+        "queue": queue,
+        "consumer_group": consumer_group,
+        "tournament_id": tournament_id,
+        "hand_id": hand_id,
+        "offset": _optional_int(_source_first(source, "offset", "queue_offset", "queueOffset")),
+        "message_id": _source_first(source, "message_id", "messageId", "msg_id", default=event.get("event_id")),
+        "biz_id": _source_first(source, "biz_id", "bizId"),
+        "lag_messages": max(0, _optional_int(_source_first(source, "lag_messages", "lagMessages")) or 0),
+        "lag_watermark_at": _source_first(source, "lag_watermark_at", "lagWatermarkAt"),
+        "source_json": source,
+    }
+
+
+def _poker_mtt_mq_checkpoint_id(metadata: dict) -> str:
+    tournament_id = metadata.get("tournament_id") or "global"
+    return f"poker_mtt_mq_checkpoint:{tournament_id}:{metadata['topic']}:{metadata['consumer_group']}:{metadata['queue']}"
+
+
+def _poker_mtt_mq_replay_root(*, metadata: dict, event: dict, ingest_state: str) -> str:
+    return canonical_hash(
+        {
+            "tournament_id": metadata.get("tournament_id"),
+            "topic": metadata.get("topic"),
+            "queue": metadata.get("queue"),
+            "consumer_group": metadata.get("consumer_group"),
+            "offset": metadata.get("offset"),
+            "message_id": metadata.get("message_id"),
+            "biz_id": metadata.get("biz_id"),
+            "hand_id": metadata.get("hand_id"),
+            "version": event.get("version"),
+            "checksum": event.get("checksum"),
+            "ingest_state": ingest_state,
+        }
+    )
+
+
+def _poker_mtt_mq_row_id(prefix: str, payload: dict) -> str:
+    digest = canonical_hash(payload).removeprefix("sha256:")[:24]
+    return f"{prefix}:{digest}"
 
 
 def compute_economic_unit_components(miners: list[dict]) -> dict[str, str]:
@@ -2537,6 +2623,7 @@ class ForecastMiningService:
         if not rows:
             raise ValueError("no poker mtt final rankings found")
 
+        policy_degraded_kinds = set(POKER_MTT_EVIDENCE_DEGRADED_ALLOWLIST)
         manifests = [
             poker_mtt_evidence.build_final_ranking_manifest(
                 tournament_id=tournament_id,
@@ -2591,7 +2678,41 @@ class ForecastMiningService:
             )
             complete_kinds.add(poker_mtt_evidence.HIDDEN_EVAL_MANIFEST_KIND)
 
-        for kind in sorted(set(accepted_degraded_kinds or []) - complete_kinds):
+        checkpoint_rows = []
+        if hasattr(self.repo, "list_poker_mtt_mq_checkpoints"):
+            checkpoint_rows = await self.repo.list_poker_mtt_mq_checkpoints(tournament_id=tournament_id)
+        if checkpoint_rows:
+            manifests.append(
+                poker_mtt_evidence.build_consumer_checkpoint_manifest(
+                    tournament_id=tournament_id,
+                    rows=checkpoint_rows,
+                    policy_bundle_version=policy_bundle_version,
+                    generated_at=current,
+                )
+            )
+            complete_kinds.add(poker_mtt_evidence.CONSUMER_CHECKPOINT_MANIFEST_KIND)
+
+        conflict_rows = []
+        if hasattr(self.repo, "list_poker_mtt_mq_conflicts"):
+            conflict_rows = await self.repo.list_poker_mtt_mq_conflicts(
+                tournament_id=tournament_id,
+                state="manual_review",
+            )
+        dlq_rows = []
+        if hasattr(self.repo, "list_poker_mtt_mq_dlq"):
+            dlq_rows = await self.repo.list_poker_mtt_mq_dlq(tournament_id=tournament_id, state="open")
+        blocked_reasons = [
+            f"missing_required:{kind}"
+            for kind in sorted(POKER_MTT_EVIDENCE_REQUIRED_KINDS - complete_kinds - policy_degraded_kinds)
+        ]
+        if conflict_rows:
+            blocked_reasons.append("mq_conflict_manual_review")
+        if dlq_rows:
+            blocked_reasons.append("mq_dlq_open")
+        if any(int(row.get("lag_messages") or 0) > 0 for row in checkpoint_rows):
+            blocked_reasons.append("mq_checkpoint_lag")
+
+        for kind in sorted(policy_degraded_kinds - complete_kinds):
             manifests.append(
                 poker_mtt_evidence.build_stub_manifest(
                     kind=kind,
@@ -2605,9 +2726,10 @@ class ForecastMiningService:
 
         artifact_refs = []
         for manifest in manifests:
+            artifact_id = f"art:poker_mtt_tournament:{tournament_id}:{manifest['kind']}:{manifest['manifest_root']}"
             artifact = await self.repo.save_artifact(
                 {
-                    "id": f"art:poker_mtt_tournament:{tournament_id}:{manifest['kind']}",
+                    "id": artifact_id,
                     "kind": manifest["kind"],
                     "entity_type": "poker_mtt_tournament",
                     "entity_id": tournament_id,
@@ -2626,16 +2748,19 @@ class ForecastMiningService:
             )
 
         artifact_refs.sort(key=lambda ref: ref["kind"])
+        evidence_state = "complete"
+        if blocked_reasons:
+            evidence_state = "blocked"
+        elif any(manifest.get("evidence_state") == "accepted_degraded" for manifest in manifests):
+            evidence_state = "accepted_degraded"
         return {
             "tournament_id": tournament_id,
             "policy_bundle_version": policy_bundle_version,
-            "evidence_state": (
-                "accepted_degraded"
-                if any(manifest.get("evidence_state") == "accepted_degraded" for manifest in manifests)
-                else "complete"
-            ),
+            "evidence_state": evidence_state,
             "evidence_root": _hash_sequence(artifact_refs),
             "artifact_refs": artifact_refs,
+            "blocked_reasons": blocked_reasons,
+            "policy_degraded_kinds": sorted(policy_degraded_kinds - complete_kinds),
             "generated_at": isoformat_z(current),
         }
 
@@ -2649,14 +2774,163 @@ class ForecastMiningService:
         event_payload = deepcopy(event)
         event_payload.setdefault("created_at", isoformat_z(current))
         event_payload["updated_at"] = isoformat_z(current)
+        metadata = _poker_mtt_mq_metadata(event_payload)
         store = poker_mtt_history.RepositoryHandHistoryStore(self.repo)
-        result = await store.ingest(event_payload)
+        try:
+            result = await store.ingest(event_payload)
+        except ValueError as exc:
+            reason = str(exc)
+            dlq = await self._save_poker_mtt_mq_dlq(
+                event_payload,
+                metadata=metadata,
+                reason=reason,
+                now=current,
+            )
+            checkpoint = await self._save_poker_mtt_mq_checkpoint(
+                event_payload,
+                metadata=metadata,
+                ingest_state="dlq",
+                now=current,
+            )
+            return {
+                "state": "dlq",
+                "event": None,
+                "previous_event": None,
+                "reason": reason,
+                "dlq": dlq,
+                "checkpoint": checkpoint,
+            }
+        checkpoint = await self._save_poker_mtt_mq_checkpoint(
+            event_payload,
+            metadata=metadata,
+            ingest_state=result.state,
+            now=current,
+        )
+        conflict = None
+        if result.state == "conflict":
+            conflict = await self._save_poker_mtt_mq_conflict(
+                event_payload,
+                metadata=metadata,
+                reason=result.reason or "hand_checksum_conflict",
+                previous_event=result.previous_event,
+                now=current,
+            )
         return {
             "state": result.state,
             "event": result.event,
             "previous_event": result.previous_event,
             "reason": result.reason,
+            "checkpoint": checkpoint,
+            "conflict": conflict,
         }
+
+    async def _save_poker_mtt_mq_checkpoint(
+        self,
+        event: dict,
+        *,
+        metadata: dict,
+        ingest_state: str,
+        now: datetime,
+    ) -> dict:
+        if not hasattr(self.repo, "save_poker_mtt_mq_checkpoint"):
+            return {}
+        row = {
+            "id": _poker_mtt_mq_checkpoint_id(metadata),
+            "tournament_id": metadata.get("tournament_id"),
+            "topic": metadata["topic"],
+            "queue": metadata["queue"],
+            "consumer_group": metadata["consumer_group"],
+            "last_offset": metadata.get("offset"),
+            "last_message_id": metadata.get("message_id"),
+            "last_biz_id": metadata.get("biz_id"),
+            "last_hand_id": metadata.get("hand_id"),
+            "last_ingest_state": ingest_state,
+            "replay_root": _poker_mtt_mq_replay_root(metadata=metadata, event=event, ingest_state=ingest_state),
+            "lag_messages": metadata.get("lag_messages") or 0,
+            "lag_watermark_at": metadata.get("lag_watermark_at"),
+            "source_json": metadata.get("source_json") or {},
+            "last_processed_at": isoformat_z(now),
+            "created_at": isoformat_z(now),
+            "updated_at": isoformat_z(now),
+        }
+        return await self.repo.save_poker_mtt_mq_checkpoint(row)
+
+    async def _save_poker_mtt_mq_conflict(
+        self,
+        event: dict,
+        *,
+        metadata: dict,
+        reason: str,
+        previous_event: dict | None,
+        now: datetime,
+    ) -> dict:
+        if not hasattr(self.repo, "save_poker_mtt_mq_conflict"):
+            return {}
+        payload = {
+            "tournament_id": metadata.get("tournament_id"),
+            "hand_id": metadata.get("hand_id"),
+            "message_id": metadata.get("message_id"),
+            "biz_id": metadata.get("biz_id"),
+            "checksum": event.get("checksum"),
+            "previous_checksum": (previous_event or {}).get("checksum"),
+            "conflict_reason": reason,
+        }
+        row = {
+            "id": _poker_mtt_mq_row_id("poker_mtt_mq_conflict", payload),
+            "tournament_id": metadata.get("tournament_id"),
+            "hand_id": metadata.get("hand_id"),
+            "topic": metadata["topic"],
+            "queue": metadata["queue"],
+            "consumer_group": metadata["consumer_group"],
+            "offset": metadata.get("offset"),
+            "message_id": metadata.get("message_id"),
+            "biz_id": metadata.get("biz_id"),
+            "version": event.get("version"),
+            "checksum": event.get("checksum"),
+            "previous_checksum": (previous_event or {}).get("checksum"),
+            "conflict_reason": reason,
+            "state": "manual_review",
+            "payload_json": deepcopy(event.get("payload") or event.get("payload_json") or {}),
+            "previous_payload_json": deepcopy((previous_event or {}).get("payload_json") or (previous_event or {}).get("payload")),
+            "source_json": metadata.get("source_json") or {},
+            "created_at": isoformat_z(now),
+            "updated_at": isoformat_z(now),
+        }
+        return await self.repo.save_poker_mtt_mq_conflict(row)
+
+    async def _save_poker_mtt_mq_dlq(
+        self,
+        event: dict,
+        *,
+        metadata: dict,
+        reason: str,
+        now: datetime,
+    ) -> dict:
+        if not hasattr(self.repo, "save_poker_mtt_mq_dlq"):
+            return {}
+        payload = {
+            "tournament_id": metadata.get("tournament_id"),
+            "message_id": metadata.get("message_id"),
+            "biz_id": metadata.get("biz_id"),
+            "reason": reason,
+        }
+        row = {
+            "id": _poker_mtt_mq_row_id("poker_mtt_mq_dlq", payload),
+            "tournament_id": metadata.get("tournament_id"),
+            "topic": metadata["topic"],
+            "queue": metadata["queue"],
+            "consumer_group": metadata["consumer_group"],
+            "offset": metadata.get("offset"),
+            "message_id": metadata.get("message_id"),
+            "biz_id": metadata.get("biz_id"),
+            "dlq_reason": reason,
+            "state": "open",
+            "payload_json": deepcopy(event),
+            "source_json": metadata.get("source_json") or {},
+            "created_at": isoformat_z(now),
+            "updated_at": isoformat_z(now),
+        }
+        return await self.repo.save_poker_mtt_mq_dlq(row)
 
     async def finalize_poker_mtt_hidden_eval(
         self,
