@@ -255,10 +255,10 @@ Acceptance:
 
 Current blockers:
 
-- Sidecar HTTP operations are mostly one-shot despite idempotency keys.
-- WS adapter is mostly connect-spec level; production behavior needs reconnect, PING/PONG, room migration, and disconnect semantics.
-- 30-player non-mock finish harness exists but is not a hard one-command gate.
-- Observability fields are contract names, not proven emitted metrics/logs.
+- Sidecar HTTP orchestration operations now retry transient failures with idempotency keys; betting/action calls remain outside this retry policy.
+- WS adapter still needs deeper reconnect/room-migration production soak, but the non-mock finish harness now hard-fails missing ranking/actions/final state.
+- 30-player non-mock finish harness is now a hard assertion when `--until-finish` is enabled.
+- Observability fields are expanded in the contract; production staging still needs real sink evidence, but local gates now verify the required field list and burst/load artifact shape.
 
 Acceptance:
 
@@ -267,6 +267,14 @@ Acceptance:
 - 30-player explicit join/action-to-finish gate asserts: 30 joined, 30 ranking, 30 users sent actions, 1 survivor, 29 eliminated/finished, 0 pending, 0 unexpected WS errors after allowed bust/kick close reasons.
 - 2,000-table burst test generates completed-hand/finalizer ingest attempts, not just metadata.
 - Metrics/log sink receives hand ingest count/conflict, HUD duration, reward-window query duration, selected/omitted counts, artifact page count, MQ lag, DLQ count, and settlement confirmation state.
+
+2026-04-18 Task 8 closeout:
+
+- Added transient retry/backoff for sidecar envelope calls on timeout, 429, 502, 503, and 504. Unauthorized and other non-retryable donor failures stay single-attempt, preserving donor `msg` in `RequestError`.
+- `non_mock_play_harness.py` now validates the production-like finish summary: all users joined, received current MTT ranking, sent actions, one survivor, expected died count, no pending rows, and no unexpected WS errors.
+- `generate_hand_history_load.py` now creates one synthetic completed-hand event per early-stage table and reports `completed_hand_event_count` plus `hand_event_checksum_root` for the 2,000-table burst shape.
+- `POKER_MTT_OBSERVABILITY_FIELDS` includes reward-window selected/omitted counts, artifact page count, MQ lag, and DLQ count in addition to hand/HUD/query/settlement fields.
+- `make test-poker-mtt-phase3-ops` is the local one-command ops gate for sidecar retry, harness/load contract, and Phase 3 DB-backed reward-window scale checks.
 
 ---
 

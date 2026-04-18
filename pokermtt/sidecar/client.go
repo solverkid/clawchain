@@ -18,6 +18,8 @@ import (
 
 const (
 	defaultRequestTimeout = 5 * time.Second
+	defaultRetryAttempts  = 3
+	defaultRetryBackoff   = 25 * time.Millisecond
 
 	routingRoomHeaderName = "X-Poker-MTT-Routing-Room-ID"
 )
@@ -35,6 +37,7 @@ type RequestError struct {
 	URL        string
 	StatusCode int
 	Timeout    bool
+	Message    string
 	Err        error
 }
 
@@ -45,6 +48,8 @@ func (e *RequestError) Error() string {
 	switch {
 	case e.Timeout:
 		return fmt.Sprintf("%s %s %s: timeout", e.Op, e.Method, e.URL)
+	case e.StatusCode > 0 && e.Message != "":
+		return fmt.Sprintf("%s %s %s: status %d: %s", e.Op, e.Method, e.URL, e.StatusCode, e.Message)
 	case e.StatusCode > 0:
 		return fmt.Sprintf("%s %s %s: status %d: %v", e.Op, e.Method, e.URL, e.StatusCode, e.Err)
 	default:
@@ -440,13 +445,19 @@ func (c Client) Health(ctx context.Context) (HealthResponse, error) {
 }
 
 func (c Client) postEnvelope(ctx context.Context, op, rawURL string, body any, configure func(*http.Request)) (envelope, error) {
-	ctx, cancel := c.withTimeout(ctx)
-	defer cancel()
-
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return envelope{}, &RequestError{Op: op, Method: http.MethodPost, URL: rawURL, Err: err}
 	}
+
+	return c.retryEnvelope(ctx, func() (envelope, error) {
+		return c.postEnvelopeOnce(ctx, op, rawURL, payload, configure)
+	})
+}
+
+func (c Client) postEnvelopeOnce(ctx context.Context, op, rawURL string, payload []byte, configure func(*http.Request)) (envelope, error) {
+	ctx, cancel := c.withTimeout(ctx)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(payload))
 	if err != nil {
@@ -478,6 +489,12 @@ func (c Client) postEnvelope(ctx context.Context, op, rawURL string, body any, c
 }
 
 func (c Client) getEnvelope(ctx context.Context, op, rawURL string, configure func(*http.Request)) (envelope, error) {
+	return c.retryEnvelope(ctx, func() (envelope, error) {
+		return c.getEnvelopeOnce(ctx, op, rawURL, configure)
+	})
+}
+
+func (c Client) getEnvelopeOnce(ctx context.Context, op, rawURL string, configure func(*http.Request)) (envelope, error) {
 	ctx, cancel := c.withTimeout(ctx)
 	defer cancel()
 
@@ -507,6 +524,55 @@ func (c Client) getEnvelope(ctx context.Context, op, rawURL string, configure fu
 		return envelope{}, c.statusError(op, http.MethodGet, rawURL, resp.StatusCode, env.Msg)
 	}
 	return env, nil
+}
+
+func (c Client) retryEnvelope(ctx context.Context, call func() (envelope, error)) (envelope, error) {
+	var lastErr error
+	for attempt := 1; attempt <= defaultRetryAttempts; attempt++ {
+		env, err := call()
+		if err == nil {
+			return env, nil
+		}
+		lastErr = err
+		if attempt == defaultRetryAttempts || !isRetryableSidecarError(err) {
+			return envelope{}, err
+		}
+		if err := sleepRetryBackoff(ctx, attempt); err != nil {
+			return envelope{}, err
+		}
+	}
+	return envelope{}, lastErr
+}
+
+func isRetryableSidecarError(err error) bool {
+	var reqErr *RequestError
+	if !errors.As(err, &reqErr) {
+		return false
+	}
+	if reqErr.Timeout {
+		return true
+	}
+	switch reqErr.StatusCode {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func sleepRetryBackoff(ctx context.Context, attempt int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	delay := time.Duration(attempt) * defaultRetryBackoff
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c Client) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -558,6 +624,7 @@ func (c Client) statusError(op, method, rawURL string, statusCode int, message s
 		Method:     method,
 		URL:        rawURL,
 		StatusCode: statusCode,
+		Message:    message,
 		Err:        ErrUnexpectedStatus,
 	}
 }

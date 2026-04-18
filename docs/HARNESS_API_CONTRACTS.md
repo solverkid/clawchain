@@ -913,7 +913,8 @@ Phase 3 production-readiness 进一步要求：
 - settlement batch/admin response 不能通过 `anchor_payload_json` 重新内联 20k `miner_reward_rows`；默认只返回 summary/root/page refs。
 - external settlement query 必须能通过 gRPC/gateway/CLI 读取 stored anchor state，并让 mining-service 完成 typed full-field confirmation。
 - Phase 3 Task 6 已补 `x/settlement` gRPC/gateway/CLI query 以及 mining-service confirmation-state persistence；20k settlement anchor rows 进入 `settlement_anchor_miner_reward_rows_page` artifacts，admin/list response 仍需保持 < 256 KB。
-- 30-player non-mock sidecar gate 必须成为 hard assertion，不再只记录 smoke summary。
+- 30-player non-mock sidecar gate 必须成为 hard assertion，不再只记录 smoke summary。2026-04-18 Task 8 已在 `non_mock_play_harness.py --until-finish` 中加入 `validate_finish_summary()`。
+- `make test-poker-mtt-phase3-ops` 是本地 Phase 3 ops gate：sidecar retry tests、load contract tests、Phase 3 DB load check。
 
 Canonical Phase 3 spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 
@@ -924,6 +925,11 @@ poker_mtt.hand_ingest.count
 poker_mtt.hand_ingest.conflict_count
 poker_mtt.hud.project.duration_ms
 poker_mtt.reward_window.query.duration_ms
+poker_mtt.reward_window.selected_count
+poker_mtt.reward_window.omitted_count
+poker_mtt.reward_window.artifact_page_count
+poker_mtt.mq.lag
+poker_mtt.mq.dlq_count
 poker_mtt.settlement_anchor.confirmation_state
 ```
 

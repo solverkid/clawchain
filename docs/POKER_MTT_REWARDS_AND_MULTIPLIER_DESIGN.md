@@ -1488,6 +1488,13 @@ Phase 3 完成前，仍保持:
 - Projection artifact 新增 `aggregation_policy_version`、`budget_disposition`、`budget_root`。Settlement 的 `poker_projection_roots` 也会包含 `budget_root`，使链上 anchor 可回查预算来源。
 - `poker_mtt_multiplier_snapshots` 新增 `effective_window_start_at` / `effective_window_end_at`，以 source result 锁定/完成时间的下一个 UTC daily window 生效。它可以更新 miner 当前展示值，但 reward/reputation 消费时必须按 effective window 读取，避免同窗口反馈。
 
+2026-04-18 Task 8 closeout:
+
+- Donor sidecar orchestration calls now have retry/backoff only for transient timeout/429/502/503/504 failures. 400/401 are not retried, and donor error messages are preserved for operator diagnosis.
+- `non_mock_play_harness.py --until-finish` now fails hard unless all expected players joined, received ranking, sent actions, exactly one player remains alive, all others died/finished, no pending players remain, and WS errors are only allowed close/lost-connection cases.
+- `generate_hand_history_load.py` now emits a completed-hand checksum root for the 2,000-table early burst shape, so the load contract is closer to real hand-ingest pressure instead of only table metadata.
+- `make test-poker-mtt-phase3-ops` ties together sidecar retry tests, load-contract tests, and DB-backed Phase 3 reward-window scale checks.
+
 2026-04-18 Task 2 closeout:
 
 - Donor parity finalizer gate 已补 registration/waitlist/no-show snapshot merge。
@@ -1525,7 +1532,7 @@ Phase 3 完成前，仍保持:
 5. 20k reward-window 已迁到 service path，并消掉 N+1 / full historical scan；后续只需要接真实 staging Postgres load artifact
 6. 补 settlement external query、bounded anchor artifacts、terminal mismatch states
 7. budget ledger、aggregation policy、multiplier effective-window 已落地；后续只需要接生产配置和 staging epoch cap artifact
-8. 把 sidecar retry、30-player finish gate、2,000-table burst、real observability 做成 CI/manual gates
+8. sidecar retry、30-player finish gate、2,000-table burst 已有本地 ops gate；real staging metrics/log sink artifact 仍需上线前补证据
 9. 最后再做 window-level `reputation_delta` dry-run；`x/reputation` 写入另起 release review
 
 一句话总结：

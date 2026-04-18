@@ -35,6 +35,11 @@ POKER_MTT_OBSERVABILITY_FIELDS = (
     "poker_mtt.hand_ingest.conflict_count",
     "poker_mtt.hud.project.duration_ms",
     "poker_mtt.reward_window.query.duration_ms",
+    "poker_mtt.reward_window.selected_count",
+    "poker_mtt.reward_window.omitted_count",
+    "poker_mtt.reward_window.artifact_page_count",
+    "poker_mtt.mq.lag",
+    "poker_mtt.mq.dlq_count",
     "poker_mtt.settlement_anchor.confirmation_state",
 )
 POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT = 500

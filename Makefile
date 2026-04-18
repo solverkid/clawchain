@@ -1,4 +1,4 @@
-.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
+.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase3-ops lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
@@ -56,6 +56,12 @@ test-poker-mtt-phase1:
 	@go test ./x/settlement/... -run 'TestAnchor' -v
 	@npm --prefix website test
 
+test-poker-mtt-phase3-ops:
+	@echo "Running Poker MTT Phase 3 ops gates..."
+	@go test ./pokermtt/sidecar -v
+	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=mining-service python3 -m pytest tests/mining_service/test_poker_mtt_load_contract.py -q
+	@bash scripts/poker_mtt/run_phase3_db_load_check.sh --local
+
 # Run linter
 lint:
 	@echo "Running linter..."
@@ -109,6 +115,7 @@ help:
 	@echo "  test       - Run all tests"
 	@echo "  test-arena - Run arena package tests"
 	@echo "  test-poker-mtt-phase1 - Run Poker MTT Phase 1 scoped gate"
+	@echo "  test-poker-mtt-phase3-ops - Run Poker MTT Phase 3 sidecar/load ops gates"
 	@echo "  lint       - Run linter"
 	@echo "  tidy       - Tidy go.mod dependencies"
 	@echo "  proto-gen  - Generate protobuf code"

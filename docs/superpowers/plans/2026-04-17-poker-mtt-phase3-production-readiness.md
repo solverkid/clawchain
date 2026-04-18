@@ -344,27 +344,35 @@ Commit: `git commit -m "feat(pokermtt): harden reward economics"`
 - Test: `pokermtt/sidecar/*_test.go`
 - Test: `tests/mining_service/test_poker_mtt_load_contract.py`
 
-- [ ] **Step 1: Write failing retry and harness tests**
+- [x] **Step 1: Write failing retry and harness tests**
 
 Cover 503-then-OK, timeout-then-OK, non-retryable 400/401, donor error body propagation, 30-player finish hard assertions, and 2,000-table completed-hand ingest shape.
 
-- [ ] **Step 2: Add sidecar retry policy**
+- [x] **Step 2: Add sidecar retry policy**
 
 Retry idempotent orchestration calls only. Never retry betting/action calls.
 
-- [ ] **Step 3: Make finish harness a hard gate**
+- [x] **Step 3: Make finish harness a hard gate**
 
 Require 30 joined, 30 ranking, 30 users sent actions, 1 survivor, 29 finished/eliminated, 0 pending, and only allowed WS close reasons.
 
-- [ ] **Step 4: Emit real metrics/log events**
+- [x] **Step 4: Emit real metrics/log events**
 
 Test metrics/log sink receives hand ingest, conflict, HUD duration, reward-window query, selected/omitted counts, page count, MQ lag, DLQ count, and settlement confirmation state.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `go test ./pokermtt/sidecar -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_load_contract.py && bash scripts/poker_mtt/run_phase3_db_load_check.sh --players 300 --local`
 
 Commit: `git commit -m "test(pokermtt): add phase3 ops gates"`
+
+2026-04-18 implementation note:
+
+- Added sidecar retry coverage for 503-then-OK, timeout-then-OK, non-retryable unauthorized, and donor error body propagation.
+- Sidecar envelope calls now retry only transient timeout/429/502/503/504 failures. 400/401 remain single-attempt, and donor `msg` is preserved in `RequestError`.
+- `non_mock_play_harness.py` now exposes and calls `validate_finish_summary()` when `--until-finish` is enabled. The gate asserts joined users, ranking receipt, sent actions, 1 alive, 29 died for 30 players, 0 pending, and no unexpected WS errors.
+- `generate_hand_history_load.py` now materializes one completed-hand event per early-stage table and returns a checksum root for the 2,000-table burst shape.
+- Added `make test-poker-mtt-phase3-ops` to run sidecar tests, load-contract tests, and the Phase 3 DB load check in one command.
 
 ### Task 9: Draft Window-Level Reputation Delta Only
 
