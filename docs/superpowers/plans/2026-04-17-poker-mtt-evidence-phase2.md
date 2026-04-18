@@ -731,10 +731,18 @@ PYTHONPATH=mining-service pytest -q tests/poker_mtt
 - [ ] **Step 1: Run focused Phase 2 checks**
 
 ```bash
+make test-poker-mtt-phase2
+```
+
+Expanded historical command set:
+
+```bash
 make test-poker-mtt-phase1
 go test ./authadapter ./pokermtt/... ./x/settlement/... -v
 PYTHONPATH=mining-service pytest -q tests/mining_service tests/poker_mtt
 ```
+
+2026-04-19 closeout note: `make test-poker-mtt-phase2` now runs the local Evidence Phase 2 beta gate and passed with Go authadapter/Poker MTT/settlement tests, 136 focused Python tests, and the offline Phase 2 load check. The remaining non-mock/staging requirements are tracked by Phase 3 gates.
 
 - [ ] **Step 2: Run 30-player non-mock WS harness**
 

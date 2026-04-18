@@ -1375,6 +1375,12 @@ Phase 1 不做：
     - hand ingest -> hand-history manifest -> HUD -> hidden eval -> final ranking projection -> reward window -> settlement batch -> typed tx plan -> query confirmation
     - 30-player smoke、300-player medium shape、20k-player synthetic projection paging、2,000-table early burst shape
 
+2026-04-19 Phase 2 closeout:
+
+- 新增 `make test-poker-mtt-phase2` 作为 Evidence Phase 2 local beta 一键 gate。
+- 当前 gate 已通过 Go authadapter / Poker MTT / settlement tests、136 个 Phase 2 Python tests，以及 `run_phase2_load_check.sh --players 30 --local`。
+- 这只证明 local beta evidence-to-anchor slice；Phase 3 的 DB-backed 20k、non-mock finish、typed settlement query receipt 和 release review 仍是 reward-bearing rollout 前置条件。
+
 第二波 review 冻结的 production harness blockers：
 
 - `accepted_degraded` 不能自动 reward-ready，必须有 policy allowlist 和 degraded reason root

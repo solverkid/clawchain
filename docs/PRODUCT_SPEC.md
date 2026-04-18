@@ -579,6 +579,8 @@ tournament result
 - 20k-player reward projection 不返回整包 rows，主 artifact 保存 root/page refs，page artifact 保存 rows
 - settlement batch 设计上通过 typed `x/settlement` state query 确认 root/hash，不只看 tx success；production rollout 前还要补外部 query wiring 和 full-field metadata confirmation
 
+2026-04-19 更新：`make test-poker-mtt-phase2` 已成为 Poker MTT Evidence Phase 2 的 local beta 一键 gate，覆盖 Go authadapter / Poker MTT / settlement tests、Phase 2 Python evidence-to-anchor tests、以及 30/300/20k/2,000-table offline load shape。它证明本地 beta slice，不代表 reward-bearing production rollout。
+
 产品上仍然按 beta / internal rollout 处理：自动发奖和 poker settlement anchoring 默认关闭，公开页面只展示 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived `total_score`。
 
 2026-04-17 Phase 3 统一定义为 **Poker MTT Production Readiness**，不是 high-value reward launch。Phase 3 的目标是关闭这些闸门：
