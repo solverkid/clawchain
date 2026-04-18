@@ -1218,6 +1218,13 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 - `Finalizer.FinalizeWithRegistration` 会把 registration-only waiting/no-show 用户写入 final archive，标记为 `waiting_no_show` / `pending` / `snapshot_found=false`，但不进入 reward-bearing rank。
 - Finalizer 支持可选 terminal-or-quiet barrier、expected entrant count、alive/died/waiting count 和 total chip drift tolerance。
 
+2026-04-18 已落地的 auth / reward identity 部分:
+
+- donor `/token_verify` 不带 miner binding 时，Go authadapter 会把 principal 标记为 `AuthSourceDonorTokenVerify` + `IsSynthetic=true`，miner address 只能是 `claw1local-*` harness identity。
+- `claw1local-*` 可以完成本地 WS join/action/finalizer harness，但 mining-service final projection 会把它标记为 `reward_identity_not_bound`，不会给 locked/anchorable reward row。
+- mining-service `miners` row 现在保存 Poker MTT durable identity 字段，并在 reward-window build 时重新读取当前 miner identity；projection 后被 revoke/expire 的 identity 也会被窗口选择跳过。
+- admin routes 绑定 external host 或 non-local runtime 时必须有 bearer admin auth；sidecar/projector 对 401/403 应按永久配置/auth 错误处理，不做无限 retry。
+
 ### 18.8 Git 排除口径
 
 `lepoker-gameserver` 是独立 donor repo，不随 ClawChain 提交。

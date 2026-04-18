@@ -122,6 +122,64 @@ def hash_user_agent(user_agent: str | None) -> str | None:
     return f"ua:{digest}"
 
 
+def _is_poker_mtt_synthetic_address(address: str | None) -> bool:
+    return str(address or "").startswith("claw1local-")
+
+
+def _poker_mtt_reward_identity_defaults(address: str, now: datetime) -> dict:
+    is_synthetic = _is_poker_mtt_synthetic_address(address)
+    return {
+        "poker_mtt_user_id": address.removeprefix("claw1local-") if is_synthetic else address,
+        "poker_mtt_auth_source": "local_harness" if is_synthetic else "miner_registration",
+        "poker_mtt_reward_bound": not is_synthetic,
+        "poker_mtt_reward_bound_at": None if is_synthetic else now,
+        "poker_mtt_is_synthetic": is_synthetic,
+        "poker_mtt_identity_expires_at": None,
+        "poker_mtt_identity_revoked_at": None,
+    }
+
+
+def _poker_mtt_reward_identity_blocker(miner: dict | None, current: datetime) -> str | None:
+    if not miner:
+        return "missing_reward_identity"
+    required_fields = {
+        "economic_unit_id",
+        "poker_mtt_user_id",
+        "poker_mtt_auth_source",
+        "poker_mtt_reward_bound",
+        "poker_mtt_is_synthetic",
+    }
+    if any(field not in miner for field in required_fields):
+        return "missing_reward_identity"
+    if _is_poker_mtt_synthetic_address(miner.get("address")) or bool(miner.get("poker_mtt_is_synthetic")):
+        return "reward_identity_not_bound"
+    if not bool(miner.get("poker_mtt_reward_bound")):
+        return "reward_identity_not_bound"
+    if not miner.get("poker_mtt_reward_bound_at"):
+        return "missing_reward_identity"
+    if miner.get("poker_mtt_identity_revoked_at") is not None:
+        return "reward_identity_revoked"
+    expires_at = miner.get("poker_mtt_identity_expires_at")
+    if expires_at is not None and as_utc_datetime(expires_at) <= current:
+        return "reward_identity_expired"
+    return None
+
+
+def _apply_poker_mtt_reward_identity_block(projected: dict, reason: str) -> None:
+    risk_flags = list(projected.get("risk_flags") or [])
+    if reason not in risk_flags:
+        risk_flags.append(reason)
+    projected.update(
+        {
+            "eligible_for_multiplier": False,
+            "locked_at": None,
+            "anchorable_at": None,
+            "no_multiplier_reason": reason,
+            "risk_flags": risk_flags,
+        }
+    )
+
+
 def compute_economic_unit_components(miners: list[dict]) -> dict[str, str]:
     if not miners:
         return {}
@@ -738,6 +796,7 @@ class ForecastMiningService:
             "ops_reliability": 1.0,
             "arena_multiplier": 1.0,
             "poker_mtt_multiplier": 1.0,
+            **_poker_mtt_reward_identity_defaults(address, now),
             "public_rank": None,
             "public_elo": 1200,
             "created_at": now,
@@ -2379,6 +2438,9 @@ class ForecastMiningService:
                         hidden_eval_score=hidden_eval_score,
                         consistency_input_score=projected.get("consistency_input_score") or 0.0,
                     )
+            identity_blocker = _poker_mtt_reward_identity_blocker(miner, locked_at_utc)
+            if identity_blocker:
+                _apply_poker_mtt_reward_identity_block(projected, identity_blocker)
             multiplier_before = float(miner.get("poker_mtt_multiplier", 1.0))
             multiplier_after = multiplier_before
             rolling_score = None
@@ -2698,7 +2760,7 @@ class ForecastMiningService:
         if window_end <= window_start:
             raise ValueError("window_end_at must be after window_start_at")
 
-        current = now or utc_now()
+        current = as_utc_datetime(now or utc_now()).replace(microsecond=0)
         selected_results = []
         for result in await self.repo.list_poker_mtt_results_for_reward_window(
             lane=lane,
@@ -2726,6 +2788,9 @@ class ForecastMiningService:
                 result=result,
                 policy_bundle_version=result["evaluation_version"],
             ):
+                continue
+            miner = await self.repo.get_miner(result["miner_address"])
+            if _poker_mtt_reward_identity_blocker(miner, current):
                 continue
             selected_results.append(result)
 

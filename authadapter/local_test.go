@@ -21,6 +21,8 @@ func TestLocalAdapterVerifyBearerLocalUser(t *testing.T) {
 	require.Equal(t, "7", principal.UserID)
 	require.Equal(t, "7", principal.DisplayName)
 	require.Equal(t, "claw1local-7", principal.MinerAddress)
+	require.Equal(t, authadapter.AuthSourceLocal, principal.AuthSource)
+	require.True(t, principal.IsSynthetic)
 	require.True(t, principal.TokenExpiresAt.Equal(now.Add(time.Hour)))
 }
 

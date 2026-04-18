@@ -83,6 +83,60 @@ def _parse_datetime(value: str | datetime | None) -> datetime | None:
     return None
 
 
+_LOCAL_RUNTIME_ENVS = {"local", "dev", "development", "test"}
+_LOOPBACK_BIND_HOSTS = {"", "127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _runtime_env(settings) -> str | None:  # noqa: ANN001
+    raw = getattr(settings, "runtime_env", None)
+    if raw is None:
+        return None
+    normalized = str(raw).strip().lower()
+    return normalized or None
+
+
+def _is_external_bind_host(bind_host: str | None) -> bool:
+    normalized = str(bind_host or "127.0.0.1").strip().lower()
+    if normalized in _LOOPBACK_BIND_HOSTS:
+        return False
+    return True
+
+
+def _validate_admin_runtime_security(settings) -> None:  # noqa: ANN001
+    env = _runtime_env(settings)
+    bind_host = getattr(settings, "bind_host", "127.0.0.1")
+    external_bind = _is_external_bind_host(bind_host)
+    admin_auth_enabled = bool(getattr(settings, "admin_auth_enabled", False))
+    admin_auth_token = str(getattr(settings, "admin_auth_token", "") or "").strip()
+    allow_insecure_local = bool(getattr(settings, "allow_insecure_admin_without_auth", False))
+    is_local_runtime = env in _LOCAL_RUNTIME_ENVS if env is not None else False
+    is_non_local_runtime = env is not None and env not in _LOCAL_RUNTIME_ENVS
+
+    if is_non_local_runtime and (not admin_auth_enabled or not admin_auth_token):
+        raise RuntimeError("admin auth must be enabled with CLAWCHAIN_ADMIN_AUTH_TOKEN for non-local runtime")
+    if external_bind and not admin_auth_enabled:
+        if not (is_local_runtime and allow_insecure_local):
+            raise RuntimeError("admin auth must be enabled before binding admin routes to an external host")
+    if external_bind and admin_auth_enabled and not admin_auth_token:
+        raise RuntimeError("admin auth token is required before binding admin routes to an external host")
+
+
+def _admin_token_principal(expected_token: str) -> dict:
+    digest = _hash_payload({"admin_auth_token": expected_token}).removeprefix("sha256:")
+    return {"operator_id": f"admin:{digest[:12]}", "authority_level": "admin"}
+
+
+def _local_admin_principal() -> dict:
+    return {"operator_id": "local-admin", "authority_level": "local"}
+
+
+def _admin_principal_from_request(request: Request) -> dict:
+    principal = getattr(request.state, "admin_principal", None)
+    if isinstance(principal, dict) and principal.get("operator_id") and principal.get("authority_level"):
+        return principal
+    return _local_admin_principal()
+
+
 def _verify_signature(parts: list[str], signature_hex: str, public_key_hex: str) -> bool:
     try:
         signature = eth_keys.Signature(bytes.fromhex(signature_hex.removeprefix("0x")))
@@ -362,6 +416,7 @@ def create_app(
     chain_tx_confirmer=None,
 ) -> FastAPI:
     app_settings = settings or load_settings()
+    _validate_admin_runtime_security(app_settings)
     clock = now_fn or utc_now
     repo = repository
     provider = market_data_provider
@@ -455,15 +510,15 @@ def create_app(
 
     @app.middleware("http")
     async def require_admin_auth(request: Request, call_next):  # noqa: ANN001
-        if (
-            request.method.upper() != "OPTIONS"
-            and request.url.path.startswith("/admin/")
-            and bool(getattr(app_settings, "admin_auth_enabled", False))
-        ):
+        is_admin_route = request.method.upper() != "OPTIONS" and request.url.path.startswith("/admin/")
+        if is_admin_route and bool(getattr(app_settings, "admin_auth_enabled", False)):
             expected_token = getattr(app_settings, "admin_auth_token", None)
             authorization = request.headers.get("Authorization", "")
             if not expected_token or authorization != f"Bearer {expected_token}":
                 return JSONResponse({"detail": "admin authorization required"}, status_code=401)
+            request.state.admin_principal = _admin_token_principal(str(expected_token))
+        elif is_admin_route:
+            request.state.admin_principal = _local_admin_principal()
         return await call_next(request)
 
     def service() -> ForecastMiningService:
@@ -698,14 +753,15 @@ def create_app(
         return {"items": items}
 
     @app.post("/admin/risk-decisions/{risk_case_id}/override")
-    async def override_risk_case(risk_case_id: str, payload: RiskDecisionOverrideRequest):
+    async def override_risk_case(risk_case_id: str, payload: RiskDecisionOverrideRequest, request: Request):
+        admin_principal = _admin_principal_from_request(request)
         try:
             result = await service().override_risk_case(
                 risk_case_id,
                 decision=payload.decision,
                 reason=payload.reason,
-                operator_id=payload.operator_id,
-                authority_level=payload.authority_level,
+                operator_id=admin_principal["operator_id"],
+                authority_level=admin_principal["authority_level"],
                 now=now(),
             )
         except ValueError as exc:
@@ -1140,7 +1196,9 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=1317)
     args = parser.parse_args()
-    uvicorn.run(create_app(), host=args.host, port=args.port)
+    settings = load_settings()
+    settings.bind_host = args.host
+    uvicorn.run(create_app(settings=settings), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

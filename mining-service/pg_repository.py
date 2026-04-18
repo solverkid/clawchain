@@ -105,7 +105,14 @@ def _artifact_values(artifact: dict) -> dict:
 
 def _miner_values(miner: dict) -> dict:
     values = deepcopy(miner)
-    for field in ("created_at", "updated_at", "fast_window_start_at"):
+    for field in (
+        "created_at",
+        "updated_at",
+        "fast_window_start_at",
+        "poker_mtt_reward_bound_at",
+        "poker_mtt_identity_expires_at",
+        "poker_mtt_identity_revoked_at",
+    ):
         if field in values and values[field] is not None:
             values[field] = _maybe_dt(values[field])
     return values
@@ -502,6 +509,29 @@ class PostgresRepository:
             )
             await conn.execute(
                 text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS fast_window_start_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_user_id VARCHAR NULL"))
+            await conn.execute(text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_auth_source VARCHAR NULL"))
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_reward_bound BOOLEAN NOT NULL DEFAULT FALSE")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_reward_bound_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_is_synthetic BOOLEAN NOT NULL DEFAULT FALSE")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_identity_expires_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(
+                text("ALTER TABLE miners ADD COLUMN IF NOT EXISTS poker_mtt_identity_revoked_at TIMESTAMPTZ NULL")
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_miners_poker_mtt_reward_identity "
+                    "ON miners (poker_mtt_reward_bound, poker_mtt_is_synthetic, poker_mtt_identity_revoked_at)"
+                )
             )
             await conn.execute(
                 text("ALTER TABLE forecast_task_runs ADD COLUMN IF NOT EXISTS reward_window_id VARCHAR NULL")

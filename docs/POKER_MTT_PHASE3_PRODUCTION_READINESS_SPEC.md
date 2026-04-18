@@ -151,6 +151,15 @@ Acceptance:
 - Reward projection and reward-window selection reject `claw1local-*`, donor-only, synthetic, expired, revoked, or unmapped identities.
 - Duplicate enforcement uses refreshed server-side economic-unit state and backfills/demotes same-task duplicates when clusters merge late.
 
+2026-04-18 implementation status:
+
+- FastAPI startup now fails closed for non-local runtime without admin auth/token and for external bind without admin auth. Local/test external bind without auth requires an explicit insecure-local override.
+- Admin route middleware resolves an audit principal from the bearer token or local harness context; risk override ignores self-attested `operator_id` / `authority_level`.
+- Go donor auth marks `/token_verify` responses without miner binding as synthetic `claw1local-*` principals. They can join local harness flows but are not Poker MTT reward eligible without an explicit reward-bound role.
+- Miner rows now persist Poker MTT reward identity metadata: user id, auth source, reward-bound flag/time, synthetic flag, expiry, and revocation.
+- Final ranking projection and reward-window selection both reject missing, synthetic, not-bound, expired, revoked, or `claw1local-*` identities.
+- Remaining G3 production hardening: late economic-unit duplicate demotion/backfill still belongs with the 20k/bulk reward-window wave because it needs the same refreshed bulk miner state path.
+
 ### G4 - 20k DB-Backed Reward Window And Budget Contract
 
 Current blockers:

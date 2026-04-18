@@ -1435,6 +1435,15 @@ Phase 3 完成前，仍保持:
 - `projection_id`、`final_ranking_root`、standing snapshot refs、policy version、payload `locked_at` 是 FastAPI request schema 的必需字段。
 - Mining-service projection response 会回传 canonical metadata；同一 `projection_id`/root replay 返回 artifact 中保存的 existing result，同一 `projection_id` 搭配不同 root 返回 409。
 
+2026-04-18 Task 3 closeout:
+
+- non-local/shared runtime 已 fail closed：没有 admin auth/token 不能启动；绑定 `0.0.0.0` / external host 时也不能默认裸开 admin routes。
+- local/test 要裸开 external admin routes 必须显式设置 insecure-local override；默认 loopback 本地 harness 仍保持可测。
+- admin mutation audit 改成 resolved principal：bearer token 映射成 `admin:<token-hash>` / `admin`，本地 harness 映射成 `local-admin` / `local`，payload 里的 `operator_id` 不能伪造审计人。
+- donor `/token_verify` 缺 miner binding 时只会生成 synthetic `claw1local-*` participation identity，不会被当成 reward-bound miner。
+- miner durable identity 已进入 mining-service row：`poker_mtt_user_id`、`poker_mtt_auth_source`、`poker_mtt_reward_bound`、`poker_mtt_reward_bound_at`、`poker_mtt_is_synthetic`、`poker_mtt_identity_expires_at`、`poker_mtt_identity_revoked_at`。
+- final ranking projection 和 reward-window selection 都会拒绝 missing / synthetic / not-bound / expired / revoked / `claw1local-*` identity；因此本地 mock 30 人可以跑完整游戏，但不能直接进入 payout window。
+
 2026-04-18 Task 2 closeout:
 
 - Donor parity finalizer gate 已补 registration/waitlist/no-show snapshot merge。

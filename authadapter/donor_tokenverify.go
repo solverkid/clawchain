@@ -89,8 +89,10 @@ func (a DonorTokenVerifyAdapter) Verify(ctx context.Context, authorization strin
 	if minerAddress == "" {
 		minerAddress = strings.TrimSpace(payload.Data.MinerID)
 	}
+	isSynthetic := false
 	if minerAddress == "" {
 		minerAddress = DefaultMinerAddress(userID)
+		isSynthetic = true
 	} else {
 		minerAddress, err = normalizeMinerAddress(minerAddress)
 		if err != nil {
@@ -102,6 +104,8 @@ func (a DonorTokenVerifyAdapter) Verify(ctx context.Context, authorization strin
 		UserID:         userID,
 		MinerAddress:   minerAddress,
 		DisplayName:    displayName,
+		AuthSource:     AuthSourceDonorTokenVerify,
+		IsSynthetic:    isSynthetic,
 		TokenExpiresAt: now.Add(ttl),
 	}, nil
 }

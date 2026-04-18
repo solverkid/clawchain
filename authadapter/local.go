@@ -31,6 +31,8 @@ func (a LocalAdapter) Verify(ctx context.Context, authorization string) (Princip
 		UserID:         userID,
 		MinerAddress:   DefaultMinerAddress(userID),
 		DisplayName:    userID,
+		AuthSource:     AuthSourceLocal,
+		IsSynthetic:    true,
 		TokenExpiresAt: now.Add(ttl),
 	}, nil
 }

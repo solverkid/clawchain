@@ -120,31 +120,40 @@ Commit: `git commit -m "feat(pokermtt): merge waitlist into final rankings"`
 - Test: `tests/mining_service/test_poker_mtt_reward_identity.py`
 - Test: `authadapter/*_test.go`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Unset `CLAWCHAIN_ENV` with external bind should not silently expose admin routes. Donor token without miner binding must not become reward-bound in non-local mode. `claw1local-*` should be able to join harness but fail reward projection/window selection.
 
-- [ ] **Step 2: Add startup validation**
+- [x] **Step 2: Add startup validation**
 
 Non-local/shared runtime requires admin auth enabled and token configured. Local/test can disable auth only explicitly.
 
-- [ ] **Step 3: Add durable reward identity**
+- [x] **Step 3: Add durable reward identity**
 
 Persist miner/user/economic-unit binding with source, expiry, revocation, synthetic flag, and reward-bound flag.
 
-- [ ] **Step 4: Enforce reward identity**
+- [x] **Step 4: Enforce reward identity**
 
 Final projection and reward-window selection reject missing, synthetic, expired, revoked, or donor-only identities.
 
-- [ ] **Step 5: Add admin principal audit**
+- [x] **Step 5: Add admin principal audit**
 
 Replace self-attested operator fields with resolved admin principal and role for mutation endpoints.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `go test ./authadapter -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_forecast_api.py tests/mining_service/test_poker_mtt_reward_identity.py`
 
 Commit: `git commit -m "feat(pokermtt): enforce reward-bound identity"`
+
+2026-04-18 implementation note:
+
+- Added red/green coverage for external-bind admin fail-closed startup, donor `/token_verify` missing miner binding, local harness `claw1local-*` reward rejection, missing durable identity, revoked identity, expired identity, and admin risk override principal audit.
+- `AppSettings` now carries `runtime_env`, `bind_host`, and explicit insecure-local override. `create_app` rejects non-local runtime without admin auth/token and rejects external bind without admin auth unless local/test explicitly opts into insecure mode.
+- `/admin/*` middleware resolves the admin principal from the bearer token or the local harness context. Risk override audit now uses that resolved principal and ignores self-attested payload operator fields.
+- Go auth principals now include `AuthSource` and `IsSynthetic`; donor tokens without miner binding become synthetic `claw1local-*` principals and are not Poker MTT reward eligible.
+- Miner registration now persists Poker MTT reward identity fields: user id, auth source, reward-bound flag/time, synthetic flag, expiry, and revocation.
+- Final ranking projection and reward-window selection reject missing, synthetic, `claw1local-*`, not-bound, expired, or revoked reward identities.
 
 ### Task 4: Build MQ Checkpoint, Conflict, DLQ, And Policy-Owned Evidence
 
