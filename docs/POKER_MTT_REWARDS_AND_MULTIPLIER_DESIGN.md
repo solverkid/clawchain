@@ -1435,9 +1435,15 @@ Phase 3 完成前，仍保持:
 4. **Auth / identity**: non-local/shared runtime fail closed；donor token 只证明 user，不证明 reward-bound miner；`claw1local-*` 和 synthetic identity 不能进 reward window。
 5. **20k DB path**: `POST /admin/poker-mtt/reward-windows/build` 真实 Postgres path under 30 SQL statements，response under 256 KB，20k rows 通过 4 个 5,000-row page artifacts 重建 root。
 6. **Budget / aggregation / multiplier**: daily/weekly payout 受同一 emission slice 约束；window aggregation policy 版本化；multiplier 只能按后续窗口生效。
-7. **Settlement query**: external query 已能通过 gRPC/gateway/CLI 读取 stored anchor state；当前比对 batch id、root/hash、lane、policy、window/reward roots、amount，后续 budget/correction lineage 在 Task 7/9 补齐；tx success 不等于 anchored。
+7. **Settlement query**: external query 已能通过 gRPC/gateway/CLI 读取 stored anchor state；当前比对 batch id、root/hash、lane、policy、window/reward roots、amount，并且 budget / reputation / correction lineage 已进入 projection 和 settlement payload；tx success 不等于 anchored。
 8. **Ops gate**: 30-player non-mock WS explicit join/action-to-finish 是 hard gate；2,000-table burst 必须生成 completed-hand/finalizer inputs；observability 必须真实 emit。
-9. **Reputation delta**: 只做窗口级 dry-run artifact root。`x/reputation` 写入等 settlement、identity、budget、correction gates 稳定后再单独 review。
+9. **Reputation delta**: 已做窗口级 dry-run root：projection 产出 `reputation_delta_rows_root`、bounded sample、row count、correction lineage；settlement anchor 产出 per-window roots 和 settlement-level root。`x/reputation` 写入仍需另起 release review。
+
+2026-04-18 Task 9 closeout:
+
+- Window-level reputation delta schema 已落地为 dry-run contract，包含 window id、settlement batch id、policy version、prior rating snapshot ref、delta cap、reason、source-result root、score weight、gross reward、submission count 和 correction lineage root。
+- Reward-window projection root、`poker_projection_roots`、settlement anchor canonical root 都会覆盖 `reputation_delta_rows_root`，所以后续 controller 只能基于已锚定窗口做 append-only reputation 写入。
+- 单场 tournament result、raw HUD、hidden eval、public ELO/public rating 仍不会直接写 `x/reputation`。
 
 2026-04-18 Task 1 closeout:
 
@@ -1533,7 +1539,7 @@ Phase 3 完成前，仍保持:
 6. 补 settlement external query、bounded anchor artifacts、terminal mismatch states
 7. budget ledger、aggregation policy、multiplier effective-window 已落地；后续只需要接生产配置和 staging epoch cap artifact
 8. sidecar retry、30-player finish gate、2,000-table burst 已有本地 ops gate；real staging metrics/log sink artifact 仍需上线前补证据
-9. 最后再做 window-level `reputation_delta` dry-run；`x/reputation` 写入另起 release review
+9. window-level `reputation_delta` dry-run 已完成；下一步只剩最终文档、CI target、release review 和 staging evidence 归档，`x/reputation` 写入另起 release review
 
 一句话总结：
 

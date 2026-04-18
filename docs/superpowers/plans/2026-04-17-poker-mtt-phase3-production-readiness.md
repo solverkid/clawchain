@@ -381,23 +381,30 @@ Commit: `git commit -m "test(pokermtt): add phase3 ops gates"`
 - Modify: `x/reputation/**` only if wiring is explicitly scoped after settlement gates pass
 - Add/modify tests: `tests/mining_service/test_poker_mtt_reputation_delta.py`
 
-- [ ] **Step 1: Write dry-run reputation delta tests**
+- [x] **Step 1: Write dry-run reputation delta tests**
 
 Window-level delta rows include window id, settlement batch id, policy, prior score ref, cap, reason, and correction lineage. No single tournament can write directly.
 
-- [ ] **Step 2: Produce delta artifact root**
+- [x] **Step 2: Produce delta artifact root**
 
 Add `reputation_delta_rows_root` to reward/settlement artifacts only as dry-run output.
 
-- [ ] **Step 3: Keep chain writes disabled**
+- [x] **Step 3: Keep chain writes disabled**
 
 Do not add direct `x/reputation` writes until external settlement query, identity, budget, and correction gates have passed.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_reputation_delta.py`
 
 Commit: `git commit -m "feat(pokermtt): draft window reputation deltas"`
+
+2026-04-18 implementation note:
+
+- Added `tests/mining_service/test_poker_mtt_reputation_delta.py` before implementation; it covers reward-window reputation delta roots, settlement anchor roots, correction lineage, and the no-direct-write guard.
+- Reward-window projection payloads now include `reputation_delta_policy_version`, `reputation_delta_rows_root`, bounded sample rows, row count, top-level correction lineage root, and the predicted settlement batch id for window-level lineage.
+- Settlement anchor payloads now include per-window `reputation_delta_window_roots` and a settlement-level `reputation_delta_rows_root`; `poker_projection_roots` also carry each window's reputation delta root.
+- No `x/reputation` module writes or service calls were added; the output remains a dry-run contract gated behind reward/evidence/identity/budget/settlement artifacts.
 
 ### Task 10: Documentation, CI Targets, And Release Review
 

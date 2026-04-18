@@ -224,7 +224,7 @@ Implemented 2026-04-18 Task 6:
 
 Remaining blockers:
 
-- The current first-class tx/query fields cover the core anchor contract; budget roots, correction lineage, and full submitter authorization context still need Task 7/9 economics/reputation lineage to be meaningful.
+- The current first-class tx/query fields cover the core anchor contract; budget roots and reputation/correction lineage are now present in projection and settlement payloads. Full submitter authorization context still needs production controller evidence.
 - Production confirmer still needs real local-chain smoke evidence in the final Phase 3 release checklist; unit coverage now proves the gRPC/gateway/CLI query surface and service-side refusal semantics.
 
 Acceptance:
@@ -243,11 +243,12 @@ Current blockers:
 
 - `x/reputation` has useful primitives but is not ready for Poker MTT writes: service/query/CLI wiring, challenge interface alignment, and EndBlock ordering need review.
 - Direct single-result reputation writes would over-amplify hidden eval and public rank noise.
+- The current Phase 3 output is intentionally dry-run: reward/settlement artifacts root the deltas, but no chain write path is enabled.
 
 Acceptance:
 
-- Define window-level `reputation_delta_rows_root` only after reward/evidence/settlement gates are stable.
-- Reputation delta rows include window id, settlement batch id, policy version, prior score reference, delta reason, cap, and correction lineage.
+- Define window-level `reputation_delta_rows_root` only after reward/evidence/settlement gates are stable. Done in reward-window projection artifacts and settlement anchor payloads.
+- Reputation delta rows include window id, settlement batch id, policy version, prior score reference, delta reason, cap, score weight, source-result root, and correction lineage.
 - Authorized controller applies append-only compensating deltas only after settlement confirmation.
 - No single tournament, raw HUD, public ELO, hidden eval raw score, or client/admin payload writes directly to `x/reputation`.
 

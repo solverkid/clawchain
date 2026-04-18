@@ -21,12 +21,14 @@ FAST_ASSETS = ("BTCUSDT", "ETHUSDT")
 DAILY_ASSETS = ("BTC", "ETH")
 POLICY_BUNDLE_VERSION = "pb_2026_04_09_a"
 ANCHOR_PAYLOAD_SCHEMA_VERSION = "clawchain.anchor_payload.v1"
+POKER_MTT_REPUTATION_DELTA_POLICY_VERSION = "poker_mtt_reputation_delta_v1"
 POKER_MTT_PROJECTION_ROOT_FIELDS = (
     "policy_bundle_version",
     "final_ranking_root",
     "evidence_root",
     "multiplier_snapshot_root",
     "budget_root",
+    "reputation_delta_rows_root",
     "miner_reward_rows_root",
     "projection_root",
 )
@@ -832,6 +834,8 @@ def _summarize_reward_window_response(reward_window: dict, projection_artifact: 
             {
                 "artifact_page_count": projection_payload.get("artifact_page_count", 1),
                 "miner_reward_rows_root": projection_payload.get("miner_reward_rows_root"),
+                "reputation_delta_rows_root": projection_payload.get("reputation_delta_rows_root"),
+                "reputation_delta_rows_count": projection_payload.get("reputation_delta_rows_count"),
                 "projection_artifact_id": projection_artifact.get("id"),
             }
         )
@@ -911,6 +915,11 @@ def _poker_mtt_projection_roots(payload: dict, *, reward_window_id: str) -> dict
         "evidence_root": payload["evidence_root"],
         "multiplier_snapshot_root": payload["multiplier_snapshot_root"],
         "budget_root": payload["budget_root"],
+        "reputation_delta_policy_version": payload.get(
+            "reputation_delta_policy_version",
+            POKER_MTT_REPUTATION_DELTA_POLICY_VERSION,
+        ),
+        "reputation_delta_rows_root": payload["reputation_delta_rows_root"],
         "projection_root": payload["projection_root"],
     }
 
@@ -987,6 +996,118 @@ def _poker_mtt_budget_root(payload: dict) -> str:
             "policy_bundle_version": payload.get("policy_bundle_version"),
         }
     )
+
+
+def _poker_mtt_reputation_delta_cap(lane: str) -> int:
+    if lane == "poker_mtt_weekly":
+        return 25
+    return 10
+
+
+def _poker_mtt_reputation_prior_score_ref(miner_address: str, rating_snapshots_by_miner: dict[str, dict]) -> str:
+    snapshot = rating_snapshots_by_miner.get(miner_address)
+    if snapshot and snapshot.get("id"):
+        return snapshot["id"]
+    return "none"
+
+
+def _poker_mtt_reputation_delta_from_weight(score_weight: float, *, delta_cap: int) -> int:
+    return max(0, min(delta_cap, round(max(0.0, float(score_weight or 0.0)) * delta_cap)))
+
+
+def _poker_mtt_reputation_correction_refs(corrections: list[dict]) -> list[dict]:
+    refs = [
+        {
+            "id": correction.get("id"),
+            "target_entity_id": correction.get("target_entity_id"),
+            "previous_root": correction.get("previous_root"),
+            "corrected_root": correction.get("corrected_root"),
+            "reason": correction.get("reason"),
+            "created_at": correction.get("created_at"),
+        }
+        for correction in corrections
+    ]
+    refs.sort(key=lambda item: (item.get("target_entity_id") or "", item.get("created_at") or "", item.get("id") or ""))
+    return refs
+
+
+def _group_poker_mtt_corrections_by_result_id(corrections: list[dict], selected_result_ids: set[str]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {result_id: [] for result_id in selected_result_ids}
+    for correction in corrections:
+        target_entity_id = correction.get("target_entity_id")
+        if target_entity_id in grouped:
+            grouped[target_entity_id].append(correction)
+    for result_corrections in grouped.values():
+        result_corrections.sort(key=lambda item: (item.get("created_at") or "", item.get("id") or ""))
+    return grouped
+
+
+def _build_poker_mtt_reputation_delta_rows(
+    *,
+    lane: str,
+    reward_window_id: str,
+    settlement_batch_id: str | None,
+    window_start_at: str,
+    window_end_at: str,
+    policy_bundle_version: str,
+    aggregation_policy_version: str,
+    selected_results: list[dict],
+    score_weights: dict[str, float],
+    reward_allocations: dict[str, int],
+    submission_counts: dict[str, int],
+    representative_miners: dict[str, str],
+    rating_snapshots_by_miner: dict[str, dict],
+    corrections_by_result_id: dict[str, list[dict]],
+) -> list[dict]:
+    results_by_economic_unit: dict[str, list[dict]] = {}
+    for result in selected_results:
+        economic_unit_id = result.get("economic_unit_id") or result["miner_address"]
+        results_by_economic_unit.setdefault(economic_unit_id, []).append(result)
+
+    delta_cap = _poker_mtt_reputation_delta_cap(lane)
+    rows = []
+    for economic_unit_id in sorted(score_weights):
+        score_weight = float(score_weights.get(economic_unit_id, 0.0) or 0.0)
+        if score_weight <= 0:
+            continue
+        miner_address = representative_miners[economic_unit_id]
+        source_results = sorted(results_by_economic_unit.get(economic_unit_id, []), key=lambda item: item["id"])
+        source_result_ids = [result["id"] for result in source_results]
+        correction_refs = _poker_mtt_reputation_correction_refs(
+            [
+                correction
+                for result_id in source_result_ids
+                for correction in corrections_by_result_id.get(result_id, [])
+            ]
+        )
+        rows.append(
+            {
+                "schema_version": "poker_mtt.reputation_delta.v1",
+                "reputation_delta_policy_version": POKER_MTT_REPUTATION_DELTA_POLICY_VERSION,
+                "reward_window_id": reward_window_id,
+                "settlement_batch_id": settlement_batch_id,
+                "lane": lane,
+                "window_start_at": window_start_at,
+                "window_end_at": window_end_at,
+                "policy_bundle_version": policy_bundle_version,
+                "aggregation_policy_version": aggregation_policy_version,
+                "miner_address": miner_address,
+                "economic_unit_id": economic_unit_id,
+                "prior_score_ref": _poker_mtt_reputation_prior_score_ref(miner_address, rating_snapshots_by_miner),
+                "delta": _poker_mtt_reputation_delta_from_weight(score_weight, delta_cap=delta_cap),
+                "delta_cap": delta_cap,
+                "reason": "poker_mtt_window_performance",
+                "score_weight": score_weight,
+                "gross_reward_amount": int(reward_allocations.get(economic_unit_id, 0) or 0),
+                "submission_count": int(submission_counts.get(economic_unit_id, 0) or 0),
+                "source_result_ids_root": _hash_sequence(source_result_ids),
+                "source_result_count": len(source_result_ids),
+                "correction_count": len(correction_refs),
+                "correction_lineage_root": _hash_sequence(correction_refs),
+            }
+        )
+    rows.sort(key=lambda item: (item["economic_unit_id"], item["miner_address"]))
+    return rows
 
 
 def _expected_settlement_anchor(anchor_job: dict, settlement_batch: dict) -> dict:
@@ -1801,6 +1922,7 @@ class ForecastMiningService:
         task_run_ids: list[str] = []
         miner_totals: dict[str, dict] = {}
         poker_projection_roots: list[dict] = []
+        reputation_delta_window_roots: list[dict] = []
         for reward_window_id in reward_window_ids:
             reward_window = await self.repo.get_reward_window(reward_window_id)
             if reward_window:
@@ -1818,8 +1940,13 @@ class ForecastMiningService:
                     if not projection_artifact:
                         raise ValueError("poker mtt reward window projection not found")
                     projection_payload = projection_artifact.get("payload_json") or {}
-                    poker_projection_roots.append(
-                        _poker_mtt_projection_roots(projection_payload, reward_window_id=reward_window_id)
+                    projection_roots = _poker_mtt_projection_roots(projection_payload, reward_window_id=reward_window_id)
+                    poker_projection_roots.append(projection_roots)
+                    reputation_delta_window_roots.append(
+                        {
+                            "reward_window_id": reward_window_id,
+                            "reputation_delta_rows_root": projection_roots["reputation_delta_rows_root"],
+                        }
                     )
                     for reward_row in resolve_poker_mtt_projection_reward_rows(projection_payload, projection_artifacts):
                         current_total = miner_totals.setdefault(
@@ -1873,6 +2000,13 @@ class ForecastMiningService:
         if poker_projection_roots:
             poker_projection_roots = sorted(poker_projection_roots, key=lambda item: item["reward_window_id"])
             canonical_root_input["poker_projection_roots_root"] = _hash_sequence(poker_projection_roots)
+        if reputation_delta_window_roots:
+            reputation_delta_window_roots = sorted(
+                reputation_delta_window_roots,
+                key=lambda item: item["reward_window_id"],
+            )
+            canonical_root_input["reputation_delta_policy_version"] = POKER_MTT_REPUTATION_DELTA_POLICY_VERSION
+            canonical_root_input["reputation_delta_rows_root"] = _hash_sequence(reputation_delta_window_roots)
         canonical_root = _hash_payload(canonical_root_input)
         anchor_payload_json = {
             **canonical_root_input,
@@ -1883,6 +2017,8 @@ class ForecastMiningService:
         }
         if poker_projection_roots:
             anchor_payload_json["poker_projection_roots"] = poker_projection_roots
+        if reputation_delta_window_roots:
+            anchor_payload_json["reputation_delta_window_roots"] = reputation_delta_window_roots
         anchor_payload_json, anchor_pages = build_paged_poker_mtt_projection_payload(
             anchor_payload_json,
             page_size=getattr(self.settings, "poker_mtt_projection_artifact_page_size", 5000),
@@ -3505,6 +3641,21 @@ class ForecastMiningService:
         if not selected_results:
             raise ValueError("no poker mtt results found for reward window")
 
+        selected_result_ids = {result["id"] for result in selected_results}
+        all_result_corrections = await self.repo.list_poker_mtt_corrections(target_entity_type="poker_mtt_result")
+        corrections_by_result_id = _group_poker_mtt_corrections_by_result_id(
+            all_result_corrections,
+            selected_result_ids,
+        )
+        correction_lineage_refs = _poker_mtt_reputation_correction_refs(
+            [
+                correction
+                for result_id in sorted(selected_result_ids)
+                for correction in corrections_by_result_id.get(result_id, [])
+            ]
+        )
+        correction_lineage_root = _hash_sequence(correction_lineage_refs)
+
         input_snapshot_root = _poker_mtt_reward_window_input_root(
             selected_results=selected_results,
             final_rankings_by_id=final_rankings_by_id,
@@ -3518,6 +3669,8 @@ class ForecastMiningService:
                 and existing_projection_payload.get("reward_pool_amount") == reward_pool_amount
                 and existing_projection_payload.get("policy_bundle_version") == resolved_policy_bundle_version
                 and existing_projection_payload.get("aggregation_policy_version") == aggregation_policy_version
+                and existing_projection_payload.get("correction_lineage_root") == correction_lineage_root
+                and existing_projection_payload.get("reputation_delta_rows_root")
                 and existing_projection_payload.get("include_provisional") is include_provisional
                 and (
                     not getattr(self.settings, "poker_mtt_budget_enforcement_enabled", False)
@@ -3540,6 +3693,11 @@ class ForecastMiningService:
         economic_unit_ids = sorted(score_weights)
         miner_addresses = sorted(representative_miners[economic_unit_id] for economic_unit_id in economic_unit_ids)
         has_positive_weight = sum(weight for weight in score_weights.values() if weight > 0) > 0
+        projected_settlement_batch_id = None
+        if has_positive_weight:
+            projected_settlement_batch_id = (
+                existing_window.get("settlement_batch_id") if existing_window else None
+            ) or "sb_" + resolved_reward_window_id.removeprefix("rw_")
         if has_positive_weight:
             reward_allocations = _allocate_integer_pool_by_weights(
                 [(economic_unit_id, score_weights.get(economic_unit_id, 0.0)) for economic_unit_id in economic_unit_ids],
@@ -3649,6 +3807,22 @@ class ForecastMiningService:
                 }
             )
         rating_snapshot_rows.sort(key=lambda item: (item["miner_address"], item["rating_snapshot_id"]))
+        reputation_delta_rows = _build_poker_mtt_reputation_delta_rows(
+            lane=lane,
+            reward_window_id=resolved_reward_window_id,
+            settlement_batch_id=projected_settlement_batch_id,
+            window_start_at=isoformat_z(window_start),
+            window_end_at=isoformat_z(window_end),
+            policy_bundle_version=resolved_policy_bundle_version,
+            aggregation_policy_version=aggregation_policy_version,
+            selected_results=selected_results,
+            score_weights=score_weights,
+            reward_allocations=reward_allocations,
+            submission_counts=submission_counts,
+            representative_miners=representative_miners,
+            rating_snapshots_by_miner=rating_snapshots_by_miner,
+            corrections_by_result_id=corrections_by_result_id,
+        )
 
         candidate_window, _ = _materialize_reward_window(
             {
@@ -3688,10 +3862,13 @@ class ForecastMiningService:
             "policy_bundle_version": resolved_policy_bundle_version,
             "aggregation_policy_version": aggregation_policy_version,
             "include_provisional": include_provisional,
+            "settlement_batch_id": projected_settlement_batch_id,
             "tournament_ids": tournament_ids,
             "poker_mtt_result_ids_root": _hash_sequence(poker_mtt_result_ids),
             "poker_mtt_result_count": len(selected_results),
             "input_snapshot_root": input_snapshot_root,
+            "correction_lineage_root": correction_lineage_root,
+            "correction_count": len(correction_lineage_refs),
             "miner_reward_rows": miner_reward_rows,
             "budget_disposition": budget_disposition,
             "budget_root": budget_disposition["budget_root"],
@@ -3699,6 +3876,10 @@ class ForecastMiningService:
             "evidence_root": _hash_sequence(evidence_refs),
             "rating_snapshot_root": _hash_sequence(rating_snapshot_rows),
             "multiplier_snapshot_root": _hash_sequence(multiplier_snapshot_rows),
+            "reputation_delta_policy_version": POKER_MTT_REPUTATION_DELTA_POLICY_VERSION,
+            "reputation_delta_rows_root": _hash_sequence(reputation_delta_rows),
+            "reputation_delta_rows_count": len(reputation_delta_rows),
+            "reputation_delta_rows_sample": reputation_delta_rows[:10],
             **(projection_metadata or {}),
         }
         if len(poker_mtt_result_ids) <= POKER_MTT_REWARD_WINDOW_RESPONSE_INLINE_LIMIT:
