@@ -176,3 +176,63 @@ def test_is_tournament_finished_rejects_incomplete_states() -> None:
         },
         expected_players=30,
     )
+
+
+def test_update_known_position_tracks_own_player_status() -> None:
+    module = load_module()
+
+    assert module.update_known_position(
+        "12",
+        {"playerStatus": [{"userID": "12", "position": 7}]},
+        None,
+    ) == 7
+
+
+def test_update_known_position_does_not_clear_on_other_player_status() -> None:
+    module = load_module()
+
+    assert module.update_known_position(
+        "12",
+        {
+            "action": "status",
+            "playerStatus": [
+                {"userID": "28", "position": 1},
+                {"userID": "9", "position": 4},
+            ],
+        },
+        7,
+    ) == 7
+
+
+def test_update_known_position_keeps_position_when_payload_has_no_identity() -> None:
+    module = load_module()
+
+    assert module.update_known_position(
+        "12",
+        {"playerStatus": [{"position": 1, "action": "fold"}]},
+        7,
+    ) == 7
+
+
+def test_update_known_position_clears_on_server_rejection_msg() -> None:
+    module = load_module()
+
+    payload = {
+        "action": "Msg",
+        "msg": "client is onLooker action:check is not permited",
+    }
+
+    assert module.is_server_action_rejection(payload)
+    assert module.update_known_position("12", payload, 7) is None
+
+
+def test_actor_position_prefers_current_payload_position_over_stale_position() -> None:
+    module = load_module()
+
+    payload = {
+        "action": "readyToAct",
+        "currentPosition": 11,
+        "nextPlayer": {"position": 1},
+    }
+
+    assert module.actor_position_for_payload(payload, known_position=1) == 11

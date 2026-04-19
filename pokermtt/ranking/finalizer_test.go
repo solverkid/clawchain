@@ -305,6 +305,7 @@ func TestFinalizerAssignsUniquePayoutRanksForTiedDiedDisplayRank(t *testing.T) {
 	require.Equal(t, 4, displayRankValue(t, rows["4:1"]))
 	require.Equal(t, "source_rank_display_then_start_chip_desc_member_id", rows["2:1"].RankTiebreaker)
 	require.Equal(t, "source_rank_display_then_start_chip_desc_member_id", rows["3:1"].RankTiebreaker)
+	require.Equal(t, []string{"1:1", "2:1", "3:1", "4:1"}, memberIDs(finalized.Rows))
 
 	ranks := make([]int, 0, len(finalized.Rows))
 	for _, row := range finalized.Rows {
@@ -802,6 +803,14 @@ func rowsByMember(rows []ranking.FinalRankingRow) map[string]ranking.FinalRankin
 	}
 	sort.Strings(keys)
 	return out
+}
+
+func memberIDs(rows []ranking.FinalRankingRow) []string {
+	memberIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		memberIDs = append(memberIDs, row.MemberID)
+	}
+	return memberIDs
 }
 
 func rankValue(t *testing.T, row ranking.FinalRankingRow) int {

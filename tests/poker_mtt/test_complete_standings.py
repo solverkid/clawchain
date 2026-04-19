@@ -76,6 +76,32 @@ def test_build_complete_standings_preserves_tied_died_rank_groups() -> None:
         ("1", 3),
         ("3", 4),
     ]
+    assert [item["rank"] for item in standings] == sorted(item["rank"] for item in standings)
+
+
+def test_build_complete_standings_sorts_output_by_unique_payout_rank() -> None:
+    module = load_module()
+    snapshot_map = {
+        "0:1": {"userID": "0", "playerName": "0", "entryNumber": 1, "endChip": 9000, "startChip": 3000},
+        "1:1": {"userID": "1", "playerName": "1", "entryNumber": 1, "endChip": 0, "startChip": 900},
+        "2:1": {"userID": "2", "playerName": "2", "entryNumber": 1, "endChip": 0, "startChip": 2200},
+        "3:1": {"userID": "3", "playerName": "3", "entryNumber": 1, "endChip": 0, "startChip": 1500},
+    }
+    alive_members = ["0:1"]
+    died_entries = [
+        {"rank": 3, "userID": "1", "playerName": "1", "entryNumber": 1, "endChip": 0, "startChip": 900},
+        {"rank": 3, "userID": "2", "playerName": "2", "entryNumber": 1, "endChip": 0, "startChip": 2200},
+        {"rank": 3, "userID": "3", "playerName": "3", "entryNumber": 1, "endChip": 0, "startChip": 1500},
+    ]
+
+    standings = module.build_complete_standings(snapshot_map, alive_members, died_entries)
+
+    assert [(item["user_id"], item["display_rank"], item["rank"]) for item in standings] == [
+        ("0", 1, 1),
+        ("2", 2, 2),
+        ("3", 2, 3),
+        ("1", 2, 4),
+    ]
 
 
 def test_build_complete_standings_leaves_pending_without_payout_rank() -> None:

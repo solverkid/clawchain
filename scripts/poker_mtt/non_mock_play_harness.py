@@ -351,6 +351,7 @@ def validate_finish_summary(
     users_missing_ranking = []
     users_missing_actions = []
     unexpected_ws_errors = []
+    server_rejections = []
     for user in users:
         user_id = str(user.get("user_id") or "")
         ws_summary = user.get("ws") or {}
@@ -358,6 +359,8 @@ def validate_finish_summary(
             users_missing_ranking.append(user_id)
         if not ws_summary.get("sent_actions"):
             users_missing_actions.append(user_id)
+        for rejection in ws_summary.get("server_rejections") or []:
+            server_rejections.append({"user_id": user_id, **dict(rejection)})
         for error in ws_summary.get("errors") or []:
             if not is_allowed_ws_close_error(str(error)):
                 unexpected_ws_errors.append({"user_id": user_id, "error": str(error)})
@@ -366,6 +369,8 @@ def validate_finish_summary(
         failures.append(f"users_missing_current_mtt_ranking={users_missing_ranking}")
     if users_missing_actions:
         failures.append(f"users_missing_sent_actions={users_missing_actions}")
+    if server_rejections:
+        failures.append(f"server_action_rejections={server_rejections[:5]}")
     if unexpected_ws_errors:
         failures.append(f"unexpected_ws_errors={unexpected_ws_errors[:5]}")
 
@@ -422,7 +427,16 @@ def wait_for_tournament_finish(
     )
 
 
+def is_server_action_rejection(payload: dict[str, Any]) -> bool:
+    if str(payload.get("action") or "") != "Msg":
+        return False
+    message = str(payload.get("msg") or "").lower()
+    return "not permited" in message or "not permitted" in message
+
+
 def update_known_position(user_id: str, payload: dict[str, Any], known_position: int | None) -> int | None:
+    if is_server_action_rejection(payload):
+        return None
     players = payload.get("playerStatus") or []
     if not isinstance(players, list):
         return known_position
@@ -431,6 +445,13 @@ def update_known_position(user_id: str, payload: dict[str, Any], known_position:
             continue
         if str(player.get("userID") or "") == user_id and player.get("position") is not None:
             return int(player["position"])
+    return known_position
+
+
+def actor_position_for_payload(payload: dict[str, Any], known_position: int | None) -> int | None:
+    current_position = payload.get("currentPosition")
+    if current_position is not None:
+        return int(current_position)
     return known_position
 
 
@@ -470,6 +491,7 @@ def hold_ws_session(
     sent_actions: list[dict[str, Any]] = []
     timeout_actions: list[dict[str, Any]] = []
     errors: list[str] = []
+    server_rejections: list[dict[str, Any]] = []
     action_counts: collections.Counter[str] = collections.Counter()
     known_position: int | None = None
     received_ranking = False
@@ -495,6 +517,14 @@ def hold_ws_session(
             actions.append(action)
             action_counts[action] += 1
             known_position = update_known_position(user_id, payload, known_position)
+            if is_server_action_rejection(payload):
+                server_rejections.append(
+                    {
+                        "message": str(payload.get("msg") or ""),
+                        "last_known_position": known_position,
+                    }
+                )
+                continue
             if action == "currentMTTRanking":
                 received_ranking = True
                 continue
@@ -506,7 +536,8 @@ def hold_ws_session(
             next_player = payload.get("nextPlayer") or {}
             next_position = next_player.get("position")
             supported_actions = payload.get("supportedActions") or []
-            if known_position is None or next_position is None or int(next_position) != known_position:
+            actor_position = actor_position_for_payload(payload, known_position)
+            if actor_position is None or next_position is None or int(next_position) != actor_position:
                 continue
             if not isinstance(supported_actions, list) or not supported_actions:
                 continue
@@ -518,7 +549,7 @@ def hold_ws_session(
             if plan.get("send", True) is False:
                 timeout_actions.append(plan)
                 continue
-            send_action(ws, known_position, plan)
+            send_action(ws, actor_position, plan)
             sent_actions.append(plan)
         return {
             "user_id": user_id,
@@ -528,6 +559,7 @@ def hold_ws_session(
             "action_counts": dict(sorted(action_counts.items())),
             "sent_actions": sent_actions,
             "timeout_actions": timeout_actions,
+            "server_rejections": server_rejections,
             "errors": errors,
             "received_current_mtt_ranking": received_ranking,
         }

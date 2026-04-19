@@ -170,6 +170,16 @@ def assign_unique_payout_ranks(standings: list[dict[str, Any]]) -> None:
         item["rank"] = payout_rank
 
 
+def final_standing_sort_key(item: dict[str, Any]) -> tuple[int, int, int, int, str]:
+    rank = to_int(item.get("rank"))
+    member_id = normalize_string(item.get("member_id")) or ""
+    user_order, entry_order, member_order = member_sort_key(member_id)
+    if rank is not None:
+        return (0, rank, user_order, entry_order, member_order)
+    display_rank = to_int(item.get("display_rank")) or 10**12
+    return (1, display_rank, user_order, entry_order, member_order)
+
+
 def build_complete_standings(
     snapshot_map: dict[str, Any],
     alive_members: list[str],
@@ -252,7 +262,7 @@ def build_complete_standings(
             )
         )
     assign_unique_payout_ranks(standings)
-    return standings
+    return sorted(standings, key=final_standing_sort_key)
 
 
 def fetch_complete_standings(

@@ -398,6 +398,12 @@ Commit: `git commit -m "test(pokermtt): add phase3 ops gates"`
 - `check_local_run_logs.py` records and fails local release gates for Tencent IM external calls, RocketMQ publish failures, and donor operation-channel overflow.
 - Backpressure gate status: the historical donor-real run showed `Hub.Operation` overflow during final-table/end-ranking bursts, but the clean healthy-MQ 30-player rerun at `artifacts/poker-mtt/deep-real-auth-20260419T091505Z` finished with zero Tencent IM external calls, zero RocketMQ publish failures, and zero operation-channel overflow. The remaining open item is the 2,000-table / 20k-user burst proof; Phase 3 cannot be called production-ready until that scale gate records the same counters plus MQ lag and record-assembly timing.
 
+2026-04-19 payout-ranking harness note:
+
+- Auth-mode donor run `non-mock-play-1776613014` at `artifacts/poker-mtt/payout-rank-20260419T153551Z-current-position/` finished with 30 explicit joins, 30 ranking receipts, 30 users with sent WS actions, 155 total sent actions, `allIn=30`, `fold=7`, `timeout_no_action_total=8`, and `nonzero_chip_action_count=32`.
+- The run produced final counts `alive=1`, `died=29`, `pending=0`, `standings=30`. Donor display ranks tied at `9`, `15`, `20`, and `25`; the post-fix complete standings check verified unique, contiguous, sorted payout ranks `1..30`.
+- Harness actor tracking now treats donor `Msg` action rejection (`not permited` / `not permitted`) as a finish-gate failure and chooses action eligibility from the current `readyToAct.currentPosition`, avoiding stale seat actions from old onlooker WebSocket sessions after table movement.
+
 ### Task 9: Draft Window-Level Reputation Delta Only
 
 **Files:**

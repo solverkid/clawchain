@@ -199,6 +199,7 @@ func (f Finalizer) FinalizeWithRegistration(snapshot LiveSnapshot, registration 
 
 	collapseDuplicateEconomicUnits(rows)
 	assignUniquePayoutRanks(rows)
+	sortFinalRows(rows)
 	if err := f.validateFinalRows(rows); err != nil {
 		return Finalization{}, err
 	}
@@ -467,6 +468,49 @@ func assignUniquePayoutRanks(rows []FinalRankingRow) {
 				rows[rowIndex].RankTiebreaker = "source_rank_display"
 			}
 		}
+	}
+}
+
+func sortFinalRows(rows []FinalRankingRow) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := rows[i]
+		right := rows[j]
+		if left.Rank != nil && right.Rank != nil {
+			if *left.Rank != *right.Rank {
+				return *left.Rank < *right.Rank
+			}
+			return memberSortKeyLess(left.MemberID, right.MemberID)
+		}
+		if left.Rank != nil {
+			return true
+		}
+		if right.Rank != nil {
+			return false
+		}
+		leftDisplayRank := rankForSort(left.DisplayRank)
+		rightDisplayRank := rankForSort(right.DisplayRank)
+		if leftDisplayRank != rightDisplayRank {
+			return leftDisplayRank < rightDisplayRank
+		}
+		leftStatusOrder := statusSortOrder(left.Status)
+		rightStatusOrder := statusSortOrder(right.Status)
+		if leftStatusOrder != rightStatusOrder {
+			return leftStatusOrder < rightStatusOrder
+		}
+		return memberSortKeyLess(left.MemberID, right.MemberID)
+	})
+}
+
+func statusSortOrder(status StandingStatus) int {
+	switch status {
+	case StandingStatusAlive:
+		return 0
+	case StandingStatusDied:
+		return 1
+	case StandingStatusPending:
+		return 2
+	default:
+		return 3
 	}
 }
 

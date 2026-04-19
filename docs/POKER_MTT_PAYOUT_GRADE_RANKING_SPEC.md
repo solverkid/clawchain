@@ -219,6 +219,7 @@ Payout-grade finalization must enforce:
 8. Persisted final-ranking rows are revalidated before reward projection, even if they bypassed the API schema.
 9. Reward windows only consume projected results that came from valid ranked final rows.
 10. Settlement anchors only consume locked/anchorable reward windows.
+11. Final-ranking artifacts emit ranked rows sorted by payout `rank` ascending. Non-ranked archive rows, when present, are emitted after ranked rows.
 
 ---
 
@@ -314,12 +315,35 @@ Required tests:
 - Go finalizer preserves tied `display_rank` while making `rank` unique.
 - Go finalizer removes payout rank from unresolved, waiting/no-show, and duplicate-collapsed rows.
 - Go finalizer rejects non-contiguous ranked rows at the barrier.
-- Python Redis standings helper emits duplicate `display_rank` but unique `rank`.
+- Go finalizer emits rows sorted by unique payout `rank`.
+- Python Redis standings helper emits duplicate `display_rank` but unique sorted `rank`.
 - FastAPI/Pydantic projection request rejects duplicate payout ranks.
 - FastAPI/Pydantic projection request rejects non-contiguous payout ranks.
 - Forecast service rejects persisted duplicate ranks before result projection.
 - Existing cross-language Go -> Python fixture includes rank evidence fields.
 - Phase 3 20k reward-window path asserts unique final ranks before window selection.
+
+---
+
+## 9.1 Local Donor Verification
+
+2026-04-19 auth-mode donor run `non-mock-play-1776613014` completed through real WebSocket join/action flow with 30 local-auth users, 4 initial rooms, RocketMQ and DynamoDB Local enabled, and Tencent IM blocked locally.
+
+Evidence artifact: `artifacts/poker-mtt/payout-rank-20260419T153551Z-current-position/`
+
+Key result:
+
+- `joined_users = 30`
+- `received_current_mtt_ranking = 30`
+- `users_with_sent_actions = 30`
+- `sent_action_total = 155`
+- action coverage: `allIn=30`, `fold=7`, `timeout_no_action_total=8`, `nonzero_chip_action_count=32`
+- final Redis standings: `alive_count = 1`, `died_count = 29`, `pending_count = 0`, `standings_count = 30`
+- donor display ranks tied at `9`, `15`, `20`, and `25`
+- payout `rank` passed uniqueness, contiguity, and sorted-output checks for `1..30`
+- local log check found zero Tencent IM external calls, zero RocketMQ publish failures, and zero donor operation-channel overflow
+
+The same run exposed an important harness/reward-boundary issue: donor can keep old table WebSocket sessions as onlookers after table movement. The local harness now uses the current `readyToAct.currentPosition` from each payload instead of a stale cached seat, records server action rejections, and fails the finish gate if donor returns `not permited` / `not permitted` action messages.
 
 ---
 
@@ -334,4 +358,3 @@ The fix is not to remove donor semantics. The fix is to separate them:
 - preserve donor display ranks for audit and replay
 - assign ClawChain payout ranks uniquely and contiguously
 - enforce this invariant in both the finalizer and the reward projection service
-
