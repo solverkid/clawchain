@@ -11,9 +11,15 @@ services:
       timeout: 5s
       retries: 20
 
+  poker_mtt_dynamodb:
+    image: amazon/dynamodb-local:2.5.4
+    container_name: poker-mtt-dynamodb
+    ports:
+      - "38000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+
   poker_mtt_rmqnamesrv:
     image: apache/rocketmq:5.3.2
-    platform: linux/amd64
     container_name: poker-mtt-rmqnamesrv
     ports:
       - "39876:9876"
@@ -21,14 +27,15 @@ services:
 
   poker_mtt_rmqbroker:
     image: apache/rocketmq:5.3.2
-    platform: linux/amd64
     container_name: poker-mtt-rmqbroker
     depends_on:
       - poker_mtt_rmqnamesrv
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "39009:10909"
-      - "39011:10911"
-      - "39012:10912"
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
     environment:
       - NAMESRV_ADDR=poker_mtt_rmqnamesrv:9876
     volumes:
@@ -37,14 +44,17 @@ services:
 
   poker_mtt_rmqproxy:
     image: apache/rocketmq:5.3.2
-    platform: linux/amd64
     container_name: poker-mtt-rmqproxy
     depends_on:
       - poker_mtt_rmqnamesrv
       - poker_mtt_rmqbroker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "38080:8080"
       - "38081:8081"
     environment:
       - NAMESRV_ADDR=poker_mtt_rmqnamesrv:9876
-    command: sh mqproxy
+    volumes:
+      - ./poker-mtt/rocketmq/proxy.json:/home/rocketmq/rocketmq-5.3.2/conf/rmq-proxy.json
+    command: sh mqproxy -pc /home/rocketmq/rocketmq-5.3.2/conf/rmq-proxy.json

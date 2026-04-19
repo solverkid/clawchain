@@ -1007,11 +1007,15 @@ ClawChain 调 donor 内部端口：
 - `deploy/docker-compose.poker-mtt-local.yml`
 - `deploy/poker-mtt/rocketmq/broker.conf`
 - `scripts/poker_mtt/prepare_local_env.py`
+- `scripts/poker_mtt/patch_donor_local_safety.py`
+- `scripts/poker_mtt/init_local_dynamodb.sh`
+- `scripts/poker_mtt/check_local_run_logs.py`
 - `scripts/poker_mtt/start_local_sidecar.sh`
 - `scripts/poker_mtt/stop_local_sidecar.sh`
 - `scripts/poker_mtt/smoke_test.py`
 - `scripts/poker_mtt/requirements.txt`
 - `tests/poker_mtt/test_prepare_local_env.py`
+- `tests/poker_mtt/test_local_runtime_config.py`
 
 ### 18.2 本地依赖口径
 
@@ -1021,10 +1025,45 @@ ClawChain 调 donor 内部端口：
 - donor 内部端口：`18083`
 - local Redis：`127.0.0.1:36379`, DB `15`
 - local RocketMQ proxy endpoint：`127.0.0.1:38081`
+- local DynamoDB endpoint：`http://127.0.0.1:38000`
+
+RocketMQ 本地 harness 有两层地址要同时正确：
+
+- broker 对 proxy 广告 `brokerIP1=host.docker.internal`，并把 broker 端口直映射为 `10909:10909`、`10911:10911`、`10912:10912`，这样 Docker proxy 能用 route 访问 broker 并创建 system topic。
+- proxy 对宿主机 donor 广告 host-mapped gRPC 入口。`proxy.json` 必须启用 `useEndpointPortFromRequest=true`，让 Go v5 producer 通过 `127.0.0.1:38081` QueryRoute 后拿回 `127.0.0.1:38081`，而不是 container-internal 的 `127.0.0.1:8081`。
+
+`brokerIP1=127.0.0.1` 只对宿主机 donor 有效但会让 proxy 容器打到自己，Docker service DNS（例如 `poker_mtt_rmqbroker:10911`）只对容器有效但宿主机 donor 无法解析，proxy 缺少 `useEndpointPortFromRequest` 则会复现 `telemeter to 127.0.0.1:8081 failed` / publish timeout。
+
+本地 compose 不固定 `platform: linux/amd64`，让 Docker 使用宿主机原生架构。Apple Silicon 上强制 amd64 会触发第二份 RocketMQ 镜像冷拉和 emulation 风险，不能作为默认 harness 路径。
+
+深度真实 harness 前要预拉取或缓存 Docker 镜像：
+
+- `apache/rocketmq:5.3.2`
+- `amazon/dynamodb-local:2.5.4`
+
+冷启动下载时间只算环境准备，不算 tournament runtime。Phase 3/20k harness 的日志需要把 image pull、topic/table bootstrap、donor startup 和实际比赛时长拆开记录。
 
 `prepare_local_env.py` 会把 donor `config-dev.yaml` patch 到这套本地口径，并保留原始备份：
 
 - backup: `build/poker-mtt/config-dev.yaml.orig`
+
+`patch_donor_local_safety.py` 会给 donor `service/thrid_part/tencent_chat_room.go` 加本地 safety patch，并保留原始备份：
+
+- backup: `build/poker-mtt/tencent_chat_room.go.orig`
+- patch: `DeleteGroupMember()` 在 `chat_group_available=false` 时直接返回，不再访问 `adminapisgp.im.qcloud.com`
+
+`init_local_dynamodb.sh` 依赖 AWS CLI，用 dummy local credentials 初始化 DynamoDB Local 表：
+
+- `poker_mtt_hands`
+- `poker_mtt_user_hand_history`
+
+这两张表用于本地 MQ / hand-history adapter 验证。ClawChain 结算和 reward window 仍以 service repository / evidence root 为真相，不把 DynamoDB 当链上或结算主库。
+
+`check_local_run_logs.py` 会扫描 donor log，并在本地 release gate 中阻断三类问题：
+
+- Tencent IM 外呼：`adminapisgp.im.qcloud.com`
+- RocketMQ publish failure：`create grpc conn failed`、`POKER_RECORD_TOPIC` failure、topic route / connection failure
+- donor operation channel overflow：`channle is full` / `timeout with seconds:5,sendCommand`
 
 ### 18.3 已验证的测试
 
@@ -1089,11 +1128,19 @@ python3 scripts/poker_mtt/smoke_test.py
 当前推荐顺序：
 
 ```bash
-docker compose -f deploy/docker-compose.poker-mtt-local.yml up -d poker_mtt_redis poker_mtt_rmqnamesrv poker_mtt_rmqbroker
+docker compose -f deploy/docker-compose.poker-mtt-local.yml up -d poker_mtt_redis poker_mtt_dynamodb poker_mtt_rmqnamesrv poker_mtt_rmqbroker
+scripts/poker_mtt/init_local_dynamodb.sh
 docker compose -f deploy/docker-compose.poker-mtt-local.yml up -d poker_mtt_rmqproxy
+python3 scripts/poker_mtt/patch_donor_local_safety.py
 python3 scripts/poker_mtt/prepare_local_env.py
 cd lepoker-gameserver && go build -o ../build/poker-mtt/run_server_local ./run_server
 cd lepoker-gameserver && GAME_ENV=local ../build/poker-mtt/run_server_local
+```
+
+本地 run 完成后必须检查 donor log：
+
+```bash
+python3 scripts/poker_mtt/check_local_run_logs.py build/poker-mtt/run_server.log
 ```
 
 然后在另一个终端执行：
@@ -1169,7 +1216,7 @@ scripts/poker_mtt/start_local_sidecar.sh --mode auth --auth-host http://127.0.0.
 完整 play harness：
 
 ```bash
-python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30
+python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30 --timeout-action-rate 0.05 --require-action-coverage
 ```
 
 结果摘要：
@@ -1189,8 +1236,17 @@ python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-
 补充现实限制：
 
 - `users_with_ws_errors = 18`，主要是 bust / kick 后远端断连；不影响最终完赛和 standings 收敛
-- 测试期间 RocketMQ publish 有 `create grpc conn failed, err=context deadline exceeded` 类日志，但比赛启动、join、行动、ranking 和完赛不被阻断
+- 早期测试期间 RocketMQ publish 有 `create grpc conn failed, err=context deadline exceeded` 类日志，但比赛启动、join、行动、ranking 和完赛不被阻断。该状态不能作为健康 harness 通过条件，后续 deep-real run 必须在 local RocketMQ healthy、log checker 无 publish failure 的情况下重跑。
 - donor 进程在 agent 非交互后台 `nohup` 场景下仍可能刚 listen 后退出；以前台方式运行 donor 时 30 人测试可跑到完赛
+
+2026-04-19 真实 auth-mode 重跑更新:
+
+- harness action policy 已扩展为随机合法 `fold`、合法 chip `bet/raise`、`allIn`，以及 `--timeout-action-rate` 控制的“故意不发送 action”等待 donor timeout。
+- 历史污染 run 跑到完赛但暴露 donor `Hub.Operation` backpressure：`channle is full to write,length:100,cap:100`。根因路径是 `Hub.Write` 把非 client 下行写入固定 100 容量的 `h.Operation`，`ReadMessageFromChannel` 串行消费并组装 hand record / MQ。这个问题现在被保留为 Phase 3 ops gate，而不是忽略的 donor 噪音。
+- 最新 clean evidence run: `artifacts/poker-mtt/deep-real-auth-20260419T091505Z`。该 run 跑到完赛，最终 `alive=1 / died=29 / pending=0 / standings_count=30`，30 人全部 join、全部收到 `currentMTTRanking`、全部发过至少一个 WS action，`sent_action_total=228`。
+- 该 clean run 的 action mix 为 `call=79`、`allIn=36`、`check=45`、`raise=37`、`bet=20`、`fold=11`，并覆盖 `timeout_no_action_total=9`、`nonzero_chip_action_count=57`、`max_nonzero_chip=35410`。
+- `local-run-log-check.json` 对 clean run 的结果为 Tencent IM 外呼 0、RocketMQ publish failure 0、donor operation-channel overflow 0。RocketMQ topic status 证明 `ROUND_INFO_TOPIC`、`POKER_RECORD_TOPIC`、`POKER_RECORD_STANDUP_TOPIC`、`HUB_FINISH_TOPIC` 均有本地 offset 证据；DynamoDB Local 表 `poker_mtt_hands` / `poker_mtt_user_hand_history` 已创建。
+- 本地 harness 必须使用 `patch_donor_local_safety.py` 或等价方式阻断 Tencent IM。仅设置 `chat_group_available=false` 不够，因为 donor 当前 `DeleteGroupMember()` 缺少该 guard。Phase 3 的剩余生产风险是 2,000-table / 20k-user early burst 下同样不能出现 MQ failure、TencentIM 外呼或 `Hub.Operation` overflow。
 
 ### 18.7 Phase 3 finalizer / projector / sidecar contract
 
@@ -1201,9 +1257,10 @@ Phase 3 把上面的 smoke 结果升级成 production-readiness gates：
 - projector request 必须包含 `projection_id`、`final_ranking_root`、`standing_snapshot_id`、`standing_snapshot_hash`、payload `locked_at` 和 policy version。
 - `/admin/poker-mtt/final-rankings/project` 必须幂等：同 projection/root 重放返回 existing，不同 root 冲突。
 - sidecar HTTP 的 start/get-room/join/reentry/cancel 可以按 idempotency key retry；bet/action 类调用不能自动 retry。
-- non-mock 30-player gate 需要硬断言：30 joined、30 ranking、30 users sent actions、1 survivor、29 finished/eliminated、0 pending，且 WS errors 只允许 bust/kick 后的已知 close reason。
+- non-mock 30-player gate 需要硬断言：30 joined、30 ranking、30 users sent actions、覆盖 fold / all-in / 合法非零 chip / timeout no-action、1 survivor、29 finished/eliminated、0 pending，且 WS errors 只允许 bust/kick 后的已知 close reason。
 - donor token verify 缺 miner binding 时只能生成 local harness identity，不得进入 reward-bound path。
-- staging/manual release gate 使用 `make test-poker-mtt-phase3-heavy`，其 donor 侧输出会归档到 `artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json`。
+- local donor logs 不得出现 Tencent IM 外呼；RocketMQ healthy run 不得出现 `POKER_RECORD_TOPIC` publish failure；operation-channel overflow 必须作为 Phase 3 ops failure 或 release blocker 记录。
+- staging/manual release gate 使用 `make test-poker-mtt-phase3-heavy`，其 donor 侧输出会归档到 `artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json` 和 `artifacts/poker-mtt/phase3/local-run-log-check.json`。
 
 对应 canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 

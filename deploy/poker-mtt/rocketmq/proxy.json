@@ -1,0 +1,9 @@
+{
+  "rocketMQClusterName": "DefaultCluster",
+  "proxyClusterName": "DefaultCluster",
+  "proxyName": "poker-mtt-local-proxy",
+  "useEndpointPortFromRequest": true,
+  "grpcProxyRelayRequestTimeoutInSeconds": 15,
+  "topicRouteServiceCacheRefreshSeconds": 5,
+  "topicRouteServiceCacheExpiredSeconds": 30
+}

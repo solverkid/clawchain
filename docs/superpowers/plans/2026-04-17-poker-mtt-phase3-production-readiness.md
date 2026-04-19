@@ -340,6 +340,9 @@ Commit: `git commit -m "feat(pokermtt): harden reward economics"`
 - Modify: `pokermtt/sidecar/ws.go`
 - Modify: `scripts/poker_mtt/non_mock_play_harness.py`
 - Modify: `scripts/poker_mtt/generate_hand_history_load.py`
+- Modify: `deploy/docker-compose.poker-mtt-local.yml`
+- Add: `scripts/poker_mtt/init_local_dynamodb.sh`
+- Add: `scripts/poker_mtt/patch_donor_local_safety.py`
 - Modify: `Makefile`
 - Test: `pokermtt/sidecar/*_test.go`
 - Test: `tests/mining_service/test_poker_mtt_load_contract.py`
@@ -356,11 +359,23 @@ Retry idempotent orchestration calls only. Never retry betting/action calls.
 
 Require 30 joined, 30 ranking, 30 users sent actions, 1 survivor, 29 finished/eliminated, 0 pending, and only allowed WS close reasons.
 
-- [x] **Step 4: Emit real metrics/log events**
+- [x] **Step 4: Add real miner action/timeout coverage**
+
+Action policy must sample only donor-provided legal actions/chips and include `fold`, all-in/max-chip, and timeout/no-action ticks. Timeout/no-action should be separately counted so it cannot be confused with a sent WS action.
+
+- [x] **Step 5: Add local RocketMQ/DynamoDB/Tencent safety harness**
+
+Local compose must start Redis, RocketMQ namesrv/broker/proxy, and DynamoDB Local. DynamoDB Local bootstrap creates `poker_mtt_hands` and `poker_mtt_user_hand_history`. Local donor startup applies a reversible Tencent IM safety patch so `DeleteGroupMember()` respects `chat_group_available=false`.
+
+- [ ] **Step 6: Add donor operation-channel backpressure gate**
+
+Parse donor logs for `channle is full`, `timeout with seconds:5,sendCommand`, `POKER_RECORD_TOPIC`, and Tencent external calls. With RocketMQ healthy, 30-player and 2,000-table runs must have zero operation-channel overflow and zero Tencent external calls. If overflow remains, split record assembly/MQ publish from the hot `Hub.Operation` consumer or add lossless bounded spillover before reward-bearing rollout.
+
+- [x] **Step 7: Emit real metrics/log events**
 
 Test metrics/log sink receives hand ingest, conflict, HUD duration, reward-window query, selected/omitted counts, page count, MQ lag, DLQ count, and settlement confirmation state.
 
-- [x] **Step 5: Verify and commit**
+- [x] **Step 8: Verify and commit**
 
 Run: `go test ./pokermtt/sidecar -v && PYTHONPATH=mining-service pytest -q tests/mining_service/test_poker_mtt_load_contract.py && bash scripts/poker_mtt/run_phase3_db_load_check.sh --players 300 --local`
 
@@ -373,6 +388,15 @@ Commit: `git commit -m "test(pokermtt): add phase3 ops gates"`
 - `non_mock_play_harness.py` now exposes and calls `validate_finish_summary()` when `--until-finish` is enabled. The gate asserts joined users, ranking receipt, sent actions, 1 alive, 29 died for 30 players, 0 pending, and no unexpected WS errors.
 - `generate_hand_history_load.py` now materializes one completed-hand event per early-stage table and returns a checksum root for the 2,000-table burst shape.
 - Added `make test-poker-mtt-phase3-ops` to run sidecar tests, load-contract tests, and the Phase 3 DB load check in one command.
+
+2026-04-19 implementation note:
+
+- `non_mock_play_harness.py` now samples `fold`, all-in/max-chip, and timeout/no-action behavior from donor legal `readyToAct` states. `--require-action-coverage` turns those paths into a hard finish-gate assertion through the emitted `action_coverage` summary.
+- `deploy/docker-compose.poker-mtt-local.yml` includes DynamoDB Local; `init_local_dynamodb.sh` bootstraps local hand-history tables. RocketMQ broker config advertises `brokerIP1=host.docker.internal` with direct broker port mappings and compose `extra_hosts` so the Docker proxy can reach the broker; RocketMQ proxy config enables `useEndpointPortFromRequest=true` so the host-run donor receives `127.0.0.1:38081` from Go v5 route metadata instead of `127.0.0.1:8081`.
+- Phase 3 harness hosts must pre-pull/cache `apache/rocketmq:5.3.2` and `amazon/dynamodb-local:2.5.4`; cold image pulls are environment setup evidence, not tournament runtime evidence. Local RocketMQ compose must not force `linux/amd64`, otherwise Apple Silicon pulls a second emulated image and invalidates timing evidence. Broker route must advertise `host.docker.internal:10911`; `127.0.0.1` breaks proxy containers, while Docker service DNS breaks host-run donor producers. Proxy route must preserve the host-mapped gRPC port, otherwise donor logs show `telemeter to 127.0.0.1:8081 failed` and all MQ-backed hand-history paths become contaminated.
+- `patch_donor_local_safety.py` blocks Tencent IM cleanup calls locally by adding the missing `chat_group_available=false` guard to donor `DeleteGroupMember()`.
+- `check_local_run_logs.py` records and fails local release gates for Tencent IM external calls, RocketMQ publish failures, and donor operation-channel overflow.
+- Backpressure gate status: the historical donor-real run showed `Hub.Operation` overflow during final-table/end-ranking bursts, but the clean healthy-MQ 30-player rerun at `artifacts/poker-mtt/deep-real-auth-20260419T091505Z` finished with zero Tencent IM external calls, zero RocketMQ publish failures, and zero operation-channel overflow. The remaining open item is the 2,000-table / 20k-user burst proof; Phase 3 cannot be called production-ready until that scale gate records the same counters plus MQ lag and record-assembly timing.
 
 ### Task 9: Draft Window-Level Reputation Delta Only
 
@@ -450,7 +474,7 @@ Run:
 pytest tests/mining_service -q
 go test ./authadapter ./pokermtt/... ./x/settlement/... ./x/reputation/... -v
 bash scripts/poker_mtt/run_phase3_db_load_check.sh --players 20000 --postgres "$CLAWCHAIN_DATABASE_URL"
-python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30
+python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30 --timeout-action-rate 0.05 --require-action-coverage
 git diff --check
 ```
 

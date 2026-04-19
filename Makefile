@@ -94,7 +94,8 @@ test-poker-mtt-phase3-heavy:
 	@test -n "$(POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID)" || (echo "Set POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID after creating a local-chain settlement anchor." >&2; exit 2)
 	@mkdir -p '$(POKER_MTT_PHASE3_ARTIFACT_DIR)'
 	@bash scripts/poker_mtt/run_phase3_db_load_check.sh --postgres-url '$(POKER_MTT_PHASE3_POSTGRES_URL)' | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/db-load-20k.log'
-	@python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30 $(POKER_MTT_PHASE3_HARNESS_ARGS) | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/non-mock-30-finish-summary.json'
+	@python3 scripts/poker_mtt/non_mock_play_harness.py --user-count 30 --table-room-count-at-least 4 --until-finish --finish-timeout-seconds 1800 --max-workers 30 --timeout-action-rate 0.05 --require-action-coverage $(POKER_MTT_PHASE3_HARNESS_ARGS) | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/non-mock-30-finish-summary.json'
+	@python3 scripts/poker_mtt/check_local_run_logs.py build/poker-mtt/run_server.log | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/local-run-log-check.json'
 	@'$(POKER_MTT_PHASE3_CLAWCHAIND)' query settlement settlement-anchor '$(POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID)' --output json $(POKER_MTT_PHASE3_CHAIN_ARGS) | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/settlement-anchor-query-receipt.json'
 
 # Run linter

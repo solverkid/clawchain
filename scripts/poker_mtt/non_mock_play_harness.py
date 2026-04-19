@@ -68,6 +68,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-timeout", type=float, default=5.0)
     parser.add_argument("--max-workers", type=int, default=30)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--timeout-action-rate",
+        type=float,
+        default=0.02,
+        help="Probability of intentionally sending no action on a legal readyToAct tick.",
+    )
+    parser.add_argument(
+        "--require-action-coverage",
+        action="store_true",
+        help="Fail the finish gate unless fold/all-in/nonzero chip/timeout paths were exercised.",
+    )
     return parser.parse_args()
 
 
@@ -89,12 +100,19 @@ def choose_supported_chip(chips: list[Any] | None, rng: random.Random) -> float:
     return float(rng.choice(normalized))
 
 
-def choose_action_plan(supported_actions: list[dict[str, Any]], rng: random.Random) -> dict[str, Any]:
+def choose_action_plan(
+    supported_actions: list[dict[str, Any]],
+    rng: random.Random,
+    *,
+    timeout_action_rate: float = 0.0,
+) -> dict[str, Any]:
     by_action = {
         str(item.get("action")): item
         for item in supported_actions
         if item.get("action")
     }
+    if timeout_action_rate > 0 and rng.random() < min(timeout_action_rate, 1.0):
+        return {"action": "timeout", "chips": 0, "send": False}
     if "allIn" in by_action and rng.random() < 0.04:
         return {"action": "allIn", "chips": 0}
     if "check" in by_action:
@@ -106,13 +124,13 @@ def choose_action_plan(supported_actions: list[dict[str, Any]], rng: random.Rand
         return {"action": "check", "chips": 0}
     if "call" in by_action:
         roll = rng.random()
-        if "raise" in by_action and sanitize_chip_choices(by_action["raise"].get("chips")) and roll < 0.30:
+        if "fold" in by_action and roll < 0.12:
+            return {"action": "fold", "chips": 0}
+        if "raise" in by_action and sanitize_chip_choices(by_action["raise"].get("chips")) and roll < 0.42:
             return {
                 "action": "raise",
                 "chips": choose_supported_chip(by_action["raise"].get("chips"), rng),
             }
-        if "fold" in by_action and roll < 0.08:
-            return {"action": "fold", "chips": 0}
         if "allIn" in by_action and roll > 0.97:
             return {"action": "allIn", "chips": 0}
         return {"action": "call", "chips": 0}
@@ -256,7 +274,41 @@ def is_allowed_ws_close_error(message: str) -> bool:
     return any(snippet in normalized for snippet in ALLOWED_WS_CLOSE_ERROR_SNIPPETS)
 
 
-def validate_finish_summary(summary: dict[str, Any], *, expected_players: int) -> None:
+def summarize_real_action_coverage(users: list[dict[str, Any]]) -> dict[str, Any]:
+    action_counts: collections.Counter[str] = collections.Counter()
+    timeout_total = 0
+    nonzero_chip_action_count = 0
+    max_nonzero_chip = 0.0
+
+    for user in users:
+        ws_summary = user.get("ws") or {}
+        for plan in ws_summary.get("sent_actions") or []:
+            action = str(plan.get("action") or "")
+            if action:
+                action_counts[action] += 1
+            try:
+                chips = float(plan.get("chips") or 0)
+            except (TypeError, ValueError):
+                chips = 0.0
+            if chips > 0:
+                nonzero_chip_action_count += 1
+                max_nonzero_chip = max(max_nonzero_chip, chips)
+        timeout_total += len(ws_summary.get("timeout_actions") or [])
+
+    return {
+        "actions": dict(sorted(action_counts.items())),
+        "timeout_no_action_total": timeout_total,
+        "nonzero_chip_action_count": nonzero_chip_action_count,
+        "max_nonzero_chip": max_nonzero_chip,
+    }
+
+
+def validate_finish_summary(
+    summary: dict[str, Any],
+    *,
+    expected_players: int,
+    require_action_coverage: bool = False,
+) -> None:
     connections = summary.get("connections") or {}
     finish_mode = summary.get("finish_mode") or {}
     standings = summary.get("standings") or {}
@@ -320,6 +372,24 @@ def validate_finish_summary(summary: dict[str, Any], *, expected_players: int) -
     statuses = collections.Counter(str(item.get("status") or "") for item in standings.get("standings") or [])
     if statuses.get("alive", 0) != 1 or statuses.get("died", 0) != expected_died or statuses.get("pending", 0) != 0:
         failures.append(f"standing_statuses={dict(sorted(statuses.items()))}")
+
+    action_coverage = summary.get("action_coverage") or summarize_real_action_coverage(users)
+    if require_action_coverage:
+        covered_actions = action_coverage.get("actions") or {}
+        missing_action_coverage = []
+        if int(covered_actions.get("fold") or 0) <= 0:
+            missing_action_coverage.append("fold")
+        if int(covered_actions.get("allIn") or 0) <= 0:
+            missing_action_coverage.append("allIn")
+        if int(action_coverage.get("nonzero_chip_action_count") or 0) <= 0:
+            missing_action_coverage.append("nonzero_chip")
+        if int(action_coverage.get("timeout_no_action_total") or 0) <= 0:
+            missing_action_coverage.append("timeout_no_action")
+        if missing_action_coverage:
+            failures.append(
+                f"missing_action_coverage={missing_action_coverage} "
+                f"action_coverage={json.dumps(action_coverage, sort_keys=True)}"
+            )
 
     if failures:
         raise HarnessFailure("finish gate failed: " + "; ".join(failures))
@@ -398,6 +468,7 @@ def hold_ws_session(
     hold_deadline = time.time() + session_timeout_seconds
     actions: list[str] = []
     sent_actions: list[dict[str, Any]] = []
+    timeout_actions: list[dict[str, Any]] = []
     errors: list[str] = []
     action_counts: collections.Counter[str] = collections.Counter()
     known_position: int | None = None
@@ -439,7 +510,14 @@ def hold_ws_session(
                 continue
             if not isinstance(supported_actions, list) or not supported_actions:
                 continue
-            plan = choose_action_plan(supported_actions, rng)
+            plan = choose_action_plan(
+                supported_actions,
+                rng,
+                timeout_action_rate=args.timeout_action_rate,
+            )
+            if plan.get("send", True) is False:
+                timeout_actions.append(plan)
+                continue
             send_action(ws, known_position, plan)
             sent_actions.append(plan)
         return {
@@ -449,6 +527,7 @@ def hold_ws_session(
             "actions": actions,
             "action_counts": dict(sorted(action_counts.items())),
             "sent_actions": sent_actions,
+            "timeout_actions": timeout_actions,
             "errors": errors,
             "received_current_mtt_ranking": received_ranking,
         }
@@ -512,8 +591,11 @@ def main() -> int:
     ranking_ok = sum(1 for item in results if item["ws"]["received_current_mtt_ranking"])
     sent_action_users = sum(1 for item in results if item["ws"]["sent_actions"])
     sent_action_total = sum(len(item["ws"]["sent_actions"]) for item in results)
+    timeout_action_users = sum(1 for item in results if item["ws"].get("timeout_actions"))
+    timeout_action_total = sum(len(item["ws"].get("timeout_actions") or []) for item in results)
     failures = [item for item in results if item["ws"]["errors"]]
     standings = final_standings or fetch_complete_standings(redis_client, args.mtt_id, game_type="mtt")
+    action_coverage = summarize_real_action_coverage(results)
     summary = {
         "mtt_id": args.mtt_id,
         "start_response": start_response,
@@ -528,17 +610,24 @@ def main() -> int:
             "users_with_ws_errors": len(failures),
             "users_with_sent_actions": sent_action_users,
             "sent_action_total": sent_action_total,
+            "users_with_timeout_actions": timeout_action_users,
+            "timeout_action_total": timeout_action_total,
         },
         "finish_mode": {
             "until_finish": args.until_finish,
             "finish_timeout_seconds": args.finish_timeout_seconds,
             "finished": is_tournament_finished(standings, expected_players=args.user_count),
         },
+        "action_coverage": action_coverage,
         "standings": standings,
         "users": results,
     }
     if args.until_finish:
-        validate_finish_summary(summary, expected_players=args.user_count)
+        validate_finish_summary(
+            summary,
+            expected_players=args.user_count,
+            require_action_coverage=args.require_action_coverage,
+        )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

@@ -32,6 +32,35 @@ raise SystemExit(1)
 PY
 }
 
+wait_for_http_200() {
+  local url="$1"
+  local timeout="${2:-60}"
+  python3 - "$url" "$timeout" <<'PY'
+from __future__ import annotations
+
+import sys
+import time
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+timeout = float(sys.argv[2])
+deadline = time.time() + timeout
+last_error = None
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen(url, timeout=2.0) as response:
+            if 200 <= response.status < 300:
+                raise SystemExit(0)
+            last_error = f"http status {response.status}"
+    except (OSError, urllib.error.URLError) as exc:
+        last_error = str(exc)
+    time.sleep(0.5)
+print(f"timeout waiting for HTTP 2xx from {url}: {last_error}", file=sys.stderr)
+raise SystemExit(1)
+PY
+}
+
 wait_for_log() {
   local container="$1"
   local pattern="$2"
@@ -78,6 +107,37 @@ create_topics_best_effort() {
   done
 }
 
+init_local_dynamodb_with_retry() {
+  local ok=0
+  for _ in $(seq 1 12); do
+    if "$ROOT/scripts/poker_mtt/init_local_dynamodb.sh"; then
+      ok=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ "$ok" -ne 1 ]]; then
+    fail_with_log_tail "failed to initialize DynamoDB Local hand-history tables"
+  fi
+}
+
+fail_with_log_tail() {
+  local message="$1"
+  echo "$message" >&2
+  if [[ -f "$LOG_FILE" ]]; then
+    echo "---- donor log tail ($LOG_FILE) ----" >&2
+    tail -n 120 "$LOG_FILE" >&2 || true
+    echo "-----------------------------------" >&2
+  fi
+  exit 1
+}
+
+assert_donor_pid_running() {
+  if [[ ! -s "$PID_FILE" ]] || ! kill -0 "$(cat "$PID_FILE")" >/dev/null 2>&1; then
+    fail_with_log_tail "poker-mtt donor sidecar exited during startup"
+  fi
+}
+
 mkdir -p "$STATE_DIR"
 
 if [[ -f "$PID_FILE" ]]; then
@@ -89,15 +149,18 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-docker compose -f "$COMPOSE_FILE" up -d poker_mtt_redis poker_mtt_rmqnamesrv poker_mtt_rmqbroker
+docker compose -f "$COMPOSE_FILE" up -d poker_mtt_redis poker_mtt_dynamodb poker_mtt_rmqnamesrv poker_mtt_rmqbroker
 
 wait_for_port 127.0.0.1 36379 60
+wait_for_port 127.0.0.1 38000 60
+init_local_dynamodb_with_retry
 wait_for_log poker-mtt-rmqbroker "boot success" 120
 create_topics_best_effort
 
 docker compose -f "$COMPOSE_FILE" up -d poker_mtt_rmqproxy
 wait_for_port 127.0.0.1 38081 120
 
+python3 "$ROOT/scripts/poker_mtt/patch_donor_local_safety.py"
 python3 "$ROOT/scripts/poker_mtt/prepare_local_env.py" "$@"
 
 (
@@ -105,14 +168,44 @@ python3 "$ROOT/scripts/poker_mtt/prepare_local_env.py" "$@"
   go build -o "$BINARY" ./run_server
 )
 
-(
-  cd "$ROOT/lepoker-gameserver"
-  nohup env GAME_ENV=local "$BINARY" >"$LOG_FILE" 2>&1 &
-  echo $! >"$PID_FILE"
-)
+python3 - "$BINARY" "$LOG_FILE" "$PID_FILE" "$ROOT/lepoker-gameserver" <<'PY'
+from __future__ import annotations
 
-wait_for_port 127.0.0.1 18082 60
-wait_for_port 127.0.0.1 18083 60
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+binary = Path(sys.argv[1])
+log_file = Path(sys.argv[2])
+pid_file = Path(sys.argv[3])
+workdir = Path(sys.argv[4])
+
+env = os.environ.copy()
+env["GAME_ENV"] = "local"
+log_file.parent.mkdir(parents=True, exist_ok=True)
+log_handle = log_file.open("wb")
+process = subprocess.Popen(
+    [str(binary)],
+    cwd=str(workdir),
+    env=env,
+    stdout=log_handle,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+)
+pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
+PY
+
+sleep 1
+assert_donor_pid_running
+wait_for_port 127.0.0.1 18082 60 || fail_with_log_tail "poker-mtt donor 18082 port did not open"
+assert_donor_pid_running
+wait_for_port 127.0.0.1 18083 60 || fail_with_log_tail "poker-mtt donor 18083 port did not open"
+assert_donor_pid_running
+wait_for_http_200 "http://127.0.0.1:18082/v1/hello" 60 || fail_with_log_tail "poker-mtt donor v1 hello failed"
+assert_donor_pid_running
+wait_for_http_200 "http://127.0.0.1:18083/v1/mtt/hello" 60 || fail_with_log_tail "poker-mtt donor mtt hello failed"
+assert_donor_pid_running
 
 echo "poker-mtt sidecar started"
 echo "pid: $(cat "$PID_FILE")"

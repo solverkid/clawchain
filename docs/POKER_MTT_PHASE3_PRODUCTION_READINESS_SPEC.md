@@ -121,6 +121,7 @@ Current blockers:
 - Evidence completeness is partly caller-driven via `accepted_degraded_kinds`.
 - Hidden eval accepts request-provided `evidence_root` and is not policy/seed/baseline isolated.
 - Evidence artifact IDs are stable per tournament/kind and can overwrite old roots.
+- Local donor-real MQ testing must include RocketMQ proxy plus a raw hand-history hot store. DynamoDB Local is acceptable for this because AWS supports local DynamoDB-compatible testing; it remains a local/staging adapter target, not the settlement source of truth.
 
 Acceptance:
 
@@ -131,6 +132,11 @@ Acceptance:
 - Missing required hand/HUD/checkpoint/hidden-eval components cannot produce `complete`.
 - Hidden eval rows are keyed by policy/evidence/seed/baseline and cannot unlock a projection under a different policy.
 - Evidence artifacts become content-addressed or versioned so old roots remain retrievable after rebuilds.
+- Local infra must be able to start Redis, RocketMQ namesrv/broker/proxy, and DynamoDB Local. The local table bootstrap must create at least:
+  - `poker_mtt_hands`, keyed by `tournament_id + hand_id`, with a room/completed-at read path.
+  - `poker_mtt_user_hand_history`, keyed by `player_user_id + completed_at_hand_id`, with a tournament/hand read path.
+- Phase 3 harness machines must pre-pull or cache `apache/rocketmq:5.3.2` and `amazon/dynamodb-local:2.5.4` before timed runs. The first cold pull can dominate wall-clock time and must be tracked as environment setup, not tournament runtime. RocketMQ must not be forced to `linux/amd64`; compose should use the native Docker architecture so Apple Silicon runners do not pull a second emulated image. Because the donor sidecar binary runs on the host while RocketMQ proxy runs in Docker, RocketMQ needs two explicit local reachability rules: the broker advertises `brokerIP1=host.docker.internal` with direct `10909/10911/10912` mappings so the proxy can reach the broker, and the proxy enables `useEndpointPortFromRequest=true` so Go v5 route metadata returns the host-mapped gRPC endpoint `127.0.0.1:38081` instead of the container-internal `127.0.0.1:8081`.
+- A donor-real MQ harness must prove that `POKER_RECORD_TOPIC` messages can be consumed into the same completed-hand idempotency/checkpoint contract used by mining-service evidence readiness.
 
 2026-04-18 implementation status:
 
@@ -260,14 +266,23 @@ Current blockers:
 - WS adapter still needs deeper reconnect/room-migration production soak, but the non-mock finish harness now hard-fails missing ranking/actions/final state.
 - 30-player non-mock finish harness is now a hard assertion when `--until-finish` is enabled.
 - Observability fields are expanded in the contract; production staging still needs real sink evidence, but local gates now verify the required field list and burst/load artifact shape.
+- Historical 2026-04-19 donor-real 30-player auth-mode runs found a real backpressure signal: donor logs `channle is full to write,length:100,cap:100` during final-table/end-ranking bursts. GitNexus/source tracing shows this is `utils.SendToChannelNoWait()` writing to `Hub.Operation`, a fixed-capacity operation/hand-history channel created in `newHub()` and consumed by `ReadMessageFromChannel()`. It is not the player WS action channel. The likely pressure path is `Hub.Write -> h.Operation -> ReadMessageFromChannel -> record/MQ assembly`; slow MQ publish, verbose operation logging, and showdown/all-in bursts can make the producer outrun the single consumer.
+- The clean local 30-player gate now requires healthy RocketMQ before accepting a run. The current healthy-MQ rerun has zero Tencent IM external calls, zero RocketMQ publish failures, and zero `Hub.Operation` overflow. The remaining production blocker is the 2,000-table / 20k-user scale gate, where the same counters must be measured under early-stage burst pressure.
+- Local donor runs must hard-block Tencent IM side effects. `chat_group_available=false` already disables create/destroy/user-sig paths, but donor `DeleteGroupMember()` does not check that flag in the current reference. Local harness setup applies a reversible safety patch or equivalent mock/block so no `adminapisgp.im.qcloud.com` request leaves the machine.
 
 Acceptance:
 
 - Add retry/backoff policy for idempotent sidecar operations only: start, get-room, join, reentry, cancel. Do not retry betting actions.
 - Add tests for 503-then-OK, timeout-then-OK, non-retryable 400/401, and donor error body propagation.
-- 30-player explicit join/action-to-finish gate asserts: 30 joined, 30 ranking, 30 users sent actions, 1 survivor, 29 eliminated/finished, 0 pending, 0 unexpected WS errors after allowed bust/kick close reasons.
+- 30-player explicit join/action-to-finish gate asserts: 30 joined, 30 ranking, 30 users sent actions, at least one `fold`, at least one intentionally timed-out no-send action, legal chip sizes including all-in/max-chip paths, 1 survivor, 29 eliminated/finished, 0 pending, 0 unexpected WS errors after allowed bust/kick close reasons.
 - 2,000-table burst test generates completed-hand/finalizer ingest attempts, not just metadata.
 - Metrics/log sink receives hand ingest count/conflict, HUD duration, reward-window query duration, selected/omitted counts, artifact page count, MQ lag, DLQ count, and settlement confirmation state.
+- Add a donor-operation-channel backpressure gate:
+  - Parse donor logs for `channle is full`, `timeout with seconds:5,sendCommand`, and operation channel saturation.
+  - Fail the gate if operation-channel overflow occurs in a 30-player local run with RocketMQ healthy.
+  - For 2,000-table synthetic burst, record overflow count, per-table operation rate, consumer lag, MQ publish latency, and record assembly duration as release evidence.
+  - If overflow persists with healthy MQ, either increase/localize the operation buffer per hand-history burst, split record assembly/MQ publish off the hot operation consumer, or add bounded backpressure plus lossless spillover before reward-bearing rollout.
+- Local infra gate must prove Tencent IM blocking by scanning donor logs for absence of `adminapisgp.im.qcloud.com` calls in local/auth harness runs. The same log gate must also fail `POKER_RECORD_TOPIC` / RocketMQ publish failures and `Hub.Operation` overflow during healthy-MQ runs.
 
 2026-04-18 Task 8 closeout:
 
@@ -276,6 +291,17 @@ Acceptance:
 - `generate_hand_history_load.py` now creates one synthetic completed-hand event per early-stage table and reports `completed_hand_event_count` plus `hand_event_checksum_root` for the 2,000-table burst shape.
 - `POKER_MTT_OBSERVABILITY_FIELDS` includes reward-window selected/omitted counts, artifact page count, MQ lag, and DLQ count in addition to hand/HUD/query/settlement fields.
 - `make test-poker-mtt-phase3-ops` is the local one-command ops gate for sidecar retry, harness/load contract, and Phase 3 DB-backed reward-window scale checks.
+
+2026-04-19 local-real harness update:
+
+- `non_mock_play_harness.py` now includes explicit random `fold` paths, configurable `--timeout-action-rate`, `action_coverage` summary output, and `--require-action-coverage`. The 30-player finish gate can now fail hard unless fold, all-in, legal nonzero chip sizing, and timeout/no-action were all exercised.
+- `deploy/docker-compose.poker-mtt-local.yml` now includes DynamoDB Local beside Redis and RocketMQ. `deploy/poker-mtt/rocketmq/broker.conf` advertises `brokerIP1=host.docker.internal` with direct `10909/10911/10912` host mappings so the Docker proxy can reach the broker; `deploy/poker-mtt/rocketmq/proxy.json` enables `useEndpointPortFromRequest=true` so donor Go v5 producers receive the externally reachable proxy gRPC route `127.0.0.1:38081`. `scripts/poker_mtt/init_local_dynamodb.sh` bootstraps `poker_mtt_hands` and `poker_mtt_user_hand_history` for local hand-history adapter tests.
+- Local RocketMQ/DynamoDB images should be pre-pulled before deep-real harness timing. A cold `apache/rocketmq:5.3.2` pull is an environment readiness issue and should be captured separately from game/runtime latency. The local compose file intentionally avoids `platform: linux/amd64` so arm64 hosts use the already-pulled native RocketMQ image. Without proxy `useEndpointPortFromRequest`, RocketMQ QueryRoute returns `127.0.0.1:8081` to the host-run donor, which reproduces `telemeter ... create grpc conn failed`; the local gate must fail that condition before running a deep harness.
+- `scripts/poker_mtt/patch_donor_local_safety.py` applies a reversible local donor guard so `DeleteGroupMember()` returns immediately when `chat_group_available=false`, blocking Tencent IM cleanup calls in local harness runs.
+- `scripts/poker_mtt/check_local_run_logs.py` is the local ops scanner for Tencent IM external calls, RocketMQ publish failures, and donor operation-channel overflow. `make test-poker-mtt-phase3-heavy` now records its JSON output as release evidence.
+- The historical contaminated 30-player real-auth run at `artifacts/poker-mtt/deep-real-auth-20260419T062642Z` finished with `alive=1`, `died=29`, `pending=0`, 173 sent actions, 36 all-ins, and no `autoAction`. It also exposed MQ-unavailable errors and operation-channel backpressure, which are now explicit Phase 3 ops gates rather than ignored log noise.
+- The clean 30-player real-auth rerun at `artifacts/poker-mtt/deep-real-auth-20260419T091505Z` is the current local evidence run: 30 joined, 30 received current MTT ranking, 30 sent legal WS actions, `sent_action_total=228`, `finish_mode.finished=true`, `alive=1`, `died=29`, `pending=0`, and `standings_count=30`. `action_coverage` includes `fold=11`, `allIn=36`, `bet=20`, `raise=37`, `call=79`, `check=45`, `timeout_no_action_total=9`, `nonzero_chip_action_count=57`, and `max_nonzero_chip=35410`.
+- The same clean rerun captured RocketMQ topic offsets for `ROUND_INFO_TOPIC`, `POKER_RECORD_TOPIC`, `POKER_RECORD_STANDUP_TOPIC`, and `HUB_FINISH_TOPIC`; RocketMQ Go v5 telemetry used the host-reachable proxy route `127.0.0.1:38081`. `local-run-log-check.json` reports zero Tencent IM external calls, zero RocketMQ publish failures, and zero operation-channel overflow. DynamoDB Local bootstrap created `poker_mtt_hands` and `poker_mtt_user_hand_history`.
 
 2026-04-18 Task 10 gate closeout:
 

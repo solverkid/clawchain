@@ -1507,6 +1507,14 @@ Phase 3 完成前，仍保持:
 - `generate_hand_history_load.py` now emits a completed-hand checksum root for the 2,000-table early burst shape, so the load contract is closer to real hand-ingest pressure instead of only table metadata.
 - `make test-poker-mtt-phase3-ops` ties together sidecar retry tests, load-contract tests, and DB-backed Phase 3 reward-window scale checks.
 
+2026-04-19 harness/ops update:
+
+- Real miner workflow now includes explicit random `fold`, legal all-in/max-chip action selection, and configurable timeout/no-action ticks. `--require-action-coverage` now fails the 30-player finish gate unless fold, all-in, legal nonzero chip sizing, and timeout/no-action all appear in the emitted `action_coverage` summary. Timeout behavior is part of abuse/ops measurement, not a scoring shortcut.
+- Local infrastructure now includes RocketMQ plus DynamoDB Local. DynamoDB Local is suitable for local raw hand-history adapter tests with dummy AWS credentials and local endpoint `http://127.0.0.1:38000`; production/staging still need explicit adapter/replay evidence before reward-bearing rollout.
+- Local RocketMQ must advertise both sides of the route correctly. The broker uses `brokerIP1=host.docker.internal` with direct `10909/10911/10912` host port mappings and compose `extra_hosts` so the Docker proxy can create system topics and relay to the broker. The proxy uses `useEndpointPortFromRequest=true` so donor Go v5 producers querying `127.0.0.1:38081` receive a host-reachable gRPC route instead of the container-internal default `127.0.0.1:8081`. Advertising Docker service DNS such as `poker_mtt_rmqbroker` breaks host-run donor publishes; advertising `127.0.0.1` as the broker breaks the proxy container by pointing it at itself.
+- A historical donor-real 30-player auth-mode run completed but exposed `Hub.Operation` backpressure (`channle is full to write,length:100,cap:100`). This is a hand-history/operation-record channel, not a miner WS send channel. A clean healthy-MQ rerun at `artifacts/poker-mtt/deep-real-auth-20260419T091505Z` finished 30 players with zero Tencent IM external calls, zero RocketMQ publish failures, and zero operation-channel overflow. Phase 3 still must prove the same under 2,000-table / 20k-user burst conditions, or move record/MQ work off the hot path before rewards are enabled.
+- Tencent IM must be mocked/blocked locally. Donor `DeleteGroupMember()` currently bypasses `chat_group_available=false`, so the local harness applies a reversible safety patch. `check_local_run_logs.py` fails local release gates on Tencent IM external calls, RocketMQ publish failures, or donor operation-channel overflow. No local or CI test should call `adminapisgp.im.qcloud.com`.
+
 2026-04-18 Task 2 closeout:
 
 - Donor parity finalizer gate 已补 registration/waitlist/no-show snapshot merge。

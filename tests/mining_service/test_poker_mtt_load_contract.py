@@ -146,6 +146,43 @@ def test_non_mock_finish_harness_rejects_unexpected_ws_errors():
     assert "unexpected_ws_errors" in message
 
 
+def test_non_mock_finish_harness_can_require_real_action_coverage():
+    harness = load_non_mock_harness_module()
+    summary = build_finish_summary(player_count=30)
+    summary["users"][0]["ws"]["sent_actions"] = [{"action": "fold", "chips": 0}]
+    summary["users"][1]["ws"]["sent_actions"] = [{"action": "allIn", "chips": 0}]
+    summary["users"][2]["ws"]["sent_actions"] = [{"action": "raise", "chips": 480.0}]
+    summary["users"][3]["ws"]["timeout_actions"] = [
+        {"action": "timeout", "chips": 0, "send": False}
+    ]
+
+    harness.validate_finish_summary(
+        summary,
+        expected_players=30,
+        require_action_coverage=True,
+    )
+
+
+def test_non_mock_finish_harness_rejects_missing_real_action_coverage():
+    harness = load_non_mock_harness_module()
+    summary = build_finish_summary(player_count=30)
+
+    try:
+        harness.validate_finish_summary(
+            summary,
+            expected_players=30,
+            require_action_coverage=True,
+        )
+    except harness.HarnessFailure as exc:
+        message = str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("expected finish summary validation to fail")
+
+    assert "missing_action_coverage" in message
+    assert "fold" in message
+    assert "timeout" in message
+
+
 def build_finish_summary(*, player_count: int) -> dict:
     standings = [{"status": "alive", "user_id": "0", "member_id": "0:1"}]
     standings.extend(

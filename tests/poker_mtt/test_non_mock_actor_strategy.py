@@ -66,6 +66,39 @@ def test_choose_action_plan_can_take_legal_all_in_when_free_to_act() -> None:
     assert "allIn" in seen
 
 
+def test_choose_action_plan_can_fold_when_facing_action() -> None:
+    module = load_module()
+    supported_actions = [
+        {"action": "fold"},
+        {"action": "call"},
+        {"action": "raise", "chips": [120.0, 240.0, 480.0]},
+        {"action": "allIn"},
+    ]
+
+    seen = {
+        module.choose_action_plan(supported_actions, random.Random(seed))["action"]
+        for seed in range(400)
+    }
+
+    assert "fold" in seen
+
+
+def test_choose_action_plan_can_timeout_without_sending() -> None:
+    module = load_module()
+    supported_actions = [
+        {"action": "fold"},
+        {"action": "call"},
+    ]
+
+    plan = module.choose_action_plan(
+        supported_actions,
+        random.Random(1),
+        timeout_action_rate=1.0,
+    )
+
+    assert plan == {"action": "timeout", "chips": 0, "send": False}
+
+
 def test_choose_action_plan_prefers_check_over_fold_when_free() -> None:
     module = load_module()
     rng = random.Random(11)

@@ -24,6 +24,7 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 
 python3 "$ROOT/scripts/poker_mtt/prepare_local_env.py" --restore || true
+python3 "$ROOT/scripts/poker_mtt/patch_donor_local_safety.py" --restore || true
 docker compose -f "$COMPOSE_FILE" down -v
 
 echo "poker-mtt sidecar stopped"
