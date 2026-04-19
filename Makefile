@@ -1,4 +1,4 @@
-.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase3-fast test-poker-mtt-phase3-ops test-poker-mtt-phase3-heavy lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
+.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase2 test-poker-mtt-phase3-fast test-poker-mtt-phase3-ops test-poker-mtt-phase3-heavy lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
@@ -60,6 +60,22 @@ test-poker-mtt-phase1:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/mining_service tests/poker_mtt -p no:cacheprovider -q
 	@go test ./x/settlement/... -run 'TestAnchor' -v
 	@npm --prefix website test
+
+test-poker-mtt-phase2:
+	@echo "Running Poker MTT Evidence Phase 2 local beta gates..."
+	@go test ./authadapter ./pokermtt/... ./x/settlement/... -v
+	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=mining-service python3 -m pytest -q \
+		tests/mining_service/test_chain_adapter.py \
+		tests/mining_service/test_forecast_engine.py \
+		tests/mining_service/test_poker_mtt_evidence.py \
+		tests/mining_service/test_poker_mtt_final_ranking.py \
+		tests/mining_service/test_poker_mtt_history.py \
+		tests/mining_service/test_poker_mtt_hud.py \
+		tests/mining_service/test_poker_mtt_load_contract.py \
+		tests/mining_service/test_poker_mtt_phase2_e2e.py \
+		tests/mining_service/test_poker_mtt_reward_gating.py \
+		tests/poker_mtt
+	@bash scripts/poker_mtt/run_phase2_load_check.sh --players 30 --local
 
 test-poker-mtt-phase3-fast:
 	@echo "Running Poker MTT Phase 3 fast unit/contract gates..."
@@ -134,6 +150,7 @@ help:
 	@echo "  test       - Run all tests"
 	@echo "  test-arena - Run arena package tests"
 	@echo "  test-poker-mtt-phase1 - Run Poker MTT Phase 1 scoped gate"
+	@echo "  test-poker-mtt-phase2 - Run Poker MTT Evidence Phase 2 local beta gate"
 	@echo "  test-poker-mtt-phase3-fast - Run Poker MTT Phase 3 fast unit/contract gates"
 	@echo "  test-poker-mtt-phase3-ops - Run Poker MTT Phase 3 sidecar/load ops gates"
 	@echo "  test-poker-mtt-phase3-heavy - Run Poker MTT Phase 3 staging/manual gates and write artifacts"

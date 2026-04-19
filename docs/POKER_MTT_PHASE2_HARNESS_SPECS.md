@@ -255,6 +255,12 @@ Pass criteria:
 Pass criteria:
 
 ```bash
+make test-poker-mtt-phase2
+```
+
+Equivalent expanded local commands:
+
+```bash
 PYTHONPATH=mining-service pytest -q \
   tests/mining_service/test_poker_mtt_history.py \
   tests/mining_service/test_poker_mtt_hud.py \
@@ -266,9 +272,16 @@ PYTHONPATH=mining-service pytest -q \
   tests/mining_service/test_poker_mtt_phase2_e2e.py
 
 go test ./authadapter ./pokermtt/... ./x/settlement/... -v
+bash scripts/poker_mtt/run_phase2_load_check.sh --players 30 --local
 ```
 
 These tests are necessary but not sufficient for production rollout.
+
+2026-04-19 closeout:
+
+- Added `make test-poker-mtt-phase2` as the one-command local beta gate.
+- Latest run passed Go authadapter/Poker MTT/settlement tests, 136 focused Python Phase 2 tests, and the offline Phase 2 load check.
+- This gate proves the local evidence-to-anchor beta slice. It does not replace Phase 3 heavy staging evidence or reward-bearing release review.
 
 ### G2 - Reward-Readiness Service Contract
 
@@ -294,7 +307,9 @@ Pass criteria:
 
 Pass criteria:
 
-- 30-player non-mock WS explicit join/action-to-finish gate passes.
+- Local beta: `make test-poker-mtt-phase2` runs the offline 30-player smoke, 300-player medium shape, 20k synthetic projection paging, and 2,000-table early burst shape.
+- Production readiness: `make test-poker-mtt-phase3-ops` / `make test-poker-mtt-phase3-heavy` cover DB-backed 300/20k service path, bounded response, sidecar finish gate, and settlement query receipt.
+- 30-player non-mock WS explicit join/action-to-finish gate passes before reward-bearing rollout.
 - 300-player DB-backed service path passes reward-window build with bounded response.
 - 20k-player Postgres-backed reward-window build produces page artifacts, not inline rows.
 - 2,000-table early burst shape covers hand ingest and finalizer inputs.
