@@ -102,6 +102,10 @@ Completed on 2026-04-18:
 - `/admin/poker-mtt/final-rankings/project` uses payload `locked_at`, writes a `poker_mtt_final_ranking_projection` artifact marker, returns the existing projection for same `projection_id` and root, and returns 409 for same `projection_id` with a changed root.
 - Go finalizer now accepts a separate registration/waitlist snapshot source, archives registration-only waiting/no-show users as reward-ineligible final-ranking rows, and exposes optional terminal/quiet, entrant count, alive/died/waiting count, and total chip drift barriers.
 
+Additional 2026-04-19 payout-grade blocker:
+
+- Donor-compatible display ranks can tie for same-time/same-start-chip eliminations. Phase 3 reward readiness therefore requires `rank` to be unique and contiguous for `rank_state=ranked` rows, with donor tied placement preserved only as `display_rank` / `source_rank`.
+
 Acceptance:
 
 - Add a cross-language golden fixture where Go emits projection JSON and Python validates it through the FastAPI schema.
@@ -111,6 +115,8 @@ Acceptance:
 - Finalizer merges Redis live ranking plus registration/waitlist/no-show source data.
 - Registered-but-never-joined and waiting users are archived with reward-ineligible rank states.
 - Terminal-state or quiet-period watermark plus count/chip invariants must pass before projection.
+- Ranked rows have payout ranks exactly equal to `1..ranked_count`; duplicate/skipped payout ranks reject before API save and before service projection.
+- Non-ranked rows (`waiting_no_show`, `unresolved_snapshot`, `duplicate_entry_collapsed`, `voided`) do not carry payout rank.
 
 ### G2 - Evidence, MQ, Replay, And Artifact Immutability
 

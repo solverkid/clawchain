@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RegisterMinerRequest(BaseModel):
@@ -130,7 +130,10 @@ class PokerMTTFinalRankingRow(BaseModel):
     entry_number: int = Field(ge=0)
     reentry_count: int = Field(default=1, ge=1)
     rank: int | None = Field(default=None, ge=1)
+    display_rank: int | None = Field(default=None, ge=1)
     rank_state: str
+    rank_basis: str | None = None
+    rank_tiebreaker: str | None = None
     chip: float = 0.0
     chip_delta: float = 0.0
     died_time: str | None = None
@@ -172,6 +175,31 @@ class ApplyPokerMTTFinalRankingProjectionRequest(BaseModel):
     final_ranking_root: str
     locked_at: datetime
     rows: list[PokerMTTFinalRankingRow]
+
+    @model_validator(mode="after")
+    def validate_payout_ranks(self):
+        ranked_rows = []
+        for row in self.rows:
+            if row.rank_state == "ranked":
+                if row.rank is None:
+                    raise ValueError(f"ranked_row_missing_payout_rank member_id={row.member_id}")
+                ranked_rows.append(row)
+            elif row.rank is not None:
+                raise ValueError(
+                    f"non_ranked_row_has_payout_rank member_id={row.member_id} rank_state={row.rank_state}"
+                )
+
+        if len(ranked_rows) > self.field_size:
+            raise ValueError(f"field_size_less_than_ranked_count field_size={self.field_size} ranked_count={len(ranked_rows)}")
+
+        ranks = [row.rank for row in ranked_rows if row.rank is not None]
+        if len(set(ranks)) != len(ranks):
+            raise ValueError(f"non_unique_payout_rank ranks={sorted(ranks)}")
+
+        expected = list(range(1, len(ranked_rows) + 1))
+        if sorted(ranks) != expected:
+            raise ValueError(f"non_contiguous_payout_rank expected={expected} actual={sorted(ranks)}")
+        return self
 
 
 class BuildPokerMTTRewardWindowRequest(BaseModel):

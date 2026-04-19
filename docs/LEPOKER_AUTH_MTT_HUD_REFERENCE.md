@@ -290,6 +290,28 @@ ClawChain 的 Go 版建议明确拆成:
 - `ranking/finalizer`：比赛结束时生成 canonical standings
 - `ranking/read_model`：供 reward / multiplier / HUD / replay 查询
 
+### 6.5 2026-04-19 payout-grade ranking 补充
+
+本轮用 GitNexus 同时复查了 `lepoker-gameserver`、`lepoker-auth` 和当前 `clawchain` ranking/reward 投影路径，并用 6 个 read-only review agents 分别审了 donor runtime ranking、auth ranking persistence、MQ/hand-history evidence、ClawChain reward projection、payout policy 和测试缺口。
+
+结论很明确:
+
+- `lepoker-gameserver` 的 `getMTTRanking()` 是实时 UI ranking。它用 Redis `ZRevRank`，本质是 survivor zset rank，而且是 zero-based。它可以证明 WS 下发正常，但不能作为 payout rank。
+- `lepoker-gameserver` 的 `calculateMTTRanking()` 会按 `DiedTime ASC`、`StartChip ASC` 处理淘汰事件。`DiedTime` 和 `StartChip` 都相同的淘汰会共享 donor internal rank。
+- `lepoker-auth` 的 `RankingService.getMttRankingFromRedis()` 会信任 gameserver died list 的 rank group，并在 final display rank 里保留并列名次。
+- `MttService.saveMTTRankingInfo()` 按 `rank <= prizePoolSize` 写 winner rows，因此 donor 自己允许 tied boundary 的产品语义。这个语义不能直接穿透到 ClawChain settlement root。
+- Donor hand-history MQ (`POKER_RECORD_TOPIC` / `POKER_RECORD_STANDUP_TOPIC`) 提供手牌级 start/end stack、action、showdown、seq 等证据，但 Redis ranking 本身不包含足够的手牌证据来严格解释所有 same-time/same-stack tie。
+
+ClawChain 的冻结规则:
+
+- `rank` 是唯一、连续、one-based 的 payout rank。
+- `display_rank` 是 donor-compatible 展示 rank，可以并列，可以跳号，不参与 reward。
+- `source_rank` 是 donor died JSON 的原始 rank 字段，只做 evidence。
+- `rank_state != ranked` 的行不允许携带 payout rank。
+- reward projection 和 reward window 必须 fail closed：重复 rank、跳 rank、ranked 行缺 rank、non-ranked 行带 rank 都不能进入结算。
+
+完整规范见 `docs/POKER_MTT_PAYOUT_GRADE_RANKING_SPEC.md`。
+
 ---
 
 ## 7. Hand History 参考

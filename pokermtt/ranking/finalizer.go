@@ -104,8 +104,12 @@ func (f Finalizer) FinalizeWithRegistration(snapshot LiveSnapshot, registration 
 		displayRank := aliveRankZeroBased + 1
 		score := alive.Score
 		row := normalizeRow(rowConfig, entry, memberID, StandingStatusAlive, &displayRank, liveSnapshotFound[memberID])
+		row.DisplayRank = cloneRank(&displayRank)
 		row.ZSetScore = &score
+		row.SourceRank = strconv.Itoa(displayRank)
 		row.SourceRankNumeric = true
+		row.RankBasis = "alive_zset_score"
+		row.RankTiebreaker = "zset_score_desc_member_id"
 		if !liveSnapshotFound[memberID] && row.Chip == 0 {
 			row.Chip = alive.Score
 		}
@@ -154,12 +158,17 @@ func (f Finalizer) FinalizeWithRegistration(snapshot LiveSnapshot, registration 
 		snapshotEntry := decodedSnapshots[memberID]
 		mergedEntry := mergeEntries(snapshotEntry, diedEntry)
 		row := normalizeRow(rowConfig, mergedEntry, memberID, StandingStatusDied, &displayRank, liveSnapshotFound[memberID])
+		row.DisplayRank = cloneRank(&displayRank)
 		row.SourceRank = sourceRankText(diedEntry["rank"])
 		row.SourceRankNumeric = internalRankOK
 		if internalRankOK {
 			row.RankState = RankStateRanked
+			row.RankBasis = "donor_died_rank"
+			row.RankTiebreaker = "source_rank_display_then_start_chip_desc_member_id"
 		} else {
 			row.RankState = RankStateUnresolvedSnapshot
+			row.RankBasis = "donor_died_rank_unresolved"
+			row.RankTiebreaker = "unresolved_non_numeric_source_rank"
 		}
 		rows = append(rows, row)
 		if memberID != "" {
@@ -189,6 +198,7 @@ func (f Finalizer) FinalizeWithRegistration(snapshot LiveSnapshot, registration 
 	}
 
 	collapseDuplicateEconomicUnits(rows)
+	assignUniquePayoutRanks(rows)
 	if err := f.validateFinalRows(rows); err != nil {
 		return Finalization{}, err
 	}
@@ -242,6 +252,38 @@ func (f Finalizer) validateFinalRows(rows []FinalRankingRow) error {
 		}
 		if math.Abs(totalChip-f.ExpectedTotalChip) > tolerance {
 			return fmt.Errorf("%w: total chip drift expected=%.6f actual=%.6f tolerance=%.6f", ErrFinalizationBarrier, f.ExpectedTotalChip, totalChip, tolerance)
+		}
+	}
+	if err := validatePayoutRanks(rows); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePayoutRanks(rows []FinalRankingRow) error {
+	ranks := make([]int, 0, len(rows))
+	seenRanks := make(map[int]string, len(rows))
+	for _, row := range rows {
+		if row.RankState != RankStateRanked {
+			if row.Rank != nil {
+				return fmt.Errorf("%w: non-ranked row has payout rank member_id=%s rank_state=%s rank=%d", ErrFinalizationBarrier, row.MemberID, row.RankState, *row.Rank)
+			}
+			continue
+		}
+		if row.Rank == nil {
+			return fmt.Errorf("%w: ranked row missing payout rank member_id=%s", ErrFinalizationBarrier, row.MemberID)
+		}
+		if existingMemberID, ok := seenRanks[*row.Rank]; ok {
+			return fmt.Errorf("%w: duplicate payout rank rank=%d member_id=%s existing_member_id=%s", ErrFinalizationBarrier, *row.Rank, row.MemberID, existingMemberID)
+		}
+		seenRanks[*row.Rank] = row.MemberID
+		ranks = append(ranks, *row.Rank)
+	}
+	sort.Ints(ranks)
+	for index, rank := range ranks {
+		expected := index + 1
+		if rank != expected {
+			return fmt.Errorf("%w: non-contiguous payout ranks expected=%d actual=%d", ErrFinalizationBarrier, expected, rank)
 		}
 	}
 	return nil
@@ -335,6 +377,7 @@ func normalizeRow(config normalizeRowConfig, entry map[string]any, memberID stri
 		EntryNumber:          entryNumber,
 		ReentryCount:         1,
 		Rank:                 cloneRank(rank),
+		DisplayRank:          cloneRank(rank),
 		RankState:            RankStateUnresolvedSnapshot,
 		Chip:                 endChip,
 		ChipDelta:            chipDelta,
@@ -383,6 +426,57 @@ func collapseDuplicateEconomicUnits(rows []FinalRankingRow) {
 			}
 		}
 	}
+}
+
+func assignUniquePayoutRanks(rows []FinalRankingRow) {
+	rankedIndexes := make([]int, 0, len(rows))
+	diedDisplayRankCounts := make(map[int]int)
+	for index := range rows {
+		if rows[index].RankState != RankStateRanked {
+			rows[index].Rank = nil
+			continue
+		}
+		if rows[index].Status == StandingStatusDied && rows[index].DisplayRank != nil {
+			diedDisplayRankCounts[*rows[index].DisplayRank]++
+		}
+		rankedIndexes = append(rankedIndexes, index)
+	}
+	sort.SliceStable(rankedIndexes, func(i, j int) bool {
+		left := rows[rankedIndexes[i]]
+		right := rows[rankedIndexes[j]]
+		leftDisplayRank := rankForSort(left.DisplayRank, left.Rank)
+		rightDisplayRank := rankForSort(right.DisplayRank, right.Rank)
+		if leftDisplayRank != rightDisplayRank {
+			return leftDisplayRank < rightDisplayRank
+		}
+		if left.Status == StandingStatusDied && right.Status == StandingStatusDied && left.StartChip != right.StartChip {
+			return left.StartChip > right.StartChip
+		}
+		if left.Status != right.Status {
+			return left.Status == StandingStatusAlive
+		}
+		return memberSortKeyLess(left.MemberID, right.MemberID)
+	})
+	for rankIndex, rowIndex := range rankedIndexes {
+		rank := rankIndex + 1
+		rows[rowIndex].Rank = &rank
+		if rows[rowIndex].Status == StandingStatusDied && rows[rowIndex].DisplayRank != nil {
+			if diedDisplayRankCounts[*rows[rowIndex].DisplayRank] > 1 {
+				rows[rowIndex].RankTiebreaker = "source_rank_display_then_start_chip_desc_member_id"
+			} else if rows[rowIndex].RankTiebreaker == "" || rows[rowIndex].RankTiebreaker == "source_rank_display_then_start_chip_desc_member_id" {
+				rows[rowIndex].RankTiebreaker = "source_rank_display"
+			}
+		}
+	}
+}
+
+func rankForSort(values ...*int) int {
+	for _, value := range values {
+		if value != nil {
+			return *value
+		}
+	}
+	return int(^uint(0) >> 1)
 }
 
 func chooseCanonicalIndex(rows []FinalRankingRow, indexes []int) int {

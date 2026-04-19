@@ -39,6 +39,12 @@ def test_build_complete_standings_alive_then_died() -> None:
         ("3", 3, "died"),
         ("2", 4, "died"),
     ]
+    assert [(item["user_id"], item["rank"]) for item in standings] == [
+        ("0", 1),
+        ("1", 2),
+        ("3", 3),
+        ("2", 4),
+    ]
 
 
 def test_build_complete_standings_preserves_tied_died_rank_groups() -> None:
@@ -63,6 +69,28 @@ def test_build_complete_standings_preserves_tied_died_rank_groups() -> None:
         ("2", 2),
         ("1", 2),
         ("3", 4),
+    ]
+    assert [(item["user_id"], item["rank"]) for item in standings] == [
+        ("0", 1),
+        ("2", 2),
+        ("1", 3),
+        ("3", 4),
+    ]
+
+
+def test_build_complete_standings_leaves_pending_without_payout_rank() -> None:
+    module = load_module()
+    snapshot_map = {
+        "0:1": {"userID": "0", "playerName": "0", "entryNumber": 1, "endChip": 3200, "startChip": 3000},
+        "1:1": {"userID": "1", "playerName": "1", "entryNumber": 1, "endChip": 3000, "startChip": 3000},
+    }
+    alive_members = ["0:1"]
+
+    standings = module.build_complete_standings(snapshot_map, alive_members, [])
+
+    assert [(item["user_id"], item["status"], item["rank"], item["display_rank"]) for item in standings] == [
+        ("0", "alive", 1, 1),
+        ("1", "pending", None, None),
     ]
 
 

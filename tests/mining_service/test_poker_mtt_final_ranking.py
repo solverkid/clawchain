@@ -4,6 +4,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MINING_SERVICE_DIR = ROOT / "mining-service"
@@ -133,12 +135,100 @@ def test_final_ranking_projection_request_schema_accepts_canonical_rows():
     assert request.rows[0].rank_state == "ranked"
 
 
+def test_final_ranking_projection_request_rejects_duplicate_payout_ranks():
+    with pytest.raises(Exception, match="non_unique_payout_rank"):
+        schemas.ApplyPokerMTTFinalRankingProjectionRequest(
+            **final_ranking_projection_request(
+                rows=[
+                    final_ranking_row(
+                        row_id="poker_mtt_final_ranking:mtt-dup:7:1",
+                        tournament_id="mtt-dup",
+                        miner_address="claw1miner7",
+                        member_id="7:1",
+                        rank=1,
+                    ),
+                    final_ranking_row(
+                        row_id="poker_mtt_final_ranking:mtt-dup:8:1",
+                        tournament_id="mtt-dup",
+                        miner_address="claw1miner8",
+                        member_id="8:1",
+                        rank=1,
+                    ),
+                ],
+            )
+        )
+
+
+def test_final_ranking_projection_request_rejects_non_contiguous_payout_ranks():
+    with pytest.raises(Exception, match="non_contiguous_payout_rank"):
+        schemas.ApplyPokerMTTFinalRankingProjectionRequest(
+            **final_ranking_projection_request(
+                rows=[
+                    final_ranking_row(
+                        row_id="poker_mtt_final_ranking:mtt-gap:7:1",
+                        tournament_id="mtt-gap",
+                        miner_address="claw1miner7",
+                        member_id="7:1",
+                        rank=1,
+                    ),
+                    final_ranking_row(
+                        row_id="poker_mtt_final_ranking:mtt-gap:8:1",
+                        tournament_id="mtt-gap",
+                        miner_address="claw1miner8",
+                        member_id="8:1",
+                        rank=3,
+                    ),
+                ],
+            )
+        )
+
+
+def test_final_ranking_projection_request_rejects_non_ranked_row_with_payout_rank():
+    with pytest.raises(Exception, match="non_ranked_row_has_payout_rank"):
+        schemas.ApplyPokerMTTFinalRankingProjectionRequest(
+            **final_ranking_projection_request(
+                rows=[
+                    final_ranking_row(
+                        row_id="poker_mtt_final_ranking:mtt-non-ranked:7:1",
+                        tournament_id="mtt-non-ranked",
+                        miner_address="claw1miner7",
+                        member_id="7:1",
+                        rank=1,
+                        rank_state="waiting_no_show",
+                    ),
+                ],
+                field_size=2,
+            )
+        )
+
+
+def final_ranking_projection_request(*, rows: list[dict], field_size: int = 30) -> dict:
+    tournament_id = rows[0]["tournament_id"]
+    return {
+        "schema_version": "poker_mtt.final_ranking_apply.v1",
+        "projection_id": f"poker_mtt_projection:{tournament_id}:poker_mtt_v1:sha256:abc",
+        "tournament_id": tournament_id,
+        "source_mtt_id": tournament_id,
+        "rated_or_practice": "rated",
+        "human_only": True,
+        "field_size": field_size,
+        "policy_bundle_version": "poker_mtt_v1",
+        "standing_snapshot_id": f"poker_mtt_standing_snapshot:{tournament_id}:abc",
+        "standing_snapshot_hash": "sha256:abc",
+        "final_ranking_root": "sha256:abc",
+        "locked_at": "2026-04-10T09:00:00Z",
+        "rows": rows,
+    }
+
+
 def final_ranking_row(
     *,
     row_id: str = "poker_mtt_final_ranking:mtt-1:7:1",
     tournament_id: str = "mtt-1",
     miner_address: str = "claw1miner7",
+    member_id: str = "7:1",
     rank: int | None = 1,
+    rank_state: str | None = None,
     created_at: str = "2026-04-10T09:00:00Z",
 ) -> dict:
     return {
@@ -148,11 +238,14 @@ def final_ranking_row(
         "source_user_id": "7",
         "miner_address": miner_address,
         "economic_unit_id": miner_address,
-        "member_id": "7:1",
+        "member_id": member_id,
         "entry_number": 1,
         "reentry_count": 1,
         "rank": rank,
-        "rank_state": "ranked" if rank is not None else "waiting_no_show",
+        "display_rank": rank,
+        "rank_state": rank_state or ("ranked" if rank is not None else "waiting_no_show"),
+        "rank_basis": "test_fixture",
+        "rank_tiebreaker": "test_fixture",
         "chip": 9000.0,
         "chip_delta": 6000.0,
         "died_time": None,

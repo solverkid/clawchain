@@ -99,6 +99,24 @@ def test_final_ranking_projection_endpoint_rejects_same_projection_id_with_diffe
     assert "projection root conflict" in conflict.json()["detail"]
 
 
+def test_final_ranking_projection_endpoint_rejects_duplicate_payout_ranks_before_save():
+    payload = json.loads(FIXTURE.read_text())
+    payload["rows"][1]["rank"] = payload["rows"][0]["rank"]
+    repo = server.create_fake_repository()
+    _seed_fixture_miners(repo, payload)
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(),
+        repository=repo,
+        now_fn=lambda: datetime(2026, 4, 11, 9, 0, 0, tzinfo=timezone.utc),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/admin/poker-mtt/final-rankings/project", json=payload)
+
+    assert response.status_code == 422
+    assert "non_unique_payout_rank" in response.text
+
+
 def _seed_fixture_miners(repo, payload: dict) -> None:  # noqa: ANN001
     async def seed() -> None:
         for row in payload["rows"]:

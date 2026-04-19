@@ -1146,6 +1146,39 @@ def _canonical_poker_mtt_projection_rows(rows: Iterable[dict]) -> list[dict]:
     return sorted(grouped.values(), key=_poker_mtt_projection_row_sort_key)
 
 
+def _validate_poker_mtt_payout_ranks(rows: Iterable[dict], *, field_size: int) -> None:
+    ranked_rows = []
+    for row in rows:
+        rank_state = row.get("rank_state")
+        rank = row.get("rank")
+        if rank_state == "ranked":
+            if rank is None:
+                raise ValueError(f"ranked_row_missing_payout_rank final_ranking_id={row.get('id')}")
+            ranked_rows.append(row)
+        elif rank is not None:
+            raise ValueError(
+                "non_ranked_row_has_payout_rank "
+                f"final_ranking_id={row.get('id')} rank_state={rank_state} rank={rank}"
+            )
+
+    if len(ranked_rows) > field_size:
+        raise ValueError(f"field_size_less_than_ranked_count field_size={field_size} ranked_count={len(ranked_rows)}")
+
+    ranks = []
+    for row in ranked_rows:
+        try:
+            ranks.append(int(row["rank"]))
+        except (TypeError, ValueError):
+            raise ValueError(f"invalid_payout_rank final_ranking_id={row.get('id')} rank={row.get('rank')}")
+
+    if len(set(ranks)) != len(ranks):
+        raise ValueError(f"non_unique_payout_rank ranks={sorted(ranks)}")
+
+    expected = list(range(1, len(ranked_rows) + 1))
+    if sorted(ranks) != expected:
+        raise ValueError(f"non_contiguous_payout_rank expected={expected} actual={sorted(ranks)}")
+
+
 def _poker_mtt_projection_row_sort_key(row: dict) -> tuple:
     rank_state = row.get("rank_state")
     rank = row.get("rank")
@@ -2914,6 +2947,7 @@ class ForecastMiningService:
         if not rows:
             raise ValueError("no poker mtt final rankings found")
         rows = _canonical_poker_mtt_projection_rows(rows)
+        _validate_poker_mtt_payout_ranks(rows, field_size=field_size)
         hidden_eval_by_final_ranking_id = {
             row["final_ranking_id"]: row
             for row in await self.repo.list_poker_mtt_hidden_eval_entries_for_tournament(tournament_id)

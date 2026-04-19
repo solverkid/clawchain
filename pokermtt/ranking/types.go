@@ -68,7 +68,10 @@ type FinalRankingRow struct {
 	EntryNumber          int            `json:"entry_number"`
 	ReentryCount         int            `json:"reentry_count"`
 	Rank                 *int           `json:"rank"`
+	DisplayRank          *int           `json:"display_rank,omitempty"`
 	RankState            RankState      `json:"rank_state"`
+	RankBasis            string         `json:"rank_basis,omitempty"`
+	RankTiebreaker       string         `json:"rank_tiebreaker,omitempty"`
 	Chip                 float64        `json:"chip"`
 	ChipDelta            float64        `json:"chip_delta"`
 	DiedTime             string         `json:"died_time"`

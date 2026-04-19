@@ -1435,7 +1435,7 @@ Phase 3 完成前，仍保持:
 
 ### 13.3.1 Phase 3 P0 gates
 
-1. **Final ranking contract**: Go payload 必须通过 Python schema golden test；projection 用 `projection_id` / `final_ranking_root` 幂等；同 root 可重放，不同 root 冲突。
+1. **Final ranking contract**: Go payload 必须通过 Python schema golden test；projection 用 `projection_id` / `final_ranking_root` 幂等；同 root 可重放，不同 root 冲突；`rank` 必须是唯一连续的 payout rank，donor 并列名次只能保存在 `display_rank` / `source_rank`。
 2. **Donor parity**: finalizer 必须合并 Redis live ranking 与 registration/waitlist/no-show source，waiting/no-show 进入 archive 但不 reward-bearing。
 3. **Evidence / MQ**: checkpoint、lag、DLQ、conflict、replay root 进入 evidence policy；缺 hand/HUD/checkpoint/hidden eval 不能靠 caller allowlist 变成 `complete`。
 4. **Auth / identity**: non-local/shared runtime fail closed；donor token 只证明 user，不证明 reward-bound miner；`claw1local-*` 和 synthetic identity 不能进 reward window。
@@ -1456,6 +1456,14 @@ Phase 3 完成前，仍保持:
 - Final ranking contract gate 的 projector/schema/API 幂等部分已落地。
 - `projection_id`、`final_ranking_root`、standing snapshot refs、policy version、payload `locked_at` 是 FastAPI request schema 的必需字段。
 - Mining-service projection response 会回传 canonical metadata；同一 `projection_id`/root replay 返回 artifact 中保存的 existing result，同一 `projection_id` 搭配不同 root 返回 409。
+
+2026-04-19 payout-grade ranking update:
+
+- 30 人 donor-real clean run 证明当前 runtime 能完赛并生成完整 standings，但 audit 发现 donor display rank 存在并列组。该状态不能直接作为 reward rank。
+- ClawChain 冻结 `rank = payout rank`，要求 `rank_state=ranked` rows 的 rank 精确等于 `1..ranked_count`。
+- `display_rank` 只保存 donor-compatible 展示名次，允许并列和跳号；`source_rank` 只保存 donor Redis died JSON 的原始 rank。
+- final-ranking API schema 和 service projection 都必须 fail closed，防止绕过 API 的 DB rows 用重复 rank 进入 reward window。
+- 完整规则见 `docs/POKER_MTT_PAYOUT_GRADE_RANKING_SPEC.md`。
 
 2026-04-18 Task 3 closeout:
 

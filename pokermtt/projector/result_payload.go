@@ -43,7 +43,10 @@ type FinalRankingRowDTO struct {
 	EntryNumber          int      `json:"entry_number"`
 	ReentryCount         int      `json:"reentry_count"`
 	Rank                 *int     `json:"rank"`
+	DisplayRank          *int     `json:"display_rank,omitempty"`
 	RankState            string   `json:"rank_state"`
+	RankBasis            string   `json:"rank_basis,omitempty"`
+	RankTiebreaker       string   `json:"rank_tiebreaker,omitempty"`
 	Chip                 float64  `json:"chip"`
 	ChipDelta            float64  `json:"chip_delta"`
 	DiedTime             string   `json:"died_time"`
@@ -116,7 +119,10 @@ func BuildFinalRankingApplyPayload(finalization ranking.Finalization, opts Apply
 			EntryNumber:          row.EntryNumber,
 			ReentryCount:         row.ReentryCount,
 			Rank:                 row.Rank,
+			DisplayRank:          row.DisplayRank,
 			RankState:            string(row.RankState),
+			RankBasis:            row.RankBasis,
+			RankTiebreaker:       row.RankTiebreaker,
 			Chip:                 row.Chip,
 			ChipDelta:            row.ChipDelta,
 			DiedTime:             row.DiedTime,

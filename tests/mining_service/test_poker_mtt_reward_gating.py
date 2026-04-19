@@ -406,6 +406,60 @@ def test_final_ranking_projection_folds_duplicate_reentries_to_canonical_row():
     asyncio.run(scenario())
 
 
+def test_final_ranking_projection_rejects_duplicate_payout_ranks():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1rankdup1",
+            name="rank-dup-1",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await service.register_miner(
+            address="claw1rankdup2",
+            name="rank-dup-2",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await repo.save_poker_mtt_final_ranking(
+            final_ranking_row(
+                row_id="poker_mtt_final_ranking:mtt-rank-dup:1:1",
+                tournament_id="mtt-rank-dup",
+                miner_address="claw1rankdup1",
+                member_id="1:1",
+                rank=1,
+                evidence_state="complete",
+            )
+        )
+        await repo.save_poker_mtt_final_ranking(
+            final_ranking_row(
+                row_id="poker_mtt_final_ranking:mtt-rank-dup:2:1",
+                tournament_id="mtt-rank-dup",
+                miner_address="claw1rankdup2",
+                member_id="2:1",
+                rank=1,
+                evidence_state="complete",
+            )
+        )
+
+        try:
+            await service.project_poker_mtt_final_rankings(
+                tournament_id="mtt-rank-dup",
+                rated_or_practice="rated",
+                human_only=True,
+                field_size=30,
+                policy_bundle_version="poker_mtt_v1",
+                locked_at=datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc),
+            )
+        except ValueError as exc:
+            assert "non_unique_payout_rank" in str(exc)
+        else:
+            raise AssertionError("duplicate payout ranks must not project into reward rows")
+
+    asyncio.run(scenario())
+
+
 def test_poker_mtt_reward_window_never_settles_provisional_rows():
     async def scenario():
         repo = FakeRepository()
@@ -838,7 +892,10 @@ def final_ranking_row(
         "entry_number": entry_number,
         "reentry_count": reentry_count,
         "rank": rank,
+        "display_rank": rank,
         "rank_state": rank_state,
+        "rank_basis": "test_fixture",
+        "rank_tiebreaker": "test_fixture",
         "chip": 9000.0,
         "chip_delta": 6000.0,
         "died_time": None,

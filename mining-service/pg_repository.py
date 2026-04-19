@@ -702,6 +702,9 @@ class PostgresRepository:
             )
             await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ NULL"))
             await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS anchorable_at TIMESTAMPTZ NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS display_rank INTEGER NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS rank_basis VARCHAR NULL"))
+            await conn.execute(text("ALTER TABLE poker_mtt_final_rankings ADD COLUMN IF NOT EXISTS rank_tiebreaker VARCHAR NULL"))
             await conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_poker_mtt_final_rankings_window_join "

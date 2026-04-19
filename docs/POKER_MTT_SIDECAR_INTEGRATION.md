@@ -667,6 +667,13 @@ python3 scripts/poker_mtt/complete_standings.py --mtt-id <mttID> --pretty
 - 淘汰 tie group：严格复刻 donor `noticeDiedRank` 的逻辑，同一个内部 `rank` 共享同一个显示名次，后续名次按组大小跳号
 - 如果 hash snapshot 已经有用户，但 zset/list 还没追平，会以 `pending` 状态保留出来，避免静默丢人
 
+2026-04-19 之后，这个 helper 同时输出两个 rank:
+
+- `display_rank`: donor-compatible 展示名次，允许并列和跳号
+- `rank`: ClawChain payout-grade 名次，必须唯一、连续、one-based；只有 `alive` / `died` rows 才能有值，`pending` rows 为空
+
+也就是说，helper 仍然保留 donor 展示语义，但 reward / settlement 不再读取 donor-style tied display rank。
+
 ### 8.5 当前冻结结论
 
 phase 1 可以明确把“读 donor Redis”作为正式方案，而不是临时权宜：

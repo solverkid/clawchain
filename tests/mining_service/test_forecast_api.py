@@ -1458,7 +1458,10 @@ def poker_mtt_final_ranking_row(
         "entry_number": 1,
         "reentry_count": 1,
         "rank": final_rank,
+        "display_rank": final_rank,
         "rank_state": "ranked",
+        "rank_basis": "test_fixture",
+        "rank_tiebreaker": "test_fixture",
         "chip": 3000.0 + float(30 - final_rank),
         "chip_delta": float(30 - final_rank),
         "died_time": None,
@@ -1564,7 +1567,7 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
                 "/admin/poker-mtt/final-rankings/project",
                 json=poker_mtt_final_ranking_projection_payload(
                     tournament_id,
-                    [poker_mtt_final_ranking_row(tournament_id, wallet["address"], final_rank=2)],
+                    [poker_mtt_final_ranking_row(tournament_id, wallet["address"], final_rank=1)],
                 ),
             )
             assert resp.status_code == 200

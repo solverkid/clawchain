@@ -108,6 +108,7 @@ def normalize_entry(
     member_id: str | None,
     status: str,
     display_rank: int | None,
+    rank: int | None = None,
     alive_rank_zero_based: int | None = None,
     died_rank_internal: int | None = None,
     zset_score: float | None = None,
@@ -120,6 +121,7 @@ def normalize_entry(
         entry_number = parsed_entry_number
     normalized_member_id = member_id or build_member_id(user_id, entry_number)
     return {
+        "rank": rank,
         "display_rank": display_rank,
         "status": status,
         "member_id": normalized_member_id,
@@ -146,6 +148,26 @@ def member_sort_key(member_id: str) -> tuple[int, int, str]:
         entry_number if entry_number is not None else 10**12,
         member_id,
     )
+
+
+def assign_unique_payout_ranks(standings: list[dict[str, Any]]) -> None:
+    for item in standings:
+        item["rank"] = None
+    ranked = [
+        item
+        for item in standings
+        if item.get("status") in {"alive", "died"} and item.get("display_rank") is not None
+    ]
+
+    def sort_key(item: dict[str, Any]) -> tuple[int, float, tuple[int, int, str]]:
+        display_rank = to_int(item.get("display_rank")) or 10**12
+        start_chip = to_number(item.get("start_chip")) or 0
+        died_start_chip_order = -float(start_chip) if item.get("status") == "died" else 0.0
+        member_id = normalize_string(item.get("member_id")) or ""
+        return (display_rank, died_start_chip_order, member_sort_key(member_id))
+
+    for payout_rank, item in enumerate(sorted(ranked, key=sort_key), start=1):
+        item["rank"] = payout_rank
 
 
 def build_complete_standings(
@@ -229,6 +251,7 @@ def build_complete_standings(
                 snapshot_found=True,
             )
         )
+    assign_unique_payout_ranks(standings)
     return standings
 
 

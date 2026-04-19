@@ -15,6 +15,7 @@ import (
 
 func TestBuildFinalRankingApplyPayloadUsesCanonicalRows(t *testing.T) {
 	rank := 1
+	displayRank := 1
 	score := 90000.0
 	finalization := ranking.Finalization{
 		TournamentID:        "mtt-phase1-1",
@@ -34,7 +35,10 @@ func TestBuildFinalRankingApplyPayloadUsesCanonicalRows(t *testing.T) {
 				MemberID:             "8:1",
 				EntryNumber:          1,
 				Rank:                 &rank,
+				DisplayRank:          &displayRank,
 				RankState:            ranking.RankStateRanked,
+				RankBasis:            "alive_zset_score",
+				RankTiebreaker:       "zset_score_desc_member_id",
 				Chip:                 90000,
 				ChipDelta:            87000,
 				FieldSizePolicy:      "finished_snapshot_count",
@@ -128,6 +132,8 @@ func TestBuildFinalRankingApplyPayloadRejectsMissingLockedAt(t *testing.T) {
 func phase3ContractFinalization() ranking.Finalization {
 	firstRank := 1
 	secondRank := 2
+	firstDisplayRank := 1
+	secondDisplayRank := 2
 	firstScore := 90000.0
 	return ranking.Finalization{
 		TournamentID:        "mtt-phase3-contract",
@@ -148,7 +154,10 @@ func phase3ContractFinalization() ranking.Finalization {
 				EntryNumber:          1,
 				ReentryCount:         1,
 				Rank:                 &firstRank,
+				DisplayRank:          &firstDisplayRank,
 				RankState:            ranking.RankStateRanked,
+				RankBasis:            "alive_zset_score",
+				RankTiebreaker:       "zset_score_desc_member_id",
 				Chip:                 90000,
 				ChipDelta:            87000,
 				Bounty:               0,
@@ -178,7 +187,10 @@ func phase3ContractFinalization() ranking.Finalization {
 				EntryNumber:          1,
 				ReentryCount:         1,
 				Rank:                 &secondRank,
+				DisplayRank:          &secondDisplayRank,
 				RankState:            ranking.RankStateRanked,
+				RankBasis:            "donor_died_rank",
+				RankTiebreaker:       "source_rank_display",
 				Chip:                 0,
 				ChipDelta:            -3000,
 				DiedTime:             "2026-04-10T11:59:30Z",

@@ -217,7 +217,8 @@ func TestFinalizerCanonicalizesLiveSnapshotEdges(t *testing.T) {
 	require.True(t, rows["8:1"].SourceRankNumeric)
 
 	require.Equal(t, ranking.RankStateUnresolvedSnapshot, rows["10:1"].RankState)
-	require.Equal(t, 4, rankValue(t, rows["10:1"]))
+	require.Nil(t, rows["10:1"].Rank)
+	require.Equal(t, 4, displayRankValue(t, rows["10:1"]))
 	require.Equal(t, "-", rows["10:1"].SourceRank)
 	require.False(t, rows["10:1"].SourceRankNumeric)
 
@@ -225,6 +226,94 @@ func TestFinalizerCanonicalizesLiveSnapshotEdges(t *testing.T) {
 	require.Nil(t, rows["11:1"].Rank)
 	require.True(t, rows["11:1"].WaitingOrNoShow)
 	require.Equal(t, "no_show", rows["11:1"].StandUpStatus)
+}
+
+func TestFinalizerAssignsUniquePayoutRanksForTiedDiedDisplayRank(t *testing.T) {
+	snapshot := ranking.LiveSnapshot{
+		TournamentID: "mtt-tied-died",
+		GameType:     model.GameTypeMTT,
+		UserInfo: map[string]string{
+			"1:1": mustJSON(t, map[string]any{
+				"userID":       "1",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner1",
+				"startChip":    3000,
+				"endChip":      9000,
+			}),
+			"2:1": mustJSON(t, map[string]any{
+				"userID":       "2",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner2",
+				"startChip":    2200,
+				"endChip":      0,
+			}),
+			"3:1": mustJSON(t, map[string]any{
+				"userID":       "3",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner3",
+				"startChip":    1900,
+				"endChip":      0,
+			}),
+			"4:1": mustJSON(t, map[string]any{
+				"userID":       "4",
+				"entryNumber":  1,
+				"minerAddress": "claw1miner4",
+				"startChip":    500,
+				"endChip":      0,
+			}),
+		},
+		Alive: []ranking.ZMember{{Member: "1:1", Score: 9000}},
+		Died: []string{
+			mustJSON(t, map[string]any{
+				"userID":       "3",
+				"entryNumber":  1,
+				"rank":         3,
+				"minerAddress": "claw1miner3",
+				"startChip":    1900,
+				"endChip":      0,
+			}),
+			mustJSON(t, map[string]any{
+				"userID":       "2",
+				"entryNumber":  1,
+				"rank":         3,
+				"minerAddress": "claw1miner2",
+				"startChip":    2200,
+				"endChip":      0,
+			}),
+			mustJSON(t, map[string]any{
+				"userID":       "4",
+				"entryNumber":  1,
+				"rank":         1,
+				"minerAddress": "claw1miner4",
+				"startChip":    500,
+				"endChip":      0,
+			}),
+		},
+	}
+
+	finalized, err := (ranking.Finalizer{PolicyBundleVersion: "poker-mtt-payout-rank-test"}).Finalize(snapshot)
+	require.NoError(t, err)
+
+	rows := rowsByMember(finalized.Rows)
+	require.Equal(t, 1, rankValue(t, rows["1:1"]))
+	require.Equal(t, 1, displayRankValue(t, rows["1:1"]))
+	require.Equal(t, 2, rankValue(t, rows["2:1"]))
+	require.Equal(t, 3, rankValue(t, rows["3:1"]))
+	require.Equal(t, 4, rankValue(t, rows["4:1"]))
+	require.Equal(t, 2, displayRankValue(t, rows["2:1"]))
+	require.Equal(t, 2, displayRankValue(t, rows["3:1"]))
+	require.Equal(t, 4, displayRankValue(t, rows["4:1"]))
+	require.Equal(t, "source_rank_display_then_start_chip_desc_member_id", rows["2:1"].RankTiebreaker)
+	require.Equal(t, "source_rank_display_then_start_chip_desc_member_id", rows["3:1"].RankTiebreaker)
+
+	ranks := make([]int, 0, len(finalized.Rows))
+	for _, row := range finalized.Rows {
+		if row.RankState == ranking.RankStateRanked {
+			ranks = append(ranks, rankValue(t, row))
+		}
+	}
+	sort.Ints(ranks)
+	require.Equal(t, []int{1, 2, 3, 4}, ranks)
 }
 
 func TestFinalizerCollapsesDuplicateReentriesByEconomicUnit(t *testing.T) {
@@ -272,7 +361,8 @@ func TestFinalizerCollapsesDuplicateReentriesByEconomicUnit(t *testing.T) {
 	require.Equal(t, ranking.RankStateRanked, rows["42:2"].RankState)
 	require.Equal(t, ranking.RankStateDuplicateEntryCollapsed, rows["42:1"].RankState)
 	require.Equal(t, 1, rankValue(t, rows["42:2"]))
-	require.Equal(t, 2, rankValue(t, rows["42:1"]))
+	require.Nil(t, rows["42:1"].Rank)
+	require.Equal(t, 2, displayRankValue(t, rows["42:1"]))
 }
 
 func TestFinalizerMergesRegistrationNoShowAbsentFromRedis(t *testing.T) {
@@ -718,4 +808,10 @@ func rankValue(t *testing.T, row ranking.FinalRankingRow) int {
 	t.Helper()
 	require.NotNil(t, row.Rank)
 	return *row.Rank
+}
+
+func displayRankValue(t *testing.T, row ranking.FinalRankingRow) int {
+	t.Helper()
+	require.NotNil(t, row.DisplayRank)
+	return *row.DisplayRank
 }
