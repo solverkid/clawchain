@@ -38,6 +38,34 @@ def test_choose_action_plan_uses_supported_chips() -> None:
         assert plan["chips"] == 0
 
 
+def test_choose_supported_chip_can_use_max_legal_chip() -> None:
+    module = load_module()
+    rng = random.Random(17)
+
+    seen = {
+        module.choose_supported_chip([120.0, 180.0, 240.0, 480.0], rng)
+        for _ in range(200)
+    }
+
+    assert 480.0 in seen
+
+
+def test_choose_action_plan_can_take_legal_all_in_when_free_to_act() -> None:
+    module = load_module()
+    supported_actions = [
+        {"action": "check"},
+        {"action": "bet", "chips": [30.0, 45.0, 60.0, 1000.0]},
+        {"action": "allIn"},
+    ]
+
+    seen = {
+        module.choose_action_plan(supported_actions, random.Random(seed))["action"]
+        for seed in range(250)
+    }
+
+    assert "allIn" in seen
+
+
 def test_choose_action_plan_prefers_check_over_fold_when_free() -> None:
     module = load_module()
     rng = random.Random(11)

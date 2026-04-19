@@ -86,8 +86,6 @@ def choose_supported_chip(chips: list[Any] | None, rng: random.Random) -> float:
     normalized = sanitize_chip_choices(chips)
     if not normalized:
         return 0.0
-    if len(normalized) > 2:
-        normalized = normalized[:-1]
     return float(rng.choice(normalized))
 
 
@@ -97,6 +95,8 @@ def choose_action_plan(supported_actions: list[dict[str, Any]], rng: random.Rand
         for item in supported_actions
         if item.get("action")
     }
+    if "allIn" in by_action and rng.random() < 0.04:
+        return {"action": "allIn", "chips": 0}
     if "check" in by_action:
         if "bet" in by_action and sanitize_chip_choices(by_action["bet"].get("chips")) and rng.random() < 0.35:
             return {
