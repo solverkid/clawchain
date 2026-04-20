@@ -166,6 +166,19 @@ Implemented:
 - practice vs rated handling
 - human-only gating
 - multiplier clamp and warmup behavior
+- bridge writes are now restricted to existing shared miners and lane-owned fields only
+- forecast service shared-miner writes are now routed through explicit helper categories:
+  - `cluster_identity`
+  - `forecast_participation`
+  - `forecast_settlement`
+  - `public_ranking`
+- reward window / settlement batch shared updates are now routed through explicit helper paths instead of generic state patches:
+  - `link_reward_window_settlement_batch`
+  - `sync_open_settlement_batch`
+  - `mark_settlement_batch_anchor_ready`
+  - `mark_settlement_batch_anchor_submitted`
+  - `mark_settlement_batch_terminal`
+- `save_reward_window / save_settlement_batch` now preserve unspecified fields on update in both Fake and Postgres repos
 
 Primary files:
 
@@ -178,6 +191,11 @@ Important limitation:
 - there is no arena runtime in this session
 - current service only accepts completed arena outcomes from elsewhere
 - multiplier is therefore a bridge, not a standalone subsystem yet
+- the arena admin bridge may patch only `arena_multiplier`
+- the poker MTT admin bridge may patch only `poker_mtt_multiplier`
+- forecast lane no longer uses direct service-level generic miner patches; shared writes are routed through explicit helper groups
+- it may not insert stub miners or overwrite shared registration / anti-abuse / reward ledger fields
+- missing shared miners now fail fast instead of degrading silently
 
 ## 3.4 Anti-Abuse / Economic Unit / Risk
 
@@ -250,6 +268,7 @@ Implemented:
   - `submission_count`
   - `miner_count`
   - `total_reward_amount`
+- reward window to settlement-batch linking now uses an explicit narrow writer instead of generic reward-window patching
 
 Primary files:
 
@@ -324,6 +343,7 @@ Implemented:
 - admin chain confirmation path
   - `confirm-chain` by persisted `broadcast_tx_hash`
   - `confirmed / pending / failed` receipt normalization
+  - `confirmed` path now also verifies the persisted batch against on-chain `x/settlement` anchor content through RPC `abci_query`
   - auto progression from `anchor_submitted` to `anchored` or `anchor_failed`
 - admin chain reconciliation sweep
   - `reconcile-chain` batches all `anchor_submitted + broadcast_tx_hash` jobs
@@ -336,11 +356,23 @@ Implemented:
   - default FastAPI runtime now starts the loop automatically
   - interval / stale-warning / consecutive-error threshold are env-configurable
   - keeps pending anchor jobs moving without manual intervention
+- settlement immutability guard
+  - `retry-anchor` only works for `open / anchor_ready / anchor_failed`
+  - `rebuild_reward_window` is blocked after anchor preparation
+  - `anchor_submitted / anchored` batches are append-only
+- admin auth guard
+  - default runtime now requires `CLAWCHAIN_ADMIN_API_TOKEN`
+  - all `/admin/*` routes accept bearer or `X-Clawchain-Admin-Token`
 - explicit batch state progression:
   - `anchor_ready`
   - `anchor_submitted`
   - `anchored`
   - `anchor_failed`
+- explicit narrow batch writers:
+  - open sync
+  - anchor-ready materialization
+  - anchor-submitted binding
+  - anchored / failed terminal update
 
 Primary files:
 
@@ -396,49 +428,6 @@ Important limitation:
 - artifacts are stored in Postgres, not object storage
 - no large snapshot/feature/noise archival yet
 - replay proof is still lightweight and deterministic, not a full replay bundle
-
-## 3.9 Poker MTT Phase 1 Lane
-
-Implemented:
-
-- `pokermtt` Go package with sidecar-facing contract constants and identity guards
-- `authadapter` Go package for local token / bearer-style principal boundaries
-- local donor sidecar harnesses under `scripts/poker_mtt/`
-- `poker_mtt_tournaments`, `poker_mtt_final_rankings`, and `poker_mtt_result_entries` service-side models
-- final ranking projection into `poker_mtt_result_entries`
-- evidence manifests for final ranking plus stubbed hidden-eval / HUD / hand-history evidence roots
-- `pokermtt/projector` payload builder for moving Go finalization rows across the Python projection boundary without donor room/session identity
-- Phase 1 HUD hot-store hook:
-  - disabled by default
-  - idempotent per hand checksum
-  - emits deterministic short-term HUD manifest roots
-  - full HUD/ELO scoring remains deferred
-- `poker_mtt_daily` / `poker_mtt_weekly` reward window projection artifacts
-- poker MTT settlement anchor payload hardening:
-  - projection artifact is required before anchoring
-  - final ranking / evidence / multiplier / projection roots are folded into `poker_projection_roots_root`
-  - repeated retries reject root drift after anchor payload materialization
-
-Rollout gates:
-
-- `CLAWCHAIN_POKER_MTT_REWARD_WINDOWS_ENABLED=1` enables automatic `reconcile()` construction of poker MTT daily / weekly reward windows
-- `CLAWCHAIN_POKER_MTT_SETTLEMENT_ANCHORING_ENABLED=1` enables poker MTT settlement batches to enter anchor payload generation
-- both gates default to disabled
-- manual `POST /admin/poker-mtt/reward-windows/build` remains available for admin / test projection, but anchoring still requires the settlement gate
-
-30-user donor sidecar acceptance already run locally:
-
-- mock smoke: `30` users seen, `4` rooms, Redis snapshot `30`, alive `30`, died `0`
-- explicit join: `30` joined, `30` received `currentMTTRanking`, `0` WS errors, `4` rooms
-- auth mock + non-mock WS play: `30` joined, `807` random legal-range actions sent, tournament finished, final standings `30`, alive `1`, died `29`
-- final winner in that run: `member_id=8:1`, `user_id=8`, `end_chip=90000`
-
-Operational caveats:
-
-- donor RocketMQ publish errors did not block local MTT start / join / action / ranking / finish, but MQ remains required for hand-history/HUD ingestion work
-- donor foreground run is reliable in the agent environment; background `nohup` startup can exit after listen under non-interactive process supervision
-- `lepoker-gameserver` remains a separate repo and separate GitNexus graph
-- `website/out/`, `deploy/testnet-artifacts/`, `deploy/local-single-val*/`, root `clawchaind`, and `lepoker-gameserver` are ignored/excluded from ClawChain commits
 
 ## 4. Codebase Reality: Active Path vs Legacy Drift
 

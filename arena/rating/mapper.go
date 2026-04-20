@@ -147,12 +147,7 @@ func buildMinerCompatibility(item OutcomeItem, at time.Time) model.MinerCompatib
 
 	return model.MinerCompatibility{
 		Address:          item.MinerAddress,
-		Name:             item.Name,
-		Status:           "active",
-		EconomicUnitID:   item.EconomicUnitID,
-		AdmissionState:   "probation",
 		ModelReliability: item.ArenaReliabilityAfter,
-		OpsReliability:   defaultArenaReliability,
 		ArenaMultiplier:  item.MultiplierAfter,
 		PublicRank:       &publicRank,
 		PublicELO:        item.PublicELOAfter,

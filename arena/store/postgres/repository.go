@@ -1289,6 +1289,97 @@ func (r *Repository) AppendActionRecords(ctx context.Context, actions []model.Ac
 	return nil
 }
 
+func (r *Repository) ListActionMeasurementSummaries(ctx context.Context, tournamentID string) ([]model.ActionMeasurementSummary, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		WITH resolved_actions AS (
+			SELECT
+				COALESCE(NULLIF(sl.miner_id, ''), NULLIF(seat.miner_id, '')) AS miner_id,
+				NULLIF(a.hand_id, '') AS hand_id,
+				a.action_type,
+				a.validation_status,
+				a.error_code
+			FROM arena_action a
+			LEFT JOIN submission_ledger sl ON sl.request_id = a.request_id
+			LEFT JOIN arena_seat seat ON seat.seat_id = a.seat_id
+			WHERE a.tournament_id = $1
+		),
+		action_summary AS (
+			SELECT
+				miner_id,
+				COUNT(DISTINCT hand_id) FILTER (WHERE hand_id IS NOT NULL) AS hands_played,
+				COUNT(*) FILTER (
+					WHERE validation_status = 'accepted'
+						AND action_type <> ''
+						AND action_type NOT IN ('start_hand', 'close_hand', 'timeout', 'auto_check', 'auto_fold')
+				) AS meaningful_decisions,
+				COUNT(*) FILTER (
+					WHERE validation_status = 'accepted'
+						AND action_type IN ('auto_check', 'auto_fold', 'timeout')
+				) AS auto_actions,
+				COUNT(*) FILTER (
+					WHERE validation_status = 'accepted'
+						AND action_type = 'timeout'
+				) AS timeout_actions,
+				COUNT(*) FILTER (
+					WHERE action_type NOT IN ('start_hand', 'close_hand')
+						AND (validation_status <> 'accepted' OR error_code <> '')
+				) AS invalid_actions
+			FROM resolved_actions
+			WHERE miner_id IS NOT NULL
+			GROUP BY miner_id
+		),
+		invalid_submission_summary AS (
+			SELECT
+				sl.miner_id,
+				COUNT(*) AS invalid_actions
+			FROM submission_ledger sl
+			LEFT JOIN arena_action a ON a.request_id = sl.request_id
+			WHERE sl.tournament_id = $1
+				AND sl.miner_id <> ''
+				AND a.request_id IS NULL
+				AND sl.validation_status <> 'applied'
+			GROUP BY sl.miner_id
+		),
+		miners AS (
+			SELECT miner_id FROM action_summary
+			UNION
+			SELECT miner_id FROM invalid_submission_summary
+		)
+		SELECT
+			miners.miner_id,
+			COALESCE(action_summary.hands_played, 0) AS hands_played,
+			COALESCE(action_summary.meaningful_decisions, 0) AS meaningful_decisions,
+			COALESCE(action_summary.auto_actions, 0) AS auto_actions,
+			COALESCE(action_summary.timeout_actions, 0) AS timeout_actions,
+			COALESCE(action_summary.invalid_actions, 0) + COALESCE(invalid_submission_summary.invalid_actions, 0) AS invalid_actions
+		FROM miners
+		LEFT JOIN action_summary ON action_summary.miner_id = miners.miner_id
+		LEFT JOIN invalid_submission_summary ON invalid_submission_summary.miner_id = miners.miner_id
+		ORDER BY miners.miner_id
+	`, tournamentID)
+	if err != nil {
+		return nil, fmt.Errorf("list action measurement summaries for %s: %w", tournamentID, err)
+	}
+	defer rows.Close()
+
+	summaries := make([]model.ActionMeasurementSummary, 0)
+	for rows.Next() {
+		var summary model.ActionMeasurementSummary
+		if err := rows.Scan(
+			&summary.MinerID,
+			&summary.HandsPlayed,
+			&summary.MeaningfulDecisions,
+			&summary.AutoActions,
+			&summary.TimeoutActions,
+			&summary.InvalidActions,
+		); err != nil {
+			return nil, fmt.Errorf("scan action measurement summary for %s: %w", tournamentID, err)
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, rows.Err()
+}
+
 func (r *Repository) AppendReseatEvents(ctx context.Context, events []model.ReseatEvent) error {
 	const query = `
 		INSERT INTO arena_reseat_event (
@@ -2208,6 +2299,13 @@ func (r *Repository) AppendRatingInputs(ctx context.Context, inputs []model.Rati
 			$21, $22, $23, $24, $25, $26, $27, $28, $29
 		)
 		ON CONFLICT (input_id) DO UPDATE SET
+			finish_rank = EXCLUDED.finish_rank,
+			finish_percentile = EXCLUDED.finish_percentile,
+			hands_played = EXCLUDED.hands_played,
+			meaningful_decisions = EXCLUDED.meaningful_decisions,
+			auto_actions = EXCLUDED.auto_actions,
+			timeout_actions = EXCLUDED.timeout_actions,
+			invalid_actions = EXCLUDED.invalid_actions,
 			stage_reached = EXCLUDED.stage_reached,
 			stack_path_summary = EXCLUDED.stack_path_summary,
 			score_components = EXCLUDED.score_components,
@@ -3581,105 +3679,46 @@ func (r *Repository) SaveMultiplierSnapshot(ctx context.Context, snapshot model.
 
 func (r *Repository) UpsertMinerCompatibility(ctx context.Context, miner model.MinerCompatibility) error {
 	const query = `
-		INSERT INTO miners (
-			address,
-			name,
-			registration_index,
-			status,
-			public_key,
-			economic_unit_id,
-			ip_address,
-			user_agent_hash,
-			total_rewards,
-			forecast_commits,
-			forecast_reveals,
-			settled_tasks,
-			correct_direction_count,
-			edge_score_total,
-			held_rewards,
-			fast_task_opportunities,
-			fast_task_misses,
-			fast_window_start_at,
-			admission_state,
+		UPDATE miners
+		SET (
 			model_reliability,
-			ops_reliability,
 			arena_multiplier,
 			public_rank,
 			public_elo,
-			created_at,
 			updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-			$11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-			$21, $22, $23, $24, $25, $26
+		) = (
+			$2, $3, $4, $5, $6
 		)
-		ON CONFLICT (address) DO UPDATE SET
-			name = EXCLUDED.name,
-			registration_index = EXCLUDED.registration_index,
-			status = EXCLUDED.status,
-			public_key = EXCLUDED.public_key,
-			economic_unit_id = EXCLUDED.economic_unit_id,
-			ip_address = EXCLUDED.ip_address,
-			user_agent_hash = EXCLUDED.user_agent_hash,
-			total_rewards = EXCLUDED.total_rewards,
-			forecast_commits = EXCLUDED.forecast_commits,
-			forecast_reveals = EXCLUDED.forecast_reveals,
-			settled_tasks = EXCLUDED.settled_tasks,
-			correct_direction_count = EXCLUDED.correct_direction_count,
-			edge_score_total = EXCLUDED.edge_score_total,
-			held_rewards = EXCLUDED.held_rewards,
-			fast_task_opportunities = EXCLUDED.fast_task_opportunities,
-			fast_task_misses = EXCLUDED.fast_task_misses,
-			fast_window_start_at = EXCLUDED.fast_window_start_at,
-			admission_state = EXCLUDED.admission_state,
-			model_reliability = EXCLUDED.model_reliability,
-			ops_reliability = EXCLUDED.ops_reliability,
-			arena_multiplier = EXCLUDED.arena_multiplier,
-			public_rank = EXCLUDED.public_rank,
-			public_elo = EXCLUDED.public_elo,
-			updated_at = EXCLUDED.updated_at
+		WHERE address = $1
 	`
 
 	now := nowUTC()
-	if miner.CreatedAt.IsZero() {
-		miner.CreatedAt = now
-	}
 	if miner.UpdatedAt.IsZero() {
 		miner.UpdatedAt = now
 	}
 
-	_, err := r.db.ExecContext(
+	result, err := r.db.ExecContext(
 		ctx,
 		query,
 		miner.Address,
-		miner.Name,
-		miner.RegistrationIndex,
-		defaultString(miner.Status, "active"),
-		miner.PublicKey,
-		miner.EconomicUnitID,
-		nullableString(miner.IPAddress),
-		nullableString(miner.UserAgentHash),
-		miner.TotalRewards,
-		miner.ForecastCommits,
-		miner.ForecastReveals,
-		miner.SettledTasks,
-		miner.CorrectDirectionCount,
-		miner.EdgeScoreTotal,
-		miner.HeldRewards,
-		miner.FastTaskOpportunities,
-		miner.FastTaskMisses,
-		nullTime(miner.FastWindowStartAt),
-		defaultString(miner.AdmissionState, "probation"),
 		defaultFloat(miner.ModelReliability, 1),
-		defaultFloat(miner.OpsReliability, 1),
 		defaultFloat(miner.ArenaMultiplier, 1),
 		nullInt(miner.PublicRank),
 		defaultInt(miner.PublicELO, 1200),
-		miner.CreatedAt,
 		miner.UpdatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("upsert miners %s: %w", miner.Address, err)
+		return fmt.Errorf("update miner compatibility %s: %w", miner.Address, err)
+	}
+	if result == nil {
+		return nil
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for miner compatibility %s: %w", miner.Address, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("update miner compatibility %s: miner not found", miner.Address)
 	}
 
 	return nil

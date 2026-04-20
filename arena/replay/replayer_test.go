@@ -128,6 +128,169 @@ func TestRepositoryReplayerComputesStableFinalHash(t *testing.T) {
 	require.True(t, result.ParityOK)
 }
 
+func TestRepositoryReplayerHashChangesWhenEliminationRankChanges(t *testing.T) {
+	db := openReplayTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	now := time.Date(2026, time.April, 10, 16, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertWave(context.Background(), model.Wave{
+		ID:                  "wave_elim_hash",
+		Mode:                model.RatedMode,
+		State:               model.WaveStateSeatsPublished,
+		RegistrationOpenAt:  now.Add(-time.Hour),
+		RegistrationCloseAt: now.Add(-30 * time.Minute),
+		ScheduledStartAt:    now,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "wave-state",
+			PayloadHash:         "wave-payload",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}))
+	require.NoError(t, repo.UpsertTournament(context.Background(), model.Tournament{
+		ID:     "tour_elim_hash",
+		WaveID: "wave_elim_hash",
+		Mode:   model.RatedMode,
+		State:  model.TournamentStateCompleted,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "tour-state",
+			PayloadHash:         "tour-payload",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}))
+	require.NoError(t, repo.UpsertTable(context.Background(), model.Table{
+		ID:           "tbl:tour_elim_hash:01",
+		TournamentID: "tour_elim_hash",
+		State:        model.TableStateClosed,
+		TableNo:      1,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "table-state",
+			PayloadHash:         "table-payload",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}))
+	require.NoError(t, repo.UpsertEntrant(context.Background(), model.Entrant{
+		ID:                "ent_2",
+		WaveID:            "wave_elim_hash",
+		TournamentID:      "tour_elim_hash",
+		MinerID:           "miner_02",
+		RegistrationState: model.RegistrationStateEliminated,
+		TableID:           "tbl:tour_elim_hash:01",
+		SeatID:            "seat:tour_elim_hash:2",
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "entrant-state",
+			PayloadHash:         "entrant-payload",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}))
+	require.NoError(t, repo.UpsertSeat(context.Background(), model.Seat{
+		ID:           "seat:tour_elim_hash:2",
+		TableID:      "tbl:tour_elim_hash:01",
+		TournamentID: "tour_elim_hash",
+		EntrantID:    "ent_2",
+		SeatNo:       2,
+		MinerID:      "miner_02",
+		State:        model.SeatStateEliminated,
+		Stack:        0,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "seat-state",
+			PayloadHash:         "seat-payload",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}))
+	require.NoError(t, repo.SaveTournamentSnapshot(context.Background(), model.TournamentSnapshot{
+		ID:           "snap:tour_elim_hash:completed",
+		TournamentID: "tour_elim_hash",
+		StreamKey:    "tournament:tour_elim_hash",
+		StreamSeq:    2,
+		StateSeq:     2,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "completed-state",
+			PayloadHash:         "completed-payload",
+		},
+		Payload:   []byte(`{"stage":"completed"}`),
+		CreatedAt: now,
+	}))
+	require.NoError(t, repo.SaveTableSnapshot(context.Background(), model.TableSnapshot{
+		ID:           "tblsnap:tour_elim_hash:01",
+		TournamentID: "tour_elim_hash",
+		TableID:      "tbl:tour_elim_hash:01",
+		StreamKey:    "table:tbl:tour_elim_hash:01",
+		StreamSeq:    2,
+		StateSeq:     2,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "closed-table-state",
+			PayloadHash:         "closed-table-payload",
+		},
+		Payload:   []byte(`{"current_phase":"closed"}`),
+		CreatedAt: now,
+	}))
+	require.NoError(t, repo.AppendEliminationEvents(context.Background(), []model.EliminationEvent{{
+		ID:           "elim:tour_elim_hash:ent_2",
+		TournamentID: "tour_elim_hash",
+		TableID:      "tbl:tour_elim_hash:01",
+		SeatID:       "seat:tour_elim_hash:2",
+		EntrantID:    "ent_2",
+		FinishRank:   2,
+		StageReached: "final_table",
+		OccurredAt:   now,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "elim-rank-2",
+			PayloadHash:         "elim-rank-2",
+		},
+		CreatedAt: now,
+	}}))
+
+	replayer := NewRepositoryReplayer(repo)
+	firstHash, err := replayer.ComputeFinalHash(context.Background(), "tour_elim_hash")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendEliminationEvents(context.Background(), []model.EliminationEvent{{
+		ID:           "elim:tour_elim_hash:ent_2",
+		TournamentID: "tour_elim_hash",
+		TableID:      "tbl:tour_elim_hash:01",
+		SeatID:       "seat:tour_elim_hash:2",
+		EntrantID:    "ent_2",
+		FinishRank:   9,
+		StageReached: "final_table",
+		OccurredAt:   now,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "v1",
+			StateHash:           "elim-rank-9",
+			PayloadHash:         "elim-rank-9",
+		},
+		CreatedAt: now,
+	}}))
+	secondHash, err := replayer.ComputeFinalHash(context.Background(), "tour_elim_hash")
+	require.NoError(t, err)
+
+	require.NotEqual(t, firstHash, secondHash)
+}
+
 func openReplayTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 

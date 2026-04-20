@@ -309,6 +309,15 @@ type ActionRecord struct {
 	TruthMetadata
 }
 
+type ActionMeasurementSummary struct {
+	MinerID             string
+	HandsPlayed         int
+	MeaningfulDecisions int
+	AutoActions         int
+	TimeoutActions      int
+	InvalidActions      int
+}
+
 type ActionDeadline struct {
 	DeadlineID        string
 	TournamentID      string

@@ -1423,6 +1423,33 @@ def test_admin_apply_arena_results_updates_multiplier():
         assert miner_status.json()["data"]["arena_multiplier"] > 1.0
 
 
+def test_admin_apply_arena_results_returns_404_for_missing_miner():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+    with TestClient(app) as client:
+        resp = client.post(
+            "/admin/arena/results/apply",
+            json={
+                "tournament_id": "arena-missing-1",
+                "rated_or_practice": "rated",
+                "human_only": True,
+                "results": [
+                    {
+                        "miner_id": "claw1missingarena",
+                        "arena_score": 0.9,
+                    }
+                ],
+            },
+        )
+
+        assert resp.status_code == 404
+        assert "miner not found" in resp.json()["detail"]
+
+
 def poker_mtt_reward_ready_refs(
     tournament_id: str,
     miner_address: str,
@@ -1575,6 +1602,38 @@ def test_admin_apply_poker_mtt_results_updates_poker_multiplier():
         miner_status = client.get(f"/v1/miners/{wallet['address']}/status")
         assert miner_status.status_code == 200
         assert miner_status.json()["data"]["poker_mtt_multiplier"] > 1.0
+
+
+def test_admin_apply_poker_mtt_results_returns_404_for_missing_miner():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+    with TestClient(app) as client:
+        resp = client.post(
+            "/admin/poker-mtt/results/apply",
+            json={
+                "tournament_id": "poker-missing-1",
+                "rated_or_practice": "rated",
+                "human_only": True,
+                "field_size": 30,
+                "policy_bundle_version": "poker_mtt_v1",
+                "results": [
+                    {
+                        "miner_id": "claw1missingpoker",
+                        "final_rank": 1,
+                        "tournament_result_score": 0.9,
+                        "hidden_eval_score": 0.6,
+                        "consistency_input_score": 0.3,
+                    }
+                ],
+            },
+        )
+
+        assert resp.status_code == 404
+        assert "miner not found" in resp.json()["detail"]
 
 
 def test_admin_build_poker_mtt_rating_snapshot_does_not_mutate_public_elo():

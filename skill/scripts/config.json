@@ -11,6 +11,8 @@
   "codex_binary": "codex",
   "codex_model": "gpt-5.4-mini",
   "codex_timeout_seconds": 120,
+  "request_timeout_seconds": 35,
+  "min_commit_time_remaining_seconds": 90,
   "parallel_tasks": 2,
   "miner_address": "claw1nwmc4ddekuzs9j2lph7zrmj97h9g8f64zhc7xw"
 }

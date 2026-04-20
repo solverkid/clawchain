@@ -33,6 +33,7 @@ func NewReplayer(expectedFinalHashes, computedFinalHashes map[string]string) *Re
 type repositoryLoader interface {
 	LoadLatestTournamentSnapshot(ctx context.Context, tournamentID string) (model.TournamentSnapshot, error)
 	LoadLatestTableSnapshots(ctx context.Context, tournamentID string) ([]model.TableSnapshot, error)
+	ListEliminationEventsByTournament(ctx context.Context, tournamentID string) ([]model.EliminationEvent, error)
 	ListRatingInputs(ctx context.Context, tournamentID string) ([]model.RatingInput, error)
 }
 
@@ -73,6 +74,10 @@ func (r *Replayer) ComputeFinalHash(ctx context.Context, tournamentID string) (s
 	if err != nil {
 		return "", err
 	}
+	eliminationEvents, err := r.loader.ListEliminationEventsByTournament(ctx, tournamentID)
+	if err != nil {
+		return "", err
+	}
 	ratingInputs, err := r.loader.ListRatingInputs(ctx, tournamentID)
 	if err != nil {
 		return "", err
@@ -86,6 +91,15 @@ func (r *Replayer) ComputeFinalHash(ctx context.Context, tournamentID string) (s
 			return tableSnapshots[i].StreamSeq < tableSnapshots[j].StreamSeq
 		}
 		return tableSnapshots[i].ID < tableSnapshots[j].ID
+	})
+	sort.Slice(eliminationEvents, func(i, j int) bool {
+		if !eliminationEvents[i].OccurredAt.Equal(eliminationEvents[j].OccurredAt) {
+			return eliminationEvents[i].OccurredAt.Before(eliminationEvents[j].OccurredAt)
+		}
+		if eliminationEvents[i].EntrantID != eliminationEvents[j].EntrantID {
+			return eliminationEvents[i].EntrantID < eliminationEvents[j].EntrantID
+		}
+		return eliminationEvents[i].ID < eliminationEvents[j].ID
 	})
 	sort.Slice(ratingInputs, func(i, j int) bool {
 		if ratingInputs[i].MinerAddress != ratingInputs[j].MinerAddress {
@@ -113,6 +127,16 @@ func (r *Replayer) ComputeFinalHash(ctx context.Context, tournamentID string) (s
 		PayloadHash string `json:"payload_hash"`
 		Payload     string `json:"payload"`
 	}
+	type eliminationPart struct {
+		ID           string `json:"id"`
+		TableID      string `json:"table_id"`
+		SeatID       string `json:"seat_id"`
+		EntrantID    string `json:"entrant_id"`
+		FinishRank   int    `json:"finish_rank"`
+		StageReached string `json:"stage_reached"`
+		StateHash    string `json:"state_hash"`
+		PayloadHash  string `json:"payload_hash"`
+	}
 	type ratingPart struct {
 		ID              string  `json:"id"`
 		EntrantID       string  `json:"entrant_id"`
@@ -124,9 +148,10 @@ func (r *Replayer) ComputeFinalHash(ctx context.Context, tournamentID string) (s
 	}
 
 	parts := struct {
-		Tournament tournamentPart `json:"tournament"`
-		Tables     []tablePart    `json:"tables"`
-		Ratings    []ratingPart   `json:"ratings"`
+		Tournament   tournamentPart    `json:"tournament"`
+		Tables       []tablePart       `json:"tables"`
+		Eliminations []eliminationPart `json:"eliminations"`
+		Ratings      []ratingPart      `json:"ratings"`
 	}{
 		Tournament: tournamentPart{
 			ID:          tournamentSnapshot.ID,
@@ -136,8 +161,9 @@ func (r *Replayer) ComputeFinalHash(ctx context.Context, tournamentID string) (s
 			PayloadHash: tournamentSnapshot.PayloadHash,
 			Payload:     string(tournamentSnapshot.Payload),
 		},
-		Tables:  make([]tablePart, 0, len(tableSnapshots)),
-		Ratings: make([]ratingPart, 0, len(ratingInputs)),
+		Tables:       make([]tablePart, 0, len(tableSnapshots)),
+		Eliminations: make([]eliminationPart, 0, len(eliminationEvents)),
+		Ratings:      make([]ratingPart, 0, len(ratingInputs)),
 	}
 
 	for _, snapshot := range tableSnapshots {
@@ -148,6 +174,18 @@ func (r *Replayer) ComputeFinalHash(ctx context.Context, tournamentID string) (s
 			StateHash:   snapshot.StateHash,
 			PayloadHash: snapshot.PayloadHash,
 			Payload:     string(snapshot.Payload),
+		})
+	}
+	for _, event := range eliminationEvents {
+		parts.Eliminations = append(parts.Eliminations, eliminationPart{
+			ID:           event.ID,
+			TableID:      event.TableID,
+			SeatID:       event.SeatID,
+			EntrantID:    event.EntrantID,
+			FinishRank:   event.FinishRank,
+			StageReached: event.StageReached,
+			StateHash:    event.StateHash,
+			PayloadHash:  event.PayloadHash,
 		})
 	}
 	for _, input := range ratingInputs {

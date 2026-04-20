@@ -130,6 +130,7 @@ func seedRatedTournament(t *testing.T, app *integrationApp, entrants int) seeded
 	require.Equal(t, string(model.RatedMode), plan.RatedOrPractice)
 	require.False(t, plan.NoMultiplier)
 	require.Len(t, plan.SeatAssignments, entrants)
+	seedSharedMiners(t, app.db, plan.SeatAssignments, app.now)
 
 	run := &integrationRun{
 		id:              plan.TournamentID,
@@ -222,7 +223,7 @@ func assertCompletedTournament(t *testing.T, app *integrationApp, tournamentID s
 
 	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1", tournamentID), 0)
 	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM arena_result_entries WHERE tournament_id = $1", tournamentID), 0)
-	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM miners"), 0)
+	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM miners WHERE public_rank IS NOT NULL"), 0)
 }
 
 func mustRun(t *testing.T, app *integrationApp, tournamentID string) *integrationRun {
@@ -285,10 +286,10 @@ func ratedCompletionFixture(tournamentID string, completedAt time.Time) rating.C
 		SeasonID:     "season-1",
 		CompletedAt:  completedAt,
 		Entrants: []rating.CompletedEntrant{{
-			EntrantID:           "ent:rated:1",
-			MinerAddress:        "miner-1",
-			Name:                "miner-1",
-			EconomicUnitID:      "econ-miner-1",
+			EntrantID:           "ent:01",
+			MinerAddress:        "miner-01",
+			Name:                "miner-01",
+			EconomicUnitID:      "eu:miner-01",
 			FinishRank:          1,
 			FinishPercentile:    1.0,
 			HandsPlayed:         24,
@@ -380,6 +381,38 @@ func countRows(t *testing.T, db *sql.DB, query string, args ...any) int {
 	var count int
 	require.NoError(t, db.QueryRow(query, args...).Scan(&count))
 	return count
+}
+
+func seedSharedMiners(t *testing.T, db *sql.DB, assignments []hub.SeatAssignment, at time.Time) {
+	t.Helper()
+
+	seen := make(map[string]struct{}, len(assignments))
+	for index, assignment := range assignments {
+		if _, ok := seen[assignment.MinerID]; ok {
+			continue
+		}
+		seen[assignment.MinerID] = struct{}{}
+		_, err := db.Exec(`
+			INSERT INTO miners (
+				address,
+				name,
+				registration_index,
+				public_key,
+				economic_unit_id,
+				created_at,
+				updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`,
+			assignment.MinerID,
+			assignment.MinerID,
+			index+1,
+			"pubkey:"+assignment.MinerID,
+			"eu:"+assignment.MinerID,
+			at,
+			at,
+		)
+		require.NoError(t, err)
+	}
 }
 
 func tableID(tournamentID string, tableNo int) string {

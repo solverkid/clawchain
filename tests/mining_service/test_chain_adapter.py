@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import json
 from itertools import count
 import subprocess
 import sys
@@ -635,6 +636,63 @@ def test_inspect_broadcast_tx_confirmation_returns_pending_when_not_found(monkey
     assert receipt["tx_hash"] == "ABC123TX"
     assert receipt["confirmation_status"] == "pending"
     assert receipt["found"] is False
+
+
+def test_inspect_settlement_anchor_returns_decoded_anchor(monkeypatch):
+    anchor_payload = {
+        "settlement_batch_id": "sb_2026_04_10_0001",
+        "canonical_root": "sha256:canonical",
+        "anchor_payload_hash": "sha256:payload",
+    }
+    captured = {}
+
+    def fake_rpc_jsonrpc(*, node_rpc, method, params, timeout_seconds=2.0):  # noqa: ANN001
+        captured.update({"method": method, "params": params})
+        return {
+            "result": {
+                "response": {
+                    "height": "99",
+                    "value": base64.b64encode(json.dumps(anchor_payload).encode("utf-8")).decode("ascii"),
+                }
+            }
+        }
+
+    monkeypatch.setattr(chain_adapter, "_rpc_jsonrpc", fake_rpc_jsonrpc)
+
+    result = chain_adapter.inspect_settlement_anchor(
+        settings=DummySettings(),
+        settlement_batch_id="sb_2026_04_10_0001",
+    )
+
+    assert captured["method"] == "abci_query"
+    assert captured["params"]["path"] == "/store/settlement/key"
+    assert result["found"] is True
+    assert result["query_height"] == 99
+    assert result["anchor"] == anchor_payload
+
+
+def test_inspect_settlement_anchor_returns_not_found_when_store_value_empty(monkeypatch):
+    monkeypatch.setattr(
+        chain_adapter,
+        "_rpc_jsonrpc",
+        lambda *, node_rpc, method, params, timeout_seconds=2.0: {
+            "result": {
+                "response": {
+                    "height": "88",
+                    "value": None,
+                }
+            }
+        },
+    )
+
+    result = chain_adapter.inspect_settlement_anchor(
+        settings=DummySettings(),
+        settlement_batch_id="sb_missing",
+    )
+
+    assert result["found"] is False
+    assert result["settlement_batch_id"] == "sb_missing"
+    assert result["query_height"] == 88
 
 
 def test_chain_adapter_confirms_anchor_by_querying_stored_state():

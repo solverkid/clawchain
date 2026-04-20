@@ -10,7 +10,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = ROOT / "deploy" / "docker-compose.poker-mtt-local.yml"
 ROCKETMQ_BROKER_CONF = ROOT / "deploy" / "poker-mtt" / "rocketmq" / "broker.conf"
-ROCKETMQ_PROXY_CONF = ROOT / "deploy" / "poker-mtt" / "rocketmq" / "proxy.json"
+ROCKETMQ_PROXY_CONF = ROOT / "deploy" / "poker-mtt" / "rocketmq" / "rmq-proxy.json"
 PATCH_SCRIPT = ROOT / "scripts" / "poker_mtt" / "patch_donor_local_safety.py"
 DYNAMODB_INIT_SCRIPT = ROOT / "scripts" / "poker_mtt" / "init_local_dynamodb.sh"
 LOG_CHECK_SCRIPT = ROOT / "scripts" / "poker_mtt" / "check_local_run_logs.py"
@@ -53,12 +53,13 @@ def test_local_rocketmq_proxy_advertises_host_mapped_grpc_port() -> None:
 
     assert "38081:8081" in proxy["ports"]
     assert (
-        "./poker-mtt/rocketmq/proxy.json:/home/rocketmq/rocketmq-5.3.2/conf/rmq-proxy.json"
+        "./poker-mtt/rocketmq/rmq-proxy.json:/home/rocketmq/rocketmq-5.3.2/conf/rmq-proxy.json"
         in proxy["volumes"]
     )
-    assert proxy["command"] == "sh mqproxy -pc /home/rocketmq/rocketmq-5.3.2/conf/rmq-proxy.json"
+    assert "mqadmin updatetopic -n poker_mtt_rmqnamesrv:9876 -c DefaultCluster -t DefaultHeartBeatSyncerTopic" in proxy["command"][2]
+    assert "exec sh mqproxy -pc /home/rocketmq/rocketmq-5.3.2/conf/rmq-proxy.json" in proxy["command"][2]
     assert proxy_conf["useEndpointPortFromRequest"] is True
-    assert proxy_conf["grpcProxyRelayRequestTimeoutInSeconds"] >= 15
+    assert proxy_conf["grpcServerPort"] == 8081
 
 
 def test_local_sidecar_starts_dynamodb_local() -> None:

@@ -546,6 +546,63 @@ func TestAdvanceClosedTablesCompletesTournamentAtTimeCap(t *testing.T) {
 	require.Equal(t, 8, standing["players_remaining"])
 }
 
+func TestTimeCapMultiSurvivorWritesDeterministicRatingStages(t *testing.T) {
+	db := openArenaRuntimeTestDB(t)
+	resetArenaRuntimeSchema(t, db)
+	require.NoError(t, db.Close())
+
+	application, err := New(config.Config{
+		DatabaseURL:     arenaRuntimeTestDatabaseURL(),
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, application.Close(context.Background()))
+	}()
+
+	ctx := context.Background()
+	waveID := "wave_time_cap_rating_stages_1"
+	_, err = application.runtime.CreateWave(ctx, createWaveRequest(waveID))
+	require.NoError(t, err)
+	for idx := 1; idx <= 16; idx++ {
+		require.NoError(t, application.runtime.RegisterMiner(ctx, waveID, minerID(idx)))
+	}
+	lockResp, err := application.runtime.LockWave(ctx, waveID)
+	require.NoError(t, err)
+	_, err = application.runtime.PublishSeats(ctx, waveID)
+	require.NoError(t, err)
+	_, err = application.runtime.ArmTimeCap(ctx, lockResp.TournamentID)
+	require.NoError(t, err)
+
+	tournamentRuntime := application.runtime.tournaments[lockResp.TournamentID]
+	require.NotNil(t, tournamentRuntime)
+
+	leftTableID := "tbl:" + lockResp.TournamentID + ":01"
+	rightTableID := "tbl:" + lockResp.TournamentID + ":02"
+	application.runtime.actors[leftTableID] = reducedRecoveredActor(t, application.runtime, leftTableID, []int{1, 2, 3, 4})
+	application.runtime.actors[rightTableID] = reducedRecoveredActor(t, application.runtime, rightTableID, []int{1, 2, 3, 4})
+	if application.runtime.gateway != nil {
+		application.runtime.gateway.RegisterActor(leftTableID, application.runtime.actors[leftTableID])
+		application.runtime.gateway.RegisterActor(rightTableID, application.runtime.actors[rightTableID])
+	}
+
+	_, _, err = application.runtime.advanceClosedTableLocked(ctx, tournamentRuntime, leftTableID)
+	require.NoError(t, err)
+	_, _, err = application.runtime.advanceClosedTableLocked(ctx, tournamentRuntime, rightTableID)
+	require.NoError(t, err)
+
+	verifyDB := openArenaRuntimeTestDB(t)
+	defer func() {
+		require.NoError(t, verifyDB.Close())
+	}()
+	require.Equal(t, 16, countArenaRuntimeRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1", lockResp.TournamentID))
+	require.Equal(t, 16, countArenaRuntimeRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND finish_rank BETWEEN 1 AND 16", lockResp.TournamentID))
+	require.Equal(t, 8, countArenaRuntimeRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND stage_reached = 'time_cap_finish'", lockResp.TournamentID))
+	require.Equal(t, 8, countArenaRuntimeRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND stage_reached = 'eliminated'", lockResp.TournamentID))
+	require.Zero(t, countArenaRuntimeRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND stage_reached = 'final_table'", lockResp.TournamentID))
+}
+
 func reducedRecoveredActor(t *testing.T, runtime *runtimeService, tableID string, activeSeats []int) *table.Actor {
 	t.Helper()
 
@@ -697,4 +754,12 @@ func resetArenaRuntimeSchema(t *testing.T, db *sql.DB) {
 		_, err := db.Exec(stmt)
 		require.NoError(t, err)
 	}
+}
+
+func countArenaRuntimeRows(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+
+	var count int
+	require.NoError(t, db.QueryRow(query, args...).Scan(&count))
+	return count
 }

@@ -354,6 +354,11 @@ def main():
     config["codex_binary"] = config.get("codex_binary", "codex")
     config["codex_model"] = config.get("codex_model", "gpt-5.4-mini")
     config["codex_timeout_seconds"] = config.get("codex_timeout_seconds", 120)
+    config["request_timeout_seconds"] = config.get("request_timeout_seconds", 35)
+    config["min_commit_time_remaining_seconds"] = config.get(
+        "min_commit_time_remaining_seconds",
+        90 if config.get("forecast_mode") == "codex_v1" else 1,
+    )
     config["parallel_tasks"] = config.get("parallel_tasks", 2 if config.get("forecast_mode") == "codex_v1" else 1)
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)

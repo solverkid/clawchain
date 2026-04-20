@@ -44,6 +44,9 @@ MINER_VERSION = "0.4.0"
 DEFAULT_CODEX_MODEL = "gpt-5.4-mini"
 DEFAULT_CODEX_TIMEOUT_SECONDS = 120
 DEFAULT_CODEX_PARALLEL_TASKS = 2
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 35
+DEFAULT_CODEX_MIN_COMMIT_TIME_REMAINING_SECONDS = 90
+DEFAULT_MIN_COMMIT_TIME_REMAINING_SECONDS = 1
 
 DATA_DIR.mkdir(exist_ok=True)
 LOG_LOCK = threading.Lock()
@@ -81,15 +84,40 @@ def load_wallet(wallet_path, passphrase=None):
     return crypto_load_wallet(wallet_path, passphrase=passphrase)
 
 
-def check_miner_registered(rpc_url, address):
+def resolve_request_timeout(config=None):
+    config = config or {}
+    return int(
+        config.get("request_timeout_seconds")
+        or os.getenv("CLAWCHAIN_MINER_REQUEST_TIMEOUT_SECONDS")
+        or DEFAULT_REQUEST_TIMEOUT_SECONDS
+    )
+
+
+def resolve_min_commit_time_remaining(config=None):
+    config = config or {}
+    if config.get("min_commit_time_remaining_seconds") is not None:
+        return max(0, int(config["min_commit_time_remaining_seconds"]))
+    if os.getenv("CLAWCHAIN_MINER_MIN_COMMIT_TIME_REMAINING_SECONDS"):
+        return max(0, int(os.environ["CLAWCHAIN_MINER_MIN_COMMIT_TIME_REMAINING_SECONDS"]))
+    if str(config.get("forecast_mode") or "heuristic_v1").strip() == "codex_v1":
+        return DEFAULT_CODEX_MIN_COMMIT_TIME_REMAINING_SECONDS
+    return DEFAULT_MIN_COMMIT_TIME_REMAINING_SECONDS
+
+
+def commit_time_remaining_seconds(task, now=None):
+    current = now or datetime.now(timezone.utc)
+    return (parse_time(task["commit_deadline"]) - current).total_seconds()
+
+
+def check_miner_registered(rpc_url, address, config=None):
     try:
-        resp = requests.get(f"{rpc_url}/clawchain/miner/{address}", timeout=10)
+        resp = requests.get(f"{rpc_url}/clawchain/miner/{address}", timeout=resolve_request_timeout(config))
         return resp.status_code == 200
     except Exception:
         return False
 
 
-def auto_register(rpc_url, wallet, name):
+def auto_register(rpc_url, wallet, name, config=None):
     payload = {
         "address": wallet["address"],
         "name": name,
@@ -97,7 +125,11 @@ def auto_register(rpc_url, wallet, name):
         "miner_version": MINER_VERSION,
     }
     try:
-        resp = requests.post(f"{rpc_url}/clawchain/miner/register", json=payload, timeout=10)
+        resp = requests.post(
+            f"{rpc_url}/clawchain/miner/register",
+            json=payload,
+            timeout=resolve_request_timeout(config),
+        )
         if resp.status_code == 409:
             return True
         resp.raise_for_status()
@@ -107,9 +139,9 @@ def auto_register(rpc_url, wallet, name):
         return False
 
 
-def get_active_tasks(rpc_url):
+def get_active_tasks(rpc_url, config=None):
     try:
-        resp = requests.get(f"{rpc_url}/v1/task-runs/active", timeout=10)
+        resp = requests.get(f"{rpc_url}/v1/task-runs/active", timeout=resolve_request_timeout(config))
         resp.raise_for_status()
         return resp.json()["data"]["items"]
     except Exception as exc:
@@ -117,9 +149,12 @@ def get_active_tasks(rpc_url):
         return []
 
 
-def get_task_detail(rpc_url, task_run_id):
+def get_task_detail(rpc_url, task_run_id, config=None):
     try:
-        resp = requests.get(f"{rpc_url}/v1/forecast/task-runs/{task_run_id}", timeout=10)
+        resp = requests.get(
+            f"{rpc_url}/v1/forecast/task-runs/{task_run_id}",
+            timeout=resolve_request_timeout(config),
+        )
         resp.raise_for_status()
         return resp.json()["data"]
     except Exception as exc:
@@ -127,16 +162,24 @@ def get_task_detail(rpc_url, task_run_id):
         return None
 
 
-def post_commit(rpc_url, task_run_id, payload):
-    resp = requests.post(f"{rpc_url}/v1/task-runs/{task_run_id}/commit", json=payload, timeout=10)
+def post_commit(rpc_url, task_run_id, payload, config=None):
+    resp = requests.post(
+        f"{rpc_url}/v1/task-runs/{task_run_id}/commit",
+        json=payload,
+        timeout=resolve_request_timeout(config),
+    )
     if resp.status_code == 409:
         return {"already": True, **resp.json()}
     resp.raise_for_status()
     return resp.json()
 
 
-def post_reveal(rpc_url, task_run_id, payload):
-    resp = requests.post(f"{rpc_url}/v1/task-runs/{task_run_id}/reveal", json=payload, timeout=10)
+def post_reveal(rpc_url, task_run_id, payload, config=None):
+    resp = requests.post(
+        f"{rpc_url}/v1/task-runs/{task_run_id}/reveal",
+        json=payload,
+        timeout=resolve_request_timeout(config),
+    )
     if resp.status_code == 409:
         return {"already": True, **resp.json()}
     resp.raise_for_status()
@@ -575,18 +618,29 @@ def mine_selected_tasks(
 
 
 def mine_task(rpc_url, wallet, task_card, config=None):
-    task = get_task_detail(rpc_url, task_card["task_run_id"])
+    config = config or {}
+    task = get_task_detail(rpc_url, task_card["task_run_id"], config=config)
     if not task:
         return False
 
-    now = datetime.now(timezone.utc)
-    if now > parse_time(task["commit_deadline"]):
+    min_commit_remaining = resolve_min_commit_time_remaining(config)
+    remaining = commit_time_remaining_seconds(task)
+    if remaining < min_commit_remaining:
+        print(
+            f"⚠️ Skipping {task['task_run_id']}: "
+            f"{remaining:.1f}s before commit deadline, need {min_commit_remaining}s"
+        )
         return False
 
     try:
         prediction = compute_prediction(task, config=config)
     except Exception as exc:
         print(f"⚠️ Prediction failed for {task['task_run_id']}: {exc}")
+        return False
+
+    remaining = commit_time_remaining_seconds(task)
+    if remaining <= 0:
+        print(f"⚠️ Skipping commit for {task['task_run_id']}: commit deadline passed after prediction")
         return False
 
     p_yes_bps = prediction["p_yes_bps"]
@@ -608,7 +662,7 @@ def mine_task(rpc_url, wallet, task_card, config=None):
     }
 
     try:
-        post_commit(rpc_url, task["task_run_id"], commit_payload)
+        post_commit(rpc_url, task["task_run_id"], commit_payload, config=config)
     except Exception as exc:
         print(f"⚠️ Commit failed for {task['task_run_id']}: {exc}")
         return False
@@ -633,7 +687,7 @@ def mine_task(rpc_url, wallet, task_card, config=None):
     }
 
     try:
-        result = post_reveal(rpc_url, task["task_run_id"], reveal_payload)
+        result = post_reveal(rpc_url, task["task_run_id"], reveal_payload, config=config)
     except Exception as exc:
         print(f"⚠️ Reveal failed for {task['task_run_id']}: {exc}")
         return False
@@ -678,14 +732,14 @@ def main():
     wallet_path = Path(args.wallet_path or config.get("wallet_path", "~/.clawchain/wallet.json")).expanduser()
     wallet = load_wallet(wallet_path)
 
-    if not check_miner_registered(rpc_url, wallet["address"]):
-        if not auto_register(rpc_url, wallet, config.get("miner_name", "openclaw-miner")):
+    if not check_miner_registered(rpc_url, wallet["address"], config=config):
+        if not auto_register(rpc_url, wallet, config.get("miner_name", "openclaw-miner"), config=config):
             sys.exit(1)
 
     max_fast_tasks = args.max_tasks or config.get("max_tasks_per_run") or config.get("max_challenges_per_run", 2)
 
     while True:
-        tasks = get_active_tasks(rpc_url)
+        tasks = get_active_tasks(rpc_url, config=config)
         selected_tasks = select_tasks_for_iteration(tasks, max_fast_tasks, include_daily=not args.forecast_only)
         parallel_tasks = resolve_parallel_tasks(config, max_fast_tasks, explicit_parallel_tasks=args.parallel_tasks)
         mined = mine_selected_tasks(

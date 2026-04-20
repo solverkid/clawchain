@@ -847,6 +847,52 @@ async def inspect_broadcast_tx_confirmation_async(*, settings, tx_hash: str) -> 
     return await asyncio.to_thread(inspect_broadcast_tx_confirmation, settings=settings, tx_hash=tx_hash)
 
 
+def inspect_settlement_anchor(*, settings, settlement_batch_id: str) -> dict:
+    resolved_batch_id = (settlement_batch_id or "").strip()
+    if not resolved_batch_id:
+        raise ValueError("settlement batch id is required")
+
+    payload = _rpc_jsonrpc(
+        node_rpc=getattr(settings, "chain_node_rpc", "tcp://127.0.0.1:26657"),
+        method="abci_query",
+        params={
+            "path": "/store/settlement/key",
+            "data": "0x" + (b"\x01" + resolved_batch_id.encode("utf-8")).hex(),
+            "prove": False,
+        },
+    )
+    response = payload.get("result", {}).get("response", {})
+    raw_value = response.get("value")
+    if not raw_value:
+        return {
+            "found": False,
+            "settlement_batch_id": resolved_batch_id,
+            "query_height": int(response["height"]) if response.get("height") is not None else None,
+            "anchor": None,
+        }
+
+    try:
+        decoded_value = base64.b64decode(raw_value)
+        anchor = json.loads(decoded_value.decode("utf-8") or "{}")
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid settlement anchor payload for {resolved_batch_id}") from exc
+
+    return {
+        "found": True,
+        "settlement_batch_id": resolved_batch_id,
+        "query_height": int(response["height"]) if response.get("height") is not None else None,
+        "anchor": anchor,
+    }
+
+
+async def inspect_settlement_anchor_async(*, settings, settlement_batch_id: str) -> dict:
+    return await asyncio.to_thread(
+        inspect_settlement_anchor,
+        settings=settings,
+        settlement_batch_id=settlement_batch_id,
+    )
+
+
 def _load_genesis_account_number(*, home_dir: str, sender_address: str) -> int | None:
     genesis_path = Path(home_dir).expanduser() / "config" / "genesis.json"
     if not genesis_path.exists():

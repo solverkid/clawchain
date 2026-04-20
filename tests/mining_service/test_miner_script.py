@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -275,3 +276,88 @@ def test_mine_selected_tasks_can_run_in_parallel():
     assert started == ["fast-btc", "fast-eth"]
     assert sorted(finished) == ["fast-btc", "fast-eth"]
     assert elapsed < 0.35
+
+
+def test_get_task_detail_uses_configured_request_timeout(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"task_run_id": "fast-btc"}}
+
+    def fake_get(url, timeout):  # noqa: ANN001
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(mine.requests, "get", fake_get)
+
+    task = mine.get_task_detail(
+        "http://127.0.0.1:18131",
+        "fast-btc",
+        config={"request_timeout_seconds": 35},
+    )
+
+    assert task["task_run_id"] == "fast-btc"
+    assert captured["url"] == "http://127.0.0.1:18131/v1/forecast/task-runs/fast-btc"
+    assert captured["timeout"] == 35
+
+
+def test_mine_task_skips_codex_when_commit_window_is_too_short(monkeypatch):
+    task = {
+        "task_run_id": "fast-btc",
+        "asset": "BTCUSDT",
+        "lane": "forecast_15m",
+        "commit_deadline": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
+    }
+    compute_called = False
+
+    def fake_compute_prediction(task_arg, config=None):  # noqa: ANN001
+        nonlocal compute_called
+        compute_called = True
+        return {"p_yes_bps": 5100, "provider": "codex_cli"}
+
+    monkeypatch.setattr(mine, "get_task_detail", lambda rpc_url, task_id, config=None: task)
+    monkeypatch.setattr(mine, "compute_prediction", fake_compute_prediction)
+
+    mined = mine.mine_task(
+        "http://127.0.0.1:18131",
+        {"address": "claw1test", "private_key": "01" * 32},
+        {"task_run_id": "fast-btc"},
+        config={"forecast_mode": "codex_v1", "min_commit_time_remaining_seconds": 90},
+    )
+
+    assert mined is False
+    assert compute_called is False
+
+
+def test_mine_task_skips_commit_if_prediction_finishes_after_deadline(monkeypatch):
+    task = {
+        "task_run_id": "fast-btc",
+        "asset": "BTCUSDT",
+        "lane": "forecast_15m",
+        "commit_deadline": (datetime.now(timezone.utc) + timedelta(seconds=90)).isoformat(),
+    }
+
+    def fake_compute_prediction(task_arg, config=None):  # noqa: ANN001
+        task_arg["commit_deadline"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        return {"p_yes_bps": 5100, "provider": "codex_cli"}
+
+    def fail_post_commit(*args, **kwargs):  # noqa: ANN002, ANN003
+        pytest.fail("post_commit should not be called after commit deadline passes")
+
+    monkeypatch.setattr(mine, "get_task_detail", lambda rpc_url, task_id, config=None: task)
+    monkeypatch.setattr(mine, "compute_prediction", fake_compute_prediction)
+    monkeypatch.setattr(mine, "post_commit", fail_post_commit)
+
+    mined = mine.mine_task(
+        "http://127.0.0.1:18131",
+        {"address": "claw1test", "private_key": "01" * 32},
+        {"task_run_id": "fast-btc"},
+        config={"forecast_mode": "codex_v1", "min_commit_time_remaining_seconds": 1},
+    )
+
+    assert mined is False

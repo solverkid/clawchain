@@ -452,6 +452,453 @@ func TestRepositoryLoadsActionRecordByRequestID(t *testing.T) {
 	require.Equal(t, "check", action.ActionType)
 }
 
+func TestAppendRatingInputsUpdatesMeasurementFieldsOnConflict(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	first := model.RatingInput{
+		ID:               "ari:tour:measurement:miner-1",
+		TournamentID:     "tour:measurement",
+		EntrantID:        "entrant-1",
+		MinerAddress:     "miner-1",
+		Mode:             model.RatedMode,
+		HumanOnly:        true,
+		FinishRank:       1,
+		FinishPercentile: 1,
+		StageReached:     "completed",
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "rating-input-state-1",
+			PayloadHash:         "rating-input-payload-1",
+		},
+	}
+	require.NoError(t, repo.AppendRatingInputs(ctx, []model.RatingInput{first}))
+
+	updated := first
+	updated.HandsPlayed = 3
+	updated.MeaningfulDecisions = 7
+	updated.AutoActions = 1
+	updated.TimeoutActions = 1
+	updated.InvalidActions = 2
+	updated.TruthMetadata = model.TruthMetadata{
+		PolicyBundleVersion: "policy-v1",
+		StateHash:           "rating-input-state-2",
+		PayloadHash:         "rating-input-payload-2",
+	}
+	require.NoError(t, repo.AppendRatingInputs(ctx, []model.RatingInput{updated}))
+
+	inputs, err := repo.ListRatingInputs(ctx, "tour:measurement")
+	require.NoError(t, err)
+	require.Len(t, inputs, 1)
+	require.Equal(t, 3, inputs[0].HandsPlayed)
+	require.Equal(t, 7, inputs[0].MeaningfulDecisions)
+	require.Equal(t, 1, inputs[0].AutoActions)
+	require.Equal(t, 1, inputs[0].TimeoutActions)
+	require.Equal(t, 2, inputs[0].InvalidActions)
+}
+
+func TestListActionMeasurementSummariesAggregatesManualTimeoutAndInvalidActions(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	now := time.Date(2026, time.April, 10, 10, 0, 0, 0, time.UTC)
+	waveID := "wave:measurement-summary"
+	tournamentID := "tour:measurement-summary"
+	tableID := "tbl:measurement-summary:01"
+	timeoutSeatID := "seat:measurement-summary:01"
+	payload := json.RawMessage(`{"source":"measurement_summary_test"}`)
+
+	require.NoError(t, repo.UpsertWave(ctx, model.Wave{
+		ID:                  waveID,
+		Mode:                model.RatedMode,
+		State:               model.WaveStateInProgress,
+		RegistrationOpenAt:  now,
+		RegistrationCloseAt: now,
+		ScheduledStartAt:    now,
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "wave-measurement-state",
+			PayloadHash:         "wave-measurement-payload",
+		},
+		Payload: payload,
+	}))
+	require.NoError(t, repo.UpsertTournament(ctx, model.Tournament{
+		ID:     tournamentID,
+		WaveID: waveID,
+		Mode:   model.RatedMode,
+		State:  model.TournamentStateLiveMultiTable,
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "tournament-measurement-state",
+			PayloadHash:         "tournament-measurement-payload",
+		},
+		Payload: payload,
+	}))
+	require.NoError(t, repo.UpsertTable(ctx, model.Table{
+		ID:           tableID,
+		TournamentID: tournamentID,
+		State:        model.TableStateHandLive,
+		TableNo:      1,
+		RoundNo:      1,
+		StateSeq:     1,
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "table-measurement-state",
+			PayloadHash:         "table-measurement-payload",
+		},
+		Payload: payload,
+	}))
+	require.NoError(t, repo.UpsertSeat(ctx, model.Seat{
+		ID:           timeoutSeatID,
+		TableID:      tableID,
+		TournamentID: tournamentID,
+		SeatNo:       1,
+		MinerID:      "miner-timeout",
+		State:        model.SeatStateActive,
+		Stack:        1000,
+		TruthMetadata: model.TruthMetadata{
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "seat-measurement-state",
+			PayloadHash:         "seat-measurement-payload",
+		},
+		Payload: payload,
+	}))
+
+	require.NoError(t, repo.AppendSubmissionLedgerEntries(ctx, []model.SubmissionLedger{
+		{
+			RequestID:        "req:manual:1",
+			TournamentID:     tournamentID,
+			TableID:          tableID,
+			HandID:           "hand:manual:1",
+			PhaseID:          "phase:manual:1",
+			SeatID:           "seat:manual:01",
+			MinerID:          "miner-manual",
+			ExpectedStateSeq: 1,
+			ValidationStatus: "applied",
+			TruthMetadata: model.TruthMetadata{
+				PolicyBundleVersion: "policy-v1",
+				StateHash:           "ledger-manual-1-state",
+				PayloadHash:         "ledger-manual-1-payload",
+			},
+			Payload: payload,
+		},
+		{
+			RequestID:        "req:manual:2",
+			TournamentID:     tournamentID,
+			TableID:          tableID,
+			HandID:           "hand:manual:1",
+			PhaseID:          "phase:manual:1",
+			SeatID:           "seat:manual:01",
+			MinerID:          "miner-manual",
+			ExpectedStateSeq: 2,
+			ValidationStatus: "applied",
+			TruthMetadata: model.TruthMetadata{
+				PolicyBundleVersion: "policy-v1",
+				StateHash:           "ledger-manual-2-state",
+				PayloadHash:         "ledger-manual-2-payload",
+			},
+			Payload: payload,
+		},
+		{
+			RequestID:        "req:invalid:1",
+			TournamentID:     tournamentID,
+			TableID:          tableID,
+			HandID:           "hand:invalid:1",
+			PhaseID:          "phase:invalid:1",
+			SeatID:           "seat:invalid:01",
+			MinerID:          "miner-invalid",
+			ExpectedStateSeq: 99,
+			ValidationStatus: "received",
+			TruthMetadata: model.TruthMetadata{
+				PolicyBundleVersion: "policy-v1",
+				StateHash:           "ledger-invalid-state",
+				PayloadHash:         "ledger-invalid-payload",
+			},
+			Payload: payload,
+		},
+	}))
+	require.NoError(t, repo.AppendActionRecords(ctx, []model.ActionRecord{
+		{
+			RequestID:        "req:manual:1",
+			TournamentID:     tournamentID,
+			TableID:          tableID,
+			HandID:           "hand:manual:1",
+			PhaseID:          "phase:manual:1",
+			SeatID:           "seat:manual:01",
+			ActionType:       "check",
+			ActionSeq:        1,
+			ExpectedStateSeq: 1,
+			AcceptedStateSeq: 2,
+			ValidationStatus: "accepted",
+			ResultEventID:    "event:manual:1",
+			ReceivedAt:       now,
+			TruthMetadata: model.TruthMetadata{
+				PolicyBundleVersion: "policy-v1",
+				StateHash:           "action-manual-1-state",
+				PayloadHash:         "action-manual-1-payload",
+			},
+			Payload: payload,
+		},
+		{
+			RequestID:        "req:manual:2",
+			TournamentID:     tournamentID,
+			TableID:          tableID,
+			HandID:           "hand:manual:1",
+			PhaseID:          "phase:manual:1",
+			SeatID:           "seat:manual:01",
+			ActionType:       "raise",
+			ActionSeq:        2,
+			ExpectedStateSeq: 2,
+			AcceptedStateSeq: 3,
+			ValidationStatus: "accepted",
+			ResultEventID:    "event:manual:2",
+			ReceivedAt:       now,
+			TruthMetadata: model.TruthMetadata{
+				PolicyBundleVersion: "policy-v1",
+				StateHash:           "action-manual-2-state",
+				PayloadHash:         "action-manual-2-payload",
+			},
+			Payload: payload,
+		},
+		{
+			RequestID:        "req:timeout:1",
+			TournamentID:     tournamentID,
+			TableID:          tableID,
+			HandID:           "hand:timeout:1",
+			PhaseID:          "phase:timeout:1",
+			SeatID:           timeoutSeatID,
+			ActionType:       "timeout",
+			ActionSeq:        1,
+			ExpectedStateSeq: 3,
+			AcceptedStateSeq: 4,
+			ValidationStatus: "accepted",
+			ResultEventID:    "event:timeout:1",
+			ReceivedAt:       now,
+			TruthMetadata: model.TruthMetadata{
+				PolicyBundleVersion: "policy-v1",
+				StateHash:           "action-timeout-state",
+				PayloadHash:         "action-timeout-payload",
+			},
+			Payload: payload,
+		},
+	}))
+
+	summaries, err := repo.ListActionMeasurementSummaries(ctx, tournamentID)
+	require.NoError(t, err)
+	byMiner := make(map[string]model.ActionMeasurementSummary, len(summaries))
+	for _, summary := range summaries {
+		byMiner[summary.MinerID] = summary
+	}
+	require.Equal(t, model.ActionMeasurementSummary{
+		MinerID:             "miner-manual",
+		HandsPlayed:         1,
+		MeaningfulDecisions: 2,
+	}, byMiner["miner-manual"])
+	require.Equal(t, model.ActionMeasurementSummary{
+		MinerID:        "miner-timeout",
+		HandsPlayed:    1,
+		AutoActions:    1,
+		TimeoutActions: 1,
+	}, byMiner["miner-timeout"])
+	require.Equal(t, model.ActionMeasurementSummary{
+		MinerID:        "miner-invalid",
+		InvalidActions: 1,
+	}, byMiner["miner-invalid"])
+}
+
+func TestUpsertMinerCompatibilityOnlyTouchesArenaOwnedColumns(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	address := "miner-compat"
+	createdAt := time.Date(2026, time.April, 10, 9, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(2 * time.Hour)
+	seedMinerRow(t, db, seededMinerRow{
+		Address:               address,
+		Name:                  "compat-miner",
+		RegistrationIndex:     17,
+		Status:                "probation",
+		PublicKey:             "pubkey-compat",
+		EconomicUnitID:        "eu:compat",
+		IPAddress:             "127.0.0.1",
+		UserAgentHash:         "ua-hash",
+		TotalRewards:          321,
+		ForecastCommits:       7,
+		ForecastReveals:       6,
+		SettledTasks:          5,
+		CorrectDirectionCount: 4,
+		EdgeScoreTotal:        0.42,
+		HeldRewards:           111,
+		FastTaskOpportunities: 13,
+		FastTaskMisses:        2,
+		FastWindowStartAt:     ptrTime(createdAt.Add(-time.Hour)),
+		AdmissionState:        "open",
+		ModelReliability:      0.98,
+		OpsReliability:        0.91,
+		ArenaMultiplier:       1.02,
+		PublicRank:            nil,
+		PublicELO:             1210,
+		CreatedAt:             createdAt,
+		UpdatedAt:             createdAt,
+	})
+
+	publicRank := 3
+	require.NoError(t, repo.UpsertMinerCompatibility(ctx, model.MinerCompatibility{
+		Address:          address,
+		ModelReliability: 1.07,
+		ArenaMultiplier:  1.18,
+		PublicRank:       &publicRank,
+		PublicELO:        1444,
+		UpdatedAt:        updatedAt,
+	}))
+
+	var (
+		name                  string
+		registrationIndex     int
+		status                string
+		publicKey             string
+		economicUnitID        string
+		ipAddress             sql.NullString
+		userAgentHash         sql.NullString
+		totalRewards          int64
+		forecastCommits       int
+		forecastReveals       int
+		settledTasks          int
+		correctDirectionCount int
+		edgeScoreTotal        float64
+		heldRewards           int64
+		fastTaskOpportunities int
+		fastTaskMisses        int
+		fastWindowStartAt     sql.NullTime
+		admissionState        string
+		modelReliability      float64
+		opsReliability        float64
+		arenaMultiplier       float64
+		storedPublicRank      sql.NullInt64
+		publicELO             int
+		storedCreatedAt       time.Time
+		storedUpdatedAt       time.Time
+	)
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT
+			name,
+			registration_index,
+			status,
+			public_key,
+			economic_unit_id,
+			ip_address,
+			user_agent_hash,
+			total_rewards,
+			forecast_commits,
+			forecast_reveals,
+			settled_tasks,
+			correct_direction_count,
+			edge_score_total,
+			held_rewards,
+			fast_task_opportunities,
+			fast_task_misses,
+			fast_window_start_at,
+			admission_state,
+			model_reliability,
+			ops_reliability,
+			arena_multiplier,
+			public_rank,
+			public_elo,
+			created_at,
+			updated_at
+		FROM miners
+		WHERE address = $1
+	`, address).Scan(
+		&name,
+		&registrationIndex,
+		&status,
+		&publicKey,
+		&economicUnitID,
+		&ipAddress,
+		&userAgentHash,
+		&totalRewards,
+		&forecastCommits,
+		&forecastReveals,
+		&settledTasks,
+		&correctDirectionCount,
+		&edgeScoreTotal,
+		&heldRewards,
+		&fastTaskOpportunities,
+		&fastTaskMisses,
+		&fastWindowStartAt,
+		&admissionState,
+		&modelReliability,
+		&opsReliability,
+		&arenaMultiplier,
+		&storedPublicRank,
+		&publicELO,
+		&storedCreatedAt,
+		&storedUpdatedAt,
+	))
+
+	require.Equal(t, "compat-miner", name)
+	require.Equal(t, 17, registrationIndex)
+	require.Equal(t, "probation", status)
+	require.Equal(t, "pubkey-compat", publicKey)
+	require.Equal(t, "eu:compat", economicUnitID)
+	require.Equal(t, "127.0.0.1", ipAddress.String)
+	require.Equal(t, "ua-hash", userAgentHash.String)
+	require.EqualValues(t, 321, totalRewards)
+	require.Equal(t, 7, forecastCommits)
+	require.Equal(t, 6, forecastReveals)
+	require.Equal(t, 5, settledTasks)
+	require.Equal(t, 4, correctDirectionCount)
+	require.Equal(t, 0.42, edgeScoreTotal)
+	require.EqualValues(t, 111, heldRewards)
+	require.Equal(t, 13, fastTaskOpportunities)
+	require.Equal(t, 2, fastTaskMisses)
+	require.True(t, fastWindowStartAt.Valid)
+	require.Equal(t, createdAt.Add(-time.Hour), fastWindowStartAt.Time.UTC())
+	require.Equal(t, "open", admissionState)
+	require.Equal(t, 1.07, modelReliability)
+	require.Equal(t, 0.91, opsReliability)
+	require.Equal(t, 1.18, arenaMultiplier)
+	require.True(t, storedPublicRank.Valid)
+	require.EqualValues(t, publicRank, storedPublicRank.Int64)
+	require.Equal(t, 1444, publicELO)
+	require.Equal(t, createdAt, storedCreatedAt.UTC())
+	require.Equal(t, updatedAt, storedUpdatedAt.UTC())
+}
+
+func TestUpsertMinerCompatibilityRequiresExistingMiner(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	publicRank := 4
+	err = repo.UpsertMinerCompatibility(ctx, model.MinerCompatibility{
+		Address:          "missing-miner",
+		ModelReliability: 1.04,
+		ArenaMultiplier:  1.09,
+		PublicRank:       &publicRank,
+		PublicELO:        1380,
+		UpdatedAt:        time.Date(2026, time.April, 10, 11, 0, 0, 0, time.UTC),
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "miner not found")
+	require.Equal(t, 0, rowCount(t, db, "miners"))
+}
+
 func rowCount(t *testing.T, db *sql.DB, table string) int {
 	t.Helper()
 
@@ -463,4 +910,106 @@ func rowCount(t *testing.T, db *sql.DB, table string) int {
 
 func ptrTime(value time.Time) *time.Time {
 	return &value
+}
+
+type seededMinerRow struct {
+	Address               string
+	Name                  string
+	RegistrationIndex     int
+	Status                string
+	PublicKey             string
+	EconomicUnitID        string
+	IPAddress             string
+	UserAgentHash         string
+	TotalRewards          int64
+	ForecastCommits       int
+	ForecastReveals       int
+	SettledTasks          int
+	CorrectDirectionCount int
+	EdgeScoreTotal        float64
+	HeldRewards           int64
+	FastTaskOpportunities int
+	FastTaskMisses        int
+	FastWindowStartAt     *time.Time
+	AdmissionState        string
+	ModelReliability      float64
+	OpsReliability        float64
+	ArenaMultiplier       float64
+	PublicRank            *int
+	PublicELO             int
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
+func seedMinerRow(t *testing.T, db *sql.DB, miner seededMinerRow) {
+	t.Helper()
+
+	_, err := db.Exec(`
+		INSERT INTO miners (
+			address,
+			name,
+			registration_index,
+			status,
+			public_key,
+			economic_unit_id,
+			ip_address,
+			user_agent_hash,
+			total_rewards,
+			forecast_commits,
+			forecast_reveals,
+			settled_tasks,
+			correct_direction_count,
+			edge_score_total,
+			held_rewards,
+			fast_task_opportunities,
+			fast_task_misses,
+			fast_window_start_at,
+			admission_state,
+			model_reliability,
+			ops_reliability,
+			arena_multiplier,
+			public_rank,
+			public_elo,
+			created_at,
+			updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+			$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+		)
+	`,
+		miner.Address,
+		miner.Name,
+		miner.RegistrationIndex,
+		miner.Status,
+		miner.PublicKey,
+		miner.EconomicUnitID,
+		nullIfEmpty(miner.IPAddress),
+		nullIfEmpty(miner.UserAgentHash),
+		miner.TotalRewards,
+		miner.ForecastCommits,
+		miner.ForecastReveals,
+		miner.SettledTasks,
+		miner.CorrectDirectionCount,
+		miner.EdgeScoreTotal,
+		miner.HeldRewards,
+		miner.FastTaskOpportunities,
+		miner.FastTaskMisses,
+		miner.FastWindowStartAt,
+		miner.AdmissionState,
+		miner.ModelReliability,
+		miner.OpsReliability,
+		miner.ArenaMultiplier,
+		miner.PublicRank,
+		miner.PublicELO,
+		miner.CreatedAt,
+		miner.UpdatedAt,
+	)
+	require.NoError(t, err)
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }

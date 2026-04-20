@@ -24,12 +24,12 @@
 当前完整链路是一个以 `mining-service` 为运行时权威的服务侧状态机：
 
 1. `server.py` 启动 FastAPI，并根据配置装配 repo、market data provider、chain adapter。
-2. `ForecastMiningService` 在 `reconcile()` 中发布当前 bucket 的短时任务。
+2. `ForecastMiningService` 先发布当前 bucket 的短时任务，再由独立 reconcile 路径处理旧 bucket 的 resolution / settlement。
 3. `LiveMarketDataProvider` 同时抓 Binance 和 Polymarket：
    - Binance 提供盘口、逐笔成交和微观价格信号
    - Polymarket 提供当前 5m market 的 slug、question、CLOB midpoint / book、最终 resolution
 4. miner 通过 `/v1/task-runs/{id}/commit` 和 `/v1/task-runs/{id}/reveal` 提交预测。
-5. 任务到 `resolve_at` 后，服务侧继续轮询 Gamma：
+5. 任务到 `resolve_at` 后，后台 resolution loop 或手动 reconcile endpoint 继续轮询 Gamma：
    - 如果 Polymarket 还没真正 resolved，任务进入 `awaiting_resolution`
    - submission 进入 `pending_resolution`
    - 一旦 Gamma 给出确定 outcome，才进入最终计分
@@ -55,13 +55,16 @@
 - `create_app(...)`
   - 装配 repo、market data provider、chain broadcaster
   - 入口处决定整条链路跑 synthetic 还是 live
+  - runtime 模式下会额外挂起 task resolution loop，把 miner 热路径和旧任务结算拆开
 - `_build_default_market_data_provider(settings)`
   - `live_market_data_enabled=true` 时，默认构造 `HybridMarketDataProvider(live=LiveMarketDataProvider(...))`
   - 这个点修过一次，避免“注入 repository 以后 provider 退回 synthetic”的问题
 - 主要 API
   - `GET /v1/task-runs/active`
+  - `GET /v1/forecast/task-runs/{task_run_id}`
   - `POST /v1/task-runs/{task_run_id}/commit`
   - `POST /v1/task-runs/{task_run_id}/reveal`
+  - `POST /admin/reconcile/resolutions`
   - `GET /admin/settlement-batches`
   - `POST /admin/settlement-batches/{id}/retry-anchor`
   - `POST /admin/settlement-batches/{id}/submit-anchor`
@@ -81,6 +84,9 @@
 - `CLAWCHAIN_FAST_TASK_SECONDS`
 - `CLAWCHAIN_COMMIT_WINDOW_SECONDS`
 - `CLAWCHAIN_REVEAL_WINDOW_SECONDS`
+- `CLAWCHAIN_RESOLUTION_RETRY_SECONDS`
+- `CLAWCHAIN_TASK_RESOLUTION_LOOP_ENABLED`
+- `CLAWCHAIN_TASK_RESOLUTION_LOOP_INTERVAL_SECONDS`
 - `CLAWCHAIN_MAX_POLYMARKET_SNAPSHOT_FRESHNESS_SECONDS`
 
 当前 repo 里 lane 名仍然叫 `forecast_15m`，但实际 bucket 长度由 `fast_task_seconds` 决定。做 5m 实测时，真正要改的是 `CLAWCHAIN_FAST_TASK_SECONDS=300`。
@@ -117,12 +123,17 @@
 
 - `build_fast_task(...)`
   - 生成 task id、publish / commit / reveal / resolve 时间边界
+- `_publish_current_tasks(...)`
+  - 只负责发布当前 bucket task，不处理旧任务 resolution
+- `reconcile_due_work(...)`
+  - 专门跑 due task settlement、reward window、settlement batch 和 rank 刷新
 - `snapshot_metadata(...)`
   - 冻结 `snapshot_source` 与各源 freshness
 - `_settle_due_tasks(...)`
   - 处理 fast task resolution
   - Polymarket 未 resolved 时，把 task 标成 `awaiting_resolution`
   - 把 submission 标成 `pending_resolution`
+  - 现在会写 `last_resolution_attempt_at`，并按 `resolution_retry_seconds` 节流 pending market 的重试
 - `_build_settlement_batches(...)`
   - 把 reward window 汇总到 settlement batch
   - 这里修过一次，保证同一小时内多轮任务继续累加到同一个 open batch，而不是只保留第一次的 `task_count`
@@ -167,6 +178,7 @@
 `skill/scripts/mine.py`
 
 - `get_active_tasks()` 拉取 `/v1/task-runs/active`
+- `get_task_detail()` 拉取 `/v1/forecast/task-runs/{task_run_id}`
 - `compute_prediction(task)` 从冻结快照里算 `p_yes_bps`
 - `post_commit(...)` / `post_reveal(...)` 打提交接口
 - `mine_task(...)` 是单任务 commit-reveal 的完整执行
@@ -339,6 +351,23 @@
 4. 最后再 `retry-anchor -> submit-anchor -> broadcast-typed -> confirm-chain`
 
 否则 anchor 的不是你想要的完整轮次，而只是“截至当下已经 resolved 的那部分”。
+
+### 4.11 `active/detail` 热路径不能顺手做旧任务 resolution
+
+这次 10 round live 里真正把 miner 拖慢的，不是 commit / reveal，而是：
+
+- `/v1/task-runs/active`
+- `/v1/forecast/task-runs/{task_run_id}`
+
+之前这两个接口都会直接触发 `reconcile()`，而 `reconcile()` 会同步去跑旧 bucket 的 Gamma resolution。pending market 一多，miner 刚拿 active list 或 task detail 就会被慢查询拖住。
+
+现在实现已经改成：
+
+- `get_active_tasks()` / `get_task_detail()` 只保证当前 bucket task 已发布
+- 旧任务 resolution 走后台 `task resolution loop`
+- 手动补跑则走 `POST /admin/reconcile/resolutions`
+
+这点对 5m live 压测非常关键，不然 miner 热路径和 Polymarket resolution 延迟会互相污染。
 
 ---
 

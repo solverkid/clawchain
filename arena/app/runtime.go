@@ -1480,6 +1480,10 @@ func (s *runtimeService) completeTournamentLocked(ctx context.Context, waveRunti
 	if err != nil {
 		return err
 	}
+	tournamentRuntime.standing["final_standings"] = finalStandingEntries(completion.Entrants)
+	if err := s.saveTournamentCompletionSnapshotLocked(ctx, tournamentRuntime, currentRoundNo, reason); err != nil {
+		return err
+	}
 	if len(eliminationEvents) > 0 {
 		if err := s.repo.AppendEliminationEvents(ctx, eliminationEvents); err != nil {
 			return err
@@ -1537,6 +1541,37 @@ func (s *runtimeService) completeTournamentLocked(ctx context.Context, waveRunti
 	return nil
 }
 
+func (s *runtimeService) saveTournamentCompletionSnapshotLocked(ctx context.Context, tournamentRuntime *tournamentRuntime, currentRoundNo int, reason string) error {
+	snapshotID := fmt.Sprintf("snap:%s:completed", tournamentRuntime.id)
+	payload := mustJSON(map[string]any{
+		"stage":              "completed",
+		"completed_reason":   reason,
+		"players_remaining":  tournamentRuntime.tournament.PlayersRemaining,
+		"active_table_count": tournamentRuntime.tournament.ActiveTableCount,
+		"round_no":           currentRoundNo,
+		"level_no":           tournamentRuntime.tournament.CurrentLevelNo,
+		"no_multiplier":      tournamentRuntime.tournament.NoMultiplier,
+		"winner_miner_id":    tournamentRuntime.standing["winner_miner_id"],
+		"final_standings":    tournamentRuntime.standing["final_standings"],
+	})
+
+	return s.repo.SaveTournamentSnapshot(ctx, model.TournamentSnapshot{
+		ID:           snapshotID,
+		TournamentID: tournamentRuntime.id,
+		StreamKey:    fmt.Sprintf("tournament:%s", tournamentRuntime.id),
+		StreamSeq:    int64(1_000_000 + currentRoundNo),
+		StateSeq:     int64(currentRoundNo),
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           fmt.Sprintf("snapshot-state:%s:completed", tournamentRuntime.id),
+			PayloadHash:         fmt.Sprintf("snapshot-payload:%s:completed", tournamentRuntime.id),
+		},
+		Payload:   payload,
+		CreatedAt: s.now(),
+	})
+}
+
 func (s *runtimeService) buildTournamentCompletionLocked(ctx context.Context, waveRuntime *waveRuntime, tournamentRuntime *tournamentRuntime, assignments []hub.SeatAssignment, reason string) (rating.Completion, map[string]int, map[string]string, []model.EliminationEvent, error) {
 	entrants := tournamentEntrantsForCompletion(waveRuntime, tournamentRuntime.id)
 	finishRanks := make(map[string]int, len(entrants))
@@ -1567,9 +1602,16 @@ func (s *runtimeService) buildTournamentCompletionLocked(ctx context.Context, wa
 
 	survivors := rankedSurvivors(assignments, seatByID)
 	usedRanks := make(map[int]struct{}, len(entrants))
+	rankSourceByMiner := make(map[string]string, len(entrants))
+	rankTiebreakByMiner := make(map[string]any, len(entrants))
 	for idx, survivor := range survivors {
 		rank := idx + 1
 		finishRanks[survivor.MinerID] = rank
+		rankSourceByMiner[survivor.MinerID] = "survivor_stack_desc"
+		rankTiebreakByMiner[survivor.MinerID] = map[string]any{
+			"final_stack": survivor.Stack,
+			"miner_id":    survivor.MinerID,
+		}
 		usedRanks[rank] = struct{}{}
 	}
 
@@ -1586,6 +1628,13 @@ func (s *runtimeService) buildTournamentCompletionLocked(ctx context.Context, wa
 		}
 		rank := len(entrants) - idx
 		finishRanks[entrant.MinerID] = rank
+		rankSourceByMiner[entrant.MinerID] = "elimination_order"
+		rankTiebreakByMiner[entrant.MinerID] = map[string]any{
+			"occurred_at": event.OccurredAt.UTC().Format(time.RFC3339Nano),
+			"created_at":  event.CreatedAt.UTC().Format(time.RFC3339Nano),
+			"table_id":    event.TableID,
+			"entrant_id":  event.EntrantID,
+		}
 		usedRanks[rank] = struct{}{}
 		eliminationEvents[idx].FinishRank = rank
 	}
@@ -1610,6 +1659,19 @@ func (s *runtimeService) buildTournamentCompletionLocked(ctx context.Context, wa
 			break
 		}
 		finishRanks[minerID] = remainingRanks[idx]
+		rankSourceByMiner[minerID] = "fallback_miner_id"
+		rankTiebreakByMiner[minerID] = map[string]any{
+			"miner_id": minerID,
+		}
+	}
+
+	measurementSummaries, err := s.repo.ListActionMeasurementSummaries(ctx, tournamentRuntime.id)
+	if err != nil {
+		return rating.Completion{}, nil, nil, nil, err
+	}
+	measurementByMiner := make(map[string]model.ActionMeasurementSummary, len(measurementSummaries))
+	for _, summary := range measurementSummaries {
+		measurementByMiner[summary.MinerID] = summary
 	}
 
 	completedEntrants := make([]rating.CompletedEntrant, 0, len(entrants))
@@ -1619,33 +1681,58 @@ func (s *runtimeService) buildTournamentCompletionLocked(ctx context.Context, wa
 		stageReached[entrant.MinerID] = stage
 		finalStack := stackByEntrantID[entrant.ID]
 		percentile := finishPercentile(len(entrants), rank)
+		measurement := measurementByMiner[entrant.MinerID]
+		rankSource := rankSourceByMiner[entrant.MinerID]
+		rankTiebreaker := rankTiebreakByMiner[entrant.MinerID]
 		completedEntrants = append(completedEntrants, rating.CompletedEntrant{
-			EntrantID:        entrant.ID,
-			MinerAddress:     entrant.MinerID,
-			Name:             entrant.MinerID,
-			EconomicUnitID:   entrant.EconomicUnitID,
-			FinishRank:       rank,
-			FinishPercentile: percentile,
-			StageReached:     stage,
+			EntrantID:           entrant.ID,
+			MinerAddress:        entrant.MinerID,
+			Name:                entrant.MinerID,
+			EconomicUnitID:      entrant.EconomicUnitID,
+			FinishRank:          rank,
+			FinishPercentile:    percentile,
+			HandsPlayed:         measurement.HandsPlayed,
+			MeaningfulDecisions: measurement.MeaningfulDecisions,
+			AutoActions:         measurement.AutoActions,
+			TimeoutActions:      measurement.TimeoutActions,
+			InvalidActions:      measurement.InvalidActions,
+			StageReached:        stage,
 			StackPathSummary: mustJSON(map[string]any{
 				"final_stack": finalStack,
 			}),
 			ScoreComponents: mustJSON(map[string]any{
-				"field_size":        len(entrants),
-				"finish_percentile": percentile,
-				"finish_rank":       rank,
-				"survivor_count":    len(survivors),
-				"completed_reason":  reason,
+				"field_size":           len(entrants),
+				"finish_percentile":    percentile,
+				"finish_rank":          rank,
+				"final_stack":          finalStack,
+				"rank_source":          rankSource,
+				"rank_tiebreaker":      rankTiebreaker,
+				"survivor_count":       len(survivors),
+				"completed_reason":     reason,
+				"hands_played":         measurement.HandsPlayed,
+				"meaningful_decisions": measurement.MeaningfulDecisions,
+				"auto_actions":         measurement.AutoActions,
+				"timeout_actions":      measurement.TimeoutActions,
+				"invalid_actions":      measurement.InvalidActions,
 			}),
 			Penalties: mustJSON(map[string]any{
 				"time_cap_finish": reason == "time_cap",
+				"timeout_actions": measurement.TimeoutActions,
+				"invalid_actions": measurement.InvalidActions,
 			}),
 			TournamentScore:   percentile,
 			ConfidenceWeight:  completionConfidenceWeight(reason),
 			TimeCapAdjustment: completionTimeCapAdjustment(reason),
 			Payload: mustJSON(map[string]any{
-				"completed_reason": reason,
-				"final_stack":      finalStack,
+				"completed_reason":     reason,
+				"final_stack":          finalStack,
+				"rank_source":          rankSource,
+				"rank_tiebreaker":      rankTiebreaker,
+				"hands_played":         measurement.HandsPlayed,
+				"meaningful_decisions": measurement.MeaningfulDecisions,
+				"auto_actions":         measurement.AutoActions,
+				"timeout_actions":      measurement.TimeoutActions,
+				"invalid_actions":      measurement.InvalidActions,
 			}),
 		})
 	}
@@ -1740,8 +1827,14 @@ func stageReachedForPlacement(reason, existing string, registrationState model.R
 	if registrationState == model.RegistrationStateDisqualified || existing == "disqualified" {
 		return "disqualified"
 	}
-	if reason == "time_cap" && finishRank > 0 && finishRank <= survivorCount {
-		return "time_cap_finish"
+	if reason == "time_cap" {
+		if finishRank > 0 && finishRank <= survivorCount {
+			return "time_cap_finish"
+		}
+		if existing != "" {
+			return existing
+		}
+		return "eliminated"
 	}
 	if finishRank == 1 && survivorCount == 1 {
 		return "completed"
@@ -2428,6 +2521,64 @@ func standingFromTournament(tournament model.Tournament) map[string]any {
 		standing["status"] = "voided"
 	}
 	return standing
+}
+
+func finalStandingEntries(entrants []rating.CompletedEntrant) []map[string]any {
+	entries := make([]map[string]any, 0, len(entrants))
+	for _, entrant := range entrants {
+		components := jsonObjectFromRaw(entrant.ScoreComponents)
+		entry := map[string]any{
+			"miner_id":             entrant.MinerAddress,
+			"entrant_id":           entrant.EntrantID,
+			"finish_rank":          entrant.FinishRank,
+			"finish_percentile":    entrant.FinishPercentile,
+			"stage_reached":        entrant.StageReached,
+			"hands_played":         entrant.HandsPlayed,
+			"meaningful_decisions": entrant.MeaningfulDecisions,
+			"auto_actions":         entrant.AutoActions,
+			"timeout_actions":      entrant.TimeoutActions,
+			"invalid_actions":      entrant.InvalidActions,
+			"tournament_score":     entrant.TournamentScore,
+			"confidence_weight":    entrant.ConfidenceWeight,
+			"time_cap_adjustment":  entrant.TimeCapAdjustment,
+			"economic_unit_id":     entrant.EconomicUnitID,
+		}
+		if rankSource, ok := components["rank_source"]; ok {
+			entry["rank_source"] = rankSource
+		}
+		if rankTiebreaker, ok := components["rank_tiebreaker"]; ok {
+			entry["rank_tiebreaker"] = rankTiebreaker
+		}
+		if finalStack, ok := finalStackFromSummary(entrant.StackPathSummary); ok {
+			entry["final_stack"] = finalStack
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func finalStackFromSummary(payload json.RawMessage) (int64, bool) {
+	if len(payload) == 0 {
+		return 0, false
+	}
+	var summary struct {
+		FinalStack int64 `json:"final_stack"`
+	}
+	if err := json.Unmarshal(payload, &summary); err != nil {
+		return 0, false
+	}
+	return summary.FinalStack, true
+}
+
+func jsonObjectFromRaw(payload json.RawMessage) map[string]any {
+	if len(payload) == 0 {
+		return nil
+	}
+	var result map[string]any
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil
+	}
+	return result
 }
 
 func refreshStanding(tournamentRuntime *tournamentRuntime) {

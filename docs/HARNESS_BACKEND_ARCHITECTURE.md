@@ -268,7 +268,25 @@ Alpha 默认方法：
 - 不实现 tournament runtime
 - 只接收已完赛 Arena 结果
 - 只生成 `arena_result_entries`
-- 只更新 miner `arena_multiplier`
+- 只 patch 已存在的共享 miner 行
+- 只允许写 lane-owned 字段：
+  - `arena_multiplier`
+- 不得插入 stub miner
+- 不得覆盖 `public_key`、`economic_unit_id`、reward / hold / forecast counters、`admission_state`、`ops_reliability`
+- Poker MTT admin apply 路径同理，只允许 patch `poker_mtt_multiplier`
+- 若目标 miner 不存在，runtime 必须显式报错，而不是 silent no-op
+- Forecast service 内部对共享 miner 的写入也已按职责拆成显式 writer：
+  - `cluster_identity`
+  - `forecast_participation`
+  - `forecast_settlement`
+  - `public_ranking`
+- Reward / settlement shared objects 也已按职责拆分 update path：
+  - `link_reward_window_settlement_batch`
+  - `sync_open_settlement_batch`
+  - `mark_settlement_batch_anchor_ready`
+  - `mark_settlement_batch_anchor_submitted`
+  - `mark_settlement_batch_terminal`
+- `save_reward_window / save_settlement_batch` 的 update 语义在 Fake / Postgres 两个 repo 中保持一致，都是 merge-preserving；窄变更优先走显式 helper，generic save 只保留给 create 或 full materialization
 
 ---
 
@@ -385,6 +403,7 @@ Alpha 默认采用 **forecast-led aggregation**：
 - window id 采用 `rw_YYYYMMDDHH`
 - membership 先落在 `forecast_task_runs.reward_window_id` 和 `forecast_submissions.reward_window_id`
 - 当前只记录 `task_count / submission_count / miner_count / total_reward_amount`
+- `reward_window -> settlement_batch` link 已通过显式 helper 更新，避免 shared window row 被 generic patch 覆盖
 - 还没有 `daily snapshot merge`、`arena snapshot merge`、链锚定和 replay-proof materialization
 
 ### Settlement Batch Builder
@@ -404,6 +423,7 @@ Alpha 默认采用 **forecast-led aggregation**：
   - `anchor_payload_hash`
   - `anchor_schema_version`
   - `canonical_root`
+- open-sync、anchor-ready、anchor-submitted、anchor-terminal 都通过显式 writer 推进，避免 batch row 在状态迁移时丢失未改字段
 - 当前 runtime 已有最小 `anchor_job` 状态机：
   - `anchor_ready`
   - `anchor_submitted`
@@ -571,6 +591,8 @@ Alpha 默认采用 **forecast-led aggregation**：
 - `POST /admin/anchor-jobs/{id}/retry-broadcast-typed`
 - `POST /admin/anchor-jobs/reconcile-chain`
 
+当前 runtime 在启用真实 Postgres repository 时要求配置 `CLAWCHAIN_ADMIN_API_TOKEN`，并对全部 `/admin/*` 路由启用 bearer / header token 校验。
+
 ---
 
 ## 5. 状态模型
@@ -736,10 +758,13 @@ anchor_submitted
 说明：
 
 - `retry-anchor` 只负责重建 canonical payload 并把 batch 推回 `anchor_ready`
+  - 仅允许在 `open / anchor_ready / anchor_failed` 调用
+  - `anchor_submitted / anchored` 后 batch 进入 immutable zone，禁止重算
 - `submit-anchor` 只创建最小 `anchor_job` 记录，并把 batch 推到 `anchor_submitted`
-- `confirm-chain` 会按 `broadcast_tx_hash` 查询链上 tx 结果并自动推进状态
+- `confirm-chain` 会先按 `broadcast_tx_hash` 查询链上 tx 结果，再通过 `abci_query` 校验链上 `x/settlement` anchor 内容与本地 canonical payload 是否一致，然后再推进状态
 - `reconcile-chain` 会批量扫过 pending anchor jobs，并对每个 job 复用 `confirm-chain`
-- `mark-anchored / mark-failed` 仍保留为 operator override，不依赖链 RPC
+- `mark-anchored` 当前复用 `confirm-chain`，不再提供跳过链校验的裸 override
+- `mark-failed` 仍保留为 operator override
 - 当前 batch 上显式持久化 `anchor_job_id`
 
 ---

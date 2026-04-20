@@ -18,6 +18,8 @@ import (
 	"github.com/clawchain/clawchain/arena/app"
 	"github.com/clawchain/clawchain/arena/bot"
 	"github.com/clawchain/clawchain/arena/config"
+	"github.com/clawchain/clawchain/arena/replay"
+	"github.com/clawchain/clawchain/arena/store/postgres"
 	"github.com/clawchain/clawchain/arena/swarm"
 )
 
@@ -725,6 +727,22 @@ func TestNaturalFinishUsesAwardedPotToBustLoserAndCompleteTournament(t *testing.
 	require.Equal(t, "natural_finish", standing["completed_reason"])
 	require.Equal(t, float64(1), standing["players_remaining"])
 	require.Contains(t, []string{"miner_01", "miner_02"}, standing["winner_miner_id"])
+	finalStandings, ok := standing["final_standings"].([]any)
+	require.True(t, ok, "completed standing should include final_standings")
+	require.Len(t, finalStandings, 2)
+	for _, rawEntry := range finalStandings {
+		entry, ok := rawEntry.(map[string]any)
+		require.True(t, ok)
+		require.Contains(t, []float64{1, 2}, entry["finish_rank"])
+		require.NotEmpty(t, entry["miner_id"])
+		require.NotEmpty(t, entry["stage_reached"])
+		require.NotEmpty(t, entry["rank_source"])
+		require.Contains(t, entry, "final_stack")
+		require.Greater(t, entry["hands_played"].(float64), float64(0))
+		require.Greater(t, entry["meaningful_decisions"].(float64), float64(0))
+		require.Equal(t, float64(0), entry["timeout_actions"])
+		require.Equal(t, float64(0), entry["invalid_actions"])
+	}
 }
 
 func TestNaturalFinishWritesRatingInputsAndFinishRanks(t *testing.T) {
@@ -759,10 +777,72 @@ func TestNaturalFinishWritesRatingInputsAndFinishRanks(t *testing.T) {
 
 	require.Equal(t, 2, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1", tournamentID))
 	require.Equal(t, 2, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_result_entries WHERE tournament_id = $1", tournamentID))
+	require.Equal(t, 2, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND hands_played > 0", tournamentID))
+	require.Equal(t, 2, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND meaningful_decisions > 0", tournamentID))
+	require.Zero(t, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND timeout_actions <> 0", tournamentID))
+	require.Zero(t, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND invalid_actions <> 0", tournamentID))
 	require.Equal(t, []int{1, 2}, loadArenaAppIntSlice(t, verifyDB, "SELECT finish_rank FROM arena_rating_input WHERE tournament_id = $1 ORDER BY finish_rank", tournamentID))
 	require.Equal(t, []int{1, 2}, loadArenaAppIntSlice(t, verifyDB, "SELECT finish_rank FROM arena_entrant WHERE tournament_id = $1 ORDER BY finish_rank", tournamentID))
+	require.Equal(t, []string{"completed"}, loadArenaAppStringSlice(t, verifyDB, "SELECT payload->>'stage' FROM arena_tournament_snapshot WHERE tournament_id = $1 ORDER BY stream_seq DESC LIMIT 1", tournamentID))
 	require.Zero(t, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1 AND COALESCE(stage_reached, '') = ''", tournamentID))
 	require.Zero(t, countArenaAppRows(t, verifyDB, "SELECT COUNT(*) FROM arena_entrant WHERE tournament_id = $1 AND COALESCE(stage_reached, '') = ''", tournamentID))
+}
+
+func TestCompletedTournamentReplayHashSurvivesAppRestart(t *testing.T) {
+	db := openArenaAppTestDB(t)
+	resetArenaAppSchema(t, db)
+	require.NoError(t, db.Close())
+
+	first, err := app.New(config.Config{
+		DatabaseURL:     arenaAppTestDatabaseURL(),
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+
+	handler := first.Handler()
+	tournamentID := seedPublishedTournament(t, handler, "wave_completed_replay_restart_1", 2)
+	submitCurrentSeatActionWithAmount(t, handler, tournamentID, "signal_none", 0)
+	submitCurrentSeatActionWithAmount(t, handler, tournamentID, "signal_none", 0)
+	submitCurrentSeatActionWithAmount(t, handler, tournamentID, "pass_probe", 0)
+	submitCurrentSeatActionWithAmount(t, handler, tournamentID, "pass_probe", 0)
+	submitCurrentSeatActionWithAmount(t, handler, tournamentID, "all_in", 0)
+	submitCurrentSeatActionWithAmount(t, handler, tournamentID, "call", 0)
+
+	verifyDB := openArenaAppTestDB(t)
+	repo, err := postgres.NewRepository(verifyDB)
+	require.NoError(t, err)
+	beforeHash, err := replay.NewRepositoryReplayer(repo).ComputeFinalHash(context.Background(), tournamentID)
+	require.NoError(t, err)
+	require.NotEmpty(t, beforeHash)
+	require.NoError(t, verifyDB.Close())
+	require.NoError(t, first.Close(context.Background()))
+
+	restarted, err := app.New(config.Config{
+		DatabaseURL:     arenaAppTestDatabaseURL(),
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, restarted.Close(context.Background()))
+	}()
+
+	verifyDB = openArenaAppTestDB(t)
+	defer func() {
+		require.NoError(t, verifyDB.Close())
+	}()
+	repo, err = postgres.NewRepository(verifyDB)
+	require.NoError(t, err)
+	replayer := replay.NewRepositoryReplayer(repo)
+	afterHash, err := replayer.ComputeFinalHash(context.Background(), tournamentID)
+	require.NoError(t, err)
+	require.Equal(t, beforeHash, afterHash)
+
+	result := replayer.ReplayTournament(context.Background(), tournamentID, beforeHash)
+	require.NoError(t, result.Err)
+	require.True(t, result.ParityOK)
+	require.Equal(t, "ok", result.FinalDisposition)
 }
 
 func TestLiveTableExposesDecisionViewForActingSeat(t *testing.T) {
@@ -1140,6 +1220,25 @@ func loadArenaAppIntSlice(t *testing.T, db *sql.DB, query string, args ...any) [
 	values := make([]int, 0)
 	for rows.Next() {
 		var value int
+		require.NoError(t, rows.Scan(&value))
+		values = append(values, value)
+	}
+	require.NoError(t, rows.Err())
+	return values
+}
+
+func loadArenaAppStringSlice(t *testing.T, db *sql.DB, query string, args ...any) []string {
+	t.Helper()
+
+	rows, err := db.Query(query, args...)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, rows.Close())
+	}()
+
+	values := make([]string, 0)
+	for rows.Next() {
+		var value string
 		require.NoError(t, rows.Scan(&value))
 		values = append(values, value)
 	}

@@ -177,12 +177,12 @@ Rating 应只消费 tournament completion 事实，不反向控制 runtime。
 - reconnect / session ownership 已经补到 tournament-scoped owner / handoff / stale reject，但 expiry / explicit disconnect / forced replace policy 还没完全冻结。
 - operator intervention 已经补到 live `disqualify`，但 `force sitout / ban ladder / richer sanctions` 还没补完。
 - `sit_out` 语义还需要显式冻结。现在字段存在，但“是否继续付盲、是否可 act、是否可争 pot”还没有彻底锁死。
-- completion 已经能冻结 `FinishRank / StageReached / time-cap survivors` 并写出 `arena_rating_input`，但更细的 `tie-break inputs / per-hand measurement / richer standings payload` 还没补完。
+- completion 已经能冻结 `FinishRank / StageReached / time-cap survivors` 并写出 `arena_rating_input`；`per-hand measurement / tie-break source / richer final_standings payload` 也已经接到 completion safe point。
 
 ### P1: 已知但不阻塞这轮
 
 - `all_in / min_raise / reopen action` 仍是简化规则，不是完整 NLHE 语义。
-- runtime completion 仍偏摘要型，postgame / standings 还不够像最终产品。
+- runtime completion 的 postgame standing 已经包含冻结后的 `final_standings`；后续还需要补前端展示、批量报告和更细的质量门槛。
 - replay 更像 snapshot 校验，不是完整 event-sourced rebuild。
 
 ---
@@ -372,11 +372,53 @@ Rating 应只消费 tournament completion 事实，不反向控制 runtime。
 - restart 后 multiplier warmup 不会被当成全新 miner 重新开始
 - time-cap 多 survivor 至少已经有 deterministic 的 stack-based completion ranking
 
-当前剩下的不是“有没有 completion”，而是“completion 够不够细”：
+当前剩下的不是“有没有 completion”，而是“measurement 是否足够接近最终评分模型”：
 
-- 还没有 per-hand 级 measurement 聚合
+- `arena_rating_input` 已经从 `arena_action / submission_ledger / arena_seat` 聚合 `hands_played / meaningful_decisions / auto_actions / timeout_actions / invalid_actions`
+- completed `/standing` 已经暴露冻结后的 `final_standings`，包括 `finish_rank / stage_reached / final_stack / rank_source / rank_tiebreaker / measurement`
 - `time_cap_adjustment / confidence_weight` 目前还是 conservative 默认值，不是最终测量模型
-- standings / postgame payload 仍偏摘要，不是最终产品态
+- `hands_played` 当前按已归属 action 的 distinct hand 统计，不是完整“被发到牌/在场 hand”统计；后续如果要严肃做 median hand quality gate，需要从 hand snapshot 或 seat occupancy 再补一层
+
+### 6.10 recovery / replay parity 第一层补齐
+
+completion pipeline 接上之后，replay 还有两个硬缺口：
+
+- runtime completion 没有保存 `tournament completed` snapshot，repository replay 只能看到旧的 tournament snapshot
+- repository final hash 没覆盖 `arena_elimination_event`，所以 `finish_rank` 被篡改时 replay parity 不一定失败
+
+这轮补齐后：
+
+- natural finish 会写入 `snap:{tournament_id}:completed`
+- completed snapshot 的 `stream_seq` 放到高位，避免和未来 seating snapshots 打平导致 latest 查询不稳定
+- `replay.ComputeFinalHash` 会纳入 elimination events 的 `entrant_id / seat_id / finish_rank / stage_reached / state_hash / payload_hash`
+- app 级回归验证了 completed tournament 在 `App.Close -> App.New` 后 repository final hash 完全一致
+
+这意味着：
+
+- placement truth 被改，final hash 会变
+- completed tournament restart 后 replay parity 有真实 DB 路径覆盖，不再只是 synthetic fixture
+- recovery / replay 已经能覆盖 completion snapshot、table snapshots、elimination truth、rating input 这四类核心 truth
+
+### 6.11 time-cap 多 survivor stage 语义修正
+
+这轮还补了一条 time-cap 专项：
+
+- 16 人两桌同时 time-cap，最终 8 个 survivor
+- survivor 的 `arena_rating_input.stage_reached` 必须是 `time_cap_finish`
+- 非 survivor 必须保持 `eliminated`
+- 不能因为 finish rank 进入 top 9 就被误标成 `final_table`
+
+之前的问题是 `stageReachedForPlacement` 的顺序过于泛化：
+
+- 先按 rank band 推断 `final_table`
+- 再考虑已有 stage
+- 导致 rank 9 这种“final table bubble”在 time-cap 场景下被误标
+
+修复后：
+
+- time-cap 分支先独立处理
+- 只有 survivor 会拿到 `time_cap_finish`
+- 非 survivor 优先保留 authoritative elimination stage
 
 ---
 
@@ -406,9 +448,9 @@ Rating 应只消费 tournament completion 事实，不反向控制 runtime。
 
 建议严格按下面顺序继续：
 
-1. 补 recovery / chaos / replay parity 的系统回归。
-2. 补 final table / heads-up 长局 / time-cap 多 survivor 的专项回归。
-3. 把 per-hand measurement / richer standings / tie-break inputs 补成最终版。
+1. 把 replay 从 snapshot hash 推进到完整 event-tail rebuild。
+2. 把 measurement quality gate 做成批量报告，至少输出 median/p75 hands 和 decisions。
+3. 跑真实随机策略批回归，覆盖 `43 / 56 / 64 / 87 / 111` 每种至少 5 场，并保留 DB+log 联合分析。
 
 如果只做一个下一步，优先做第 `1` 项。  
-原因很简单：completion authoritative pipeline 现在已经补上，下一处真正决定“这套东西能不能抗重启、抗 chaos、抗 replay 偏差”的硬缺口，就是 recovery / replay parity 还没有被系统化打透。  
+原因很简单：completion、measurement、standings 输出现在都已经能落库和回读；下一处真正影响上线可信度的是“DB 最终状态能否由 event tail 完整重放证明”，而不是再加一个摘要字段。
