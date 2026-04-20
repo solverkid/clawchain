@@ -2,11 +2,50 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn the Poker MTT local beta into a production-readiness gated system for final ranking, evidence, identity, 20k reward windows, settlement proof, and later reputation deltas.
+**Goal:** Turn the Poker MTT local beta into a donor-compatible production-readiness gated system for locked final ranking, evidence, reward identity, bounded reward windows, budget reservation, and settlement proof.
 
-**Architecture:** Keep donor gameserver/auth as external references. ClawChain owns a Go sidecar/finalizer/projector contract, a Python mining-service evidence/reward pipeline, and Cosmos `x/settlement` root anchoring. Phase 3 does not enable high-value production rewards by default; it closes the gates required before reward-bearing rollout.
+**Architecture:** Keep donor gameserver/auth as external references. Donor gameserver remains authoritative for live table/runtime/WS behavior, and donor auth remains a runtime-admission interface only. ClawChain owns the adapter/finalizer/projector/evidence/reward/settlement gates around that donor runtime. Phase 3 does not enable high-value production rewards by default; it closes only the minimum gates required before reward-bearing rollout.
 
 **Tech Stack:** Go sidecar/authadapter/pokermtt packages, Python FastAPI mining service, SQLAlchemy/Postgres repository, pytest, Go tests, Cosmos SDK module tests, GitNexus for graph orientation.
+
+---
+
+## 2026-04-20 Wave 1 Scope Reset
+
+This plan was revalidated against `lepoker-auth`, `lepoker-gameserver`, current `clawchain` source, and four GPT-5.4 xhigh review swarms. The result is a deliberate scope reduction.
+
+### P0 required
+
+- Locked canonical final ranking produced from donor runtime plus registration/waitlist/no-show inputs.
+- Unique contiguous payout rank for reward-bearing rows, while preserving donor `display_rank` / `source_rank` for audit.
+- Donor-shaped completed-hand ingest: `POKER_RECORD_TOPIC` mainline, idempotent checkpoint/replay, conflict/DLQ, and freshness watermark.
+- Runtime admission via donor-compatible `token_verify`, but reward eligibility via durable ClawChain reward identity.
+- Bounded DB-backed reward-window build over locked eligible rows only.
+- Minimal shared emission-slice budget reservation before a batch becomes anchorable.
+- Typed settlement query confirmation against stored chain state, not tx success alone.
+- Two release-evidence gates only: one auth-backed 30-player donor finish run, and one donor-shaped 2,000-table / 20k-user ingest+reward+settlement burst proof.
+
+### P1 later
+
+- Window-level `reputation_delta` artifacts and any `x/reputation` write path.
+- Alternative aggregation policies, richer budget lifecycle accounting, and multiplier experimentation beyond one frozen later-window rule.
+- Full long-term HUD/public rating/ELO migration.
+- Rich replay bundles and broader artifact lineage beyond what reward/evidence audit strictly needs.
+
+### Explicit non-goals
+
+- Re-implementing donor runtime or donor control-plane breadth in ClawChain.
+- Porting Cognito/JWKS/social/admin auth parity instead of keeping a thin adapter.
+- Requiring a live 20k-user donor tournament as a Phase 3 prerequisite.
+- Positive reward weighting from hidden eval in Phase 3.
+- Per-hand or per-tournament on-chain writes.
+
+### Scope guardrails
+
+- Admin APIs remain audit/replay/backfill surfaces. The reward-bearing mainline is finish-event finalization into locked artifacts.
+- `token_verify` proves runtime admission only. It does not prove reward-bound miner or economic-unit identity.
+- `POKER_RECORD_CALCULATE_TOPIC` and other secondary donor topics are replay/backfill candidates, not Phase 3 parity requirements.
+- Harness/bootstrap details stay in ops docs; the Phase 3 contract only cares about the evidence they must produce.
 
 ---
 
@@ -19,9 +58,9 @@
 - Modify `authadapter/*`: donor token timeout and non-local missing miner binding behavior.
 - Modify `mining-service/schemas.py`: final ranking projection contract additions.
 - Modify `mining-service/server.py`: projection idempotency, admin principal audit, fail-closed config checks.
-- Modify `mining-service/forecast_engine.py`: reward identity enforcement, policy-owned evidence readiness, bulk reward-window path, multiplier effective-window logic, anchor confirmation states.
-- Modify `mining-service/repository.py` and `mining-service/pg_repository.py`: new repository APIs for MQ checkpoint/conflict/DLQ, bulk final rankings/rating snapshots, reward identity, correction supersession.
-- Modify `mining-service/models.py`: new tables/indexes for reward identity, MQ checkpoint/conflict/DLQ, budget ledger, immutable artifacts if needed.
+- Modify `mining-service/forecast_engine.py`: reward identity enforcement, policy-owned evidence readiness, locked-row reward-window path, frozen budget contract, and anchor confirmation states.
+- Modify `mining-service/repository.py` and `mining-service/pg_repository.py`: new repository APIs for MQ checkpoint/conflict/DLQ, locked final-ranking reads, reward identity, budget reservation, and correction supersession.
+- Modify `mining-service/models.py`: new tables/indexes for reward identity, MQ checkpoint/conflict/DLQ, locked final-ranking artifacts, and the minimal budget ledger.
 - Modify `x/settlement/**` and `proto/clawchain/settlement/v1/**`: generated query path, CLI/gateway wiring, expanded proof fields or artifact-hash proof contract.
 - Add tests under `tests/mining_service/`, `pokermtt/**`, `authadapter/**`, and `x/settlement/**`.
 - Update docs under `docs/` after each wave.
