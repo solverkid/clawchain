@@ -1,9 +1,9 @@
 # Poker MTT Phase 3 Production Readiness Spec
 
-**日期**: 2026-04-17
-**状态**: Phase 3 spec after 6-agent xhigh review；不是 reward-bearing rollout approval
+**日期**: 2026-04-20
+**状态**: Phase 3 closeout spec after multi-agent xhigh review；不是 reward-bearing rollout approval
 **范围**: `poker mtt` independent skill-game mining lane
-**主线 commit**: Phase 2 closeout 已 fast-forward merge 并 push 到 `main` at `2cd78de`
+**主线 commit**: closeout baseline on `main` at `7575d32`
 
 相关文档:
 
@@ -12,7 +12,7 @@
 - `docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md`
 - `docs/POKER_MTT_SIDECAR_INTEGRATION.md`
 - `docs/HARNESS_API_CONTRACTS.md`
-- `docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md`
+- `docs/superpowers/plans/2026-04-20-poker-mtt-phase3-production-readiness.md`
 
 ---
 
@@ -86,7 +86,7 @@ Acceptance:
 - Product docs, reward design, harness contracts, sidecar docs, and implementation plan all say Phase 3 is production readiness, not automatic production launch.
 - Feature flags remain default-off.
 - GitNexus staleness is recorded when reviews use local source as source of truth.
-- A single Phase 3 plan file exists under `docs/superpowers/plans/`.
+- `docs/superpowers/plans/2026-04-20-poker-mtt-phase3-production-readiness.md` is the canonical execution plan; the 2026-04-17 file remains a historical review artifact.
 
 ### G1 - Final Ranking And Donor Parity
 
@@ -204,6 +204,8 @@ Acceptance:
 - Automatic reconcile uses bounded/indexed closed-window query and has EXPLAIN evidence.
 - Budget ledger exists with `budget_source_id`, `emission_epoch_id`, lane, reward window, settlement batch, requested/approved/paid/forfeited/rolled amounts, and `budget_root`.
 - Daily plus weekly payouts share the same configured emission slice and reject over-budget windows before settlement.
+- Budget-ledger accounting is two-stage: build-time reward-window approval records `state=reserved`, `approved_amount`, and `paid_amount=0`; only chain-confirmed anchor completion upgrades the ledger to `state=paid`.
+- `reward_window.state=no_positive_weight` remains the canonical empty-positive window state, while the budget side records `budget_disposition.state=forfeited` with `approved_amount=0`.
 - Window aggregation policy is explicit and versioned. Default: `capped_top3_mean_v1`.
 - Multiplier snapshots have `effective_window_start_at` / `effective_window_end_at` and are treated as later-window inputs.
 
@@ -222,6 +224,7 @@ Acceptance:
 - Daily and weekly Poker MTT windows now consume the same emission epoch slice; same reward window rebuilds are excluded from double-counting, while any other approved ledger in the epoch counts against the cap.
 - Reward-window projection artifacts now include `aggregation_policy_version`, `budget_disposition`, and `budget_root`. The default aggregation policy is `capped_top3_mean_v1`; `max_score_v1` is only available as an explicit policy.
 - `poker_mtt_multiplier_snapshots` now persist `effective_window_start_at` and `effective_window_end_at`, computed as the next UTC daily window after the source result is locked/completed.
+- Reward-window build now consumes multiplier snapshots by effective window and folds them into `input_snapshot_root`, so rebuild idempotence no longer ignores multiplier-input drift.
 - Added focused economics tests for missing/oversized budgets, shared daily/weekly budget slices, stable grinder versus lucky spike aggregation, and multiplier effective-window timing.
 
 ### G5 - Settlement External Query And Bounded Anchor Artifacts
@@ -301,7 +304,7 @@ Acceptance:
 2026-04-19 local-real harness update:
 
 - `non_mock_play_harness.py` now includes explicit random `fold` paths, configurable `--timeout-action-rate`, `action_coverage` summary output, and `--require-action-coverage`. The 30-player finish gate can now fail hard unless fold, all-in, legal nonzero chip sizing, and timeout/no-action were all exercised.
-- `deploy/docker-compose.poker-mtt-local.yml` now includes DynamoDB Local beside Redis and RocketMQ. `deploy/poker-mtt/rocketmq/broker.conf` advertises `brokerIP1=host.docker.internal` with direct `10909/10911/10912` host mappings so the Docker proxy can reach the broker; `deploy/poker-mtt/rocketmq/proxy.json` enables `useEndpointPortFromRequest=true` so donor Go v5 producers receive the externally reachable proxy gRPC route `127.0.0.1:38081`. `scripts/poker_mtt/init_local_dynamodb.sh` bootstraps `poker_mtt_hands` and `poker_mtt_user_hand_history` for local hand-history adapter tests.
+- `deploy/docker-compose.poker-mtt-local.yml` now includes DynamoDB Local beside Redis and RocketMQ. `deploy/poker-mtt/rocketmq/broker.conf` advertises `brokerIP1=host.docker.internal` with direct `10909/10911/10912` host mappings so the Docker proxy can reach the broker; `deploy/poker-mtt/rocketmq/rmq-proxy.json` enables `useEndpointPortFromRequest=true` so donor Go v5 producers receive the externally reachable proxy gRPC route `127.0.0.1:38081`. `scripts/poker_mtt/init_local_dynamodb.sh` bootstraps `poker_mtt_hands` and `poker_mtt_user_hand_history` for local hand-history adapter tests.
 - Local RocketMQ/DynamoDB images should be pre-pulled before deep-real harness timing. A cold `apache/rocketmq:5.3.2` pull is an environment readiness issue and should be captured separately from game/runtime latency. The local compose file intentionally avoids `platform: linux/amd64` so arm64 hosts use the already-pulled native RocketMQ image. Without proxy `useEndpointPortFromRequest`, RocketMQ QueryRoute returns `127.0.0.1:8081` to the host-run donor, which reproduces `telemeter ... create grpc conn failed`; the local gate must fail that condition before running a deep harness.
 - `scripts/poker_mtt/patch_donor_local_safety.py` applies a reversible local donor guard so `DeleteGroupMember()` returns immediately when `chat_group_available=false`, blocking Tencent IM cleanup calls in local harness runs.
 - `scripts/poker_mtt/check_local_run_logs.py` is the local ops scanner for Tencent IM external calls, RocketMQ publish failures, and donor operation-channel overflow. `make test-poker-mtt-phase3-heavy` now records its JSON output as release evidence.
@@ -318,6 +321,7 @@ Acceptance:
   - `non-mock-30-finish-summary.json`
   - `settlement-anchor-query-receipt.json`
 - `artifacts/` is intentionally ignored by git; release evidence should be attached to the release review, not committed into the repository.
+- `scripts/poker_mtt/release_evidence_pack.py` remains an operator-facing bundler. `phase3_release_pack_built=true` means runtime, settlement replay, burst proof, and emitted-MQ replay were assembled into one pack; `phase3_release_pack_complete=true` additionally requires `same_run_live_mq_projector_complete=true`.
 
 ---
 
@@ -355,5 +359,11 @@ Production/reward-bearing rollout remains disabled until a separate release revi
 - metrics/log sink evidence for required Poker MTT observability fields
 - rollback plan for donor runtime, mining-service reward windows, settlement anchoring, and chain submitter
 - signed artifact bundle containing the heavy-gate outputs listed above
+
+The operator-facing review bundle is now a runnable contract:
+
+- command: `make build-poker-mtt-release-review-bundle`
+- review doc: [`docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md)
+- output: `artifacts/poker-mtt/release-review/release-review-bundle.json`
 
 Only after that should `poker_mtt_daily` / `poker_mtt_weekly` be considered for reward-bearing staging rollout.

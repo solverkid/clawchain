@@ -43,6 +43,16 @@ class FrozenClock:
         self.current += timedelta(seconds=seconds)
 
 
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return forecast_engine.isoformat_z(value)
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Replay a donor non-mock runtime sample through the ClawChain poker MTT release chain.",
@@ -227,7 +237,7 @@ async def execute_release_chain(
     project_items = list(project_response["items"])
     eligible_count = sum(1 for item in project_items if item.get("eligible_for_multiplier") is True)
 
-    return {
+    return _json_ready({
         "captured_at": forecast_engine.isoformat_z(clock.now()),
         "source_runtime_summary": summary["mtt_id"],
         "input_paths": {
@@ -345,7 +355,7 @@ async def execute_release_chain(
             and anchor_job_after_confirm is not None
             and anchor_job_after_confirm.get("state") == "anchored",
         },
-    }
+    })
 
 
 def run_release_evidence(

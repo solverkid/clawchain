@@ -17,7 +17,7 @@ def write_json(path: Path, payload: dict) -> Path:
     return path
 
 
-def test_build_release_pack_marks_phase3_complete_but_preserves_known_gap(tmp_path: Path):
+def test_build_release_pack_marks_release_pack_built_but_preserves_known_gap(tmp_path: Path):
     runtime_path = write_json(
         tmp_path / "runtime.json",
         {
@@ -72,7 +72,8 @@ def test_build_release_pack_marks_phase3_complete_but_preserves_known_gap(tmp_pa
     assert pack["gate_status"]["release_chain_complete"] is True
     assert pack["gate_status"]["scale_burst_complete"] is True
     assert pack["gate_status"]["same_run_live_mq_projector_complete"] is False
-    assert pack["gate_status"]["phase3_release_pack_complete"] is True
+    assert pack["gate_status"]["phase3_release_pack_built"] is True
+    assert pack["gate_status"]["phase3_release_pack_complete"] is False
     assert pack["known_gap"]["code"] == "same_run_live_mq_projector_not_recaptured"
     assert pack["payload_hash"].startswith("sha256:")
 
@@ -149,7 +150,8 @@ def test_build_release_pack_includes_emitted_mq_replay_and_narrows_gap(tmp_path:
 
     assert pack["gate_status"]["same_run_donor_emitted_payload_replay_complete"] is True
     assert pack["gate_status"]["same_run_live_mq_projector_complete"] is False
-    assert pack["gate_status"]["phase3_release_pack_complete"] is True
+    assert pack["gate_status"]["phase3_release_pack_built"] is True
+    assert pack["gate_status"]["phase3_release_pack_complete"] is False
     assert pack["known_gap"]["code"] == "broker_acked_same_run_live_projector_not_confirmed"
     assert pack["summary"]["emitted_mq_replay_hand_history_root"] == "sha256:hands"
     assert pack["artifacts"]["emitted_mq_replay"]["path"] == str(emitted_path)
@@ -244,5 +246,6 @@ def test_build_release_pack_accepts_champion_alive_runtime_and_clears_known_gap(
     assert pack["gate_status"]["runtime_realism_complete"] is True
     assert pack["gate_status"]["same_run_donor_emitted_payload_replay_complete"] is True
     assert pack["gate_status"]["same_run_live_mq_projector_complete"] is True
+    assert pack["gate_status"]["phase3_release_pack_built"] is True
     assert pack["gate_status"]["phase3_release_pack_complete"] is True
     assert pack["known_gap"] is None

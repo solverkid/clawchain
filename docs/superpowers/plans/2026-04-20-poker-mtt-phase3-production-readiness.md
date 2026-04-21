@@ -141,11 +141,12 @@ Exit criteria:
 - [x] Aggregate settlement-facing reward rows over reward-owned economic units, not raw donor entrants
 - [x] Ensure rebuild is idempotent and stable for unchanged inputs
 - [x] Reject windows with missing final-ranking root, reward identity, or evidence watermark
-- [x] Freeze `no_positive_weight` behavior so empty-positive windows hold instead of implicitly equal-splitting
+- [x] Freeze `no_positive_weight` behavior so empty-positive windows hold instead of implicitly equal-splitting, with budget disposition explicitly recorded as `forfeited`
 
 Exit criteria:
 
 - reward-window build is bounded, stable, and auditable
+- budget ledger does not mark funds as paid until anchor confirmation; build-time approvals remain `reserved`
 - zero innovation on multiplier/payout logic inside Phase 3 mainline
 
 ---
@@ -192,10 +193,10 @@ Exit criteria:
 
 Evidence captured on 2026-04-20:
 
-- runtime artifact: `build/poker-mtt/non-mock-play-evidence-r5.json`
-- settlement replay artifact: `build/poker-mtt/non-mock-release-evidence-r5.json`
-- same-run emitted-MQ replay artifact: `build/poker-mtt/non-mock-emitted-mq-replay-r5.json`
-- operator release pack: `build/poker-mtt/non-mock-release-pack-r5.json`
+- example operator runtime artifact: `build/poker-mtt/non-mock-play-evidence-r5.json`
+- example operator settlement replay artifact: `build/poker-mtt/non-mock-release-evidence-r5.json`
+- example same-run emitted-MQ replay artifact: `build/poker-mtt/non-mock-emitted-mq-replay-r5.json`
+- example operator release pack: `build/poker-mtt/non-mock-release-pack-r5.json`
 - tournament: `phase3-non-mock-30-r5-1776679820`
 - `joined_users=30`, `received_current_mtt_ranking=30`, `sent_action_total=297`
 - `timeout_no_action_total=30`
@@ -207,7 +208,8 @@ Evidence captured on 2026-04-20:
 - replay harness drove the same donor sample through `apply -> finalize -> reward_window -> settlement_batch -> broadcast -> confirm-chain`
 - donor main-log emitted payloads were replayed through the same completed-hand projector path; `56/56` emitted payloads were accepted and rooted into the finalizer
 - replay proof finished with `reward_window.state=finalized`, `settlement_batch.chain_confirmation_state=confirmed`, `anchor_job.state=anchored`
-- release pack now bundles runtime realism, release-chain proof, same-run emitted-MQ replay, broker-acked live MQ/projector proof, and 20k burst/projector proof into one operator-facing artifact with `phase3_release_pack_complete=true`
+- release pack now bundles runtime realism, release-chain proof, same-run emitted-MQ replay, broker-acked live MQ/projector proof, and 20k burst/projector proof into one operator-facing artifact. `phase3_release_pack_built=true` means the pack assembled successfully; `phase3_release_pack_complete=true` requires the live MQ/projector proof to be present as well.
+- these `build/poker-mtt/*` files are operator-run outputs, not checked-in repository artifacts. The repository release gate remains `make test-poker-mtt-phase3-fast`, `make test-poker-mtt-phase3-ops`, and the heavy-gate evidence under `artifacts/poker-mtt/phase3/`.
 
 Exit criteria:
 

@@ -829,12 +829,139 @@ class PostgresRepository:
             row = await conn.execute(select(miners).where(miners.c.address == address))
             return _row_to_dict(row.first())
 
-    async def update_miner(self, address: str, updates: dict) -> dict:
+    async def _update_miner_fields(self, address: str, updates: dict) -> dict:
         values = _miner_values(updates)
         async with self.engine.begin() as conn:
-            await conn.execute(update(miners).where(miners.c.address == address).values(**values))
+            result = await conn.execute(update(miners).where(miners.c.address == address).values(**values))
+        if result.rowcount == 0:
+            raise ValueError("miner not found")
         miner = await self.get_miner(address)
-        return miner or {}
+        if miner is None:
+            raise ValueError("miner not found")
+        return miner
+
+    async def update_miner(self, address: str, updates: dict) -> dict:
+        return await self._update_miner_fields(address, updates)
+
+    async def update_miner_cluster_identity(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        economic_unit_id: str | None = None,
+        ip_address: str | None = None,
+        user_agent_hash: str | None = None,
+    ) -> dict:
+        updates = {"updated_at": updated_at}
+        if economic_unit_id is not None:
+            updates["economic_unit_id"] = economic_unit_id
+        if ip_address is not None:
+            updates["ip_address"] = ip_address
+        if user_agent_hash is not None:
+            updates["user_agent_hash"] = user_agent_hash
+        return await self._update_miner_fields(address, updates)
+
+    async def update_miner_forecast_participation(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        forecast_commits: int | None = None,
+        forecast_reveals: int | None = None,
+        ops_reliability: float | None = None,
+        fast_task_opportunities: int | None = None,
+        fast_task_misses: int | None = None,
+        fast_window_start_at: datetime | str | None = None,
+    ) -> dict:
+        updates = {"updated_at": updated_at}
+        if forecast_commits is not None:
+            updates["forecast_commits"] = forecast_commits
+        if forecast_reveals is not None:
+            updates["forecast_reveals"] = forecast_reveals
+        if ops_reliability is not None:
+            updates["ops_reliability"] = ops_reliability
+        if fast_task_opportunities is not None:
+            updates["fast_task_opportunities"] = fast_task_opportunities
+        if fast_task_misses is not None:
+            updates["fast_task_misses"] = fast_task_misses
+        if fast_window_start_at is not None:
+            updates["fast_window_start_at"] = fast_window_start_at
+        return await self._update_miner_fields(address, updates)
+
+    async def update_miner_forecast_settlement(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        total_rewards: int | None = None,
+        held_rewards: int | None = None,
+        settled_tasks: int | None = None,
+        correct_direction_count: int | None = None,
+        edge_score_total: float | None = None,
+        model_reliability: float | None = None,
+        admission_state: str | None = None,
+    ) -> dict:
+        updates = {"updated_at": updated_at}
+        if total_rewards is not None:
+            updates["total_rewards"] = total_rewards
+        if held_rewards is not None:
+            updates["held_rewards"] = held_rewards
+        if settled_tasks is not None:
+            updates["settled_tasks"] = settled_tasks
+        if correct_direction_count is not None:
+            updates["correct_direction_count"] = correct_direction_count
+        if edge_score_total is not None:
+            updates["edge_score_total"] = edge_score_total
+        if model_reliability is not None:
+            updates["model_reliability"] = model_reliability
+        if admission_state is not None:
+            updates["admission_state"] = admission_state
+        return await self._update_miner_fields(address, updates)
+
+    async def update_miner_public_ranking(
+        self,
+        address: str,
+        *,
+        public_rank: int,
+        public_elo: int,
+    ) -> dict:
+        return await self._update_miner_fields(
+            address,
+            {
+                "public_rank": public_rank,
+                "public_elo": public_elo,
+            },
+        )
+
+    async def update_arena_miner_multiplier(
+        self,
+        address: str,
+        *,
+        arena_multiplier: float,
+        updated_at: datetime | str,
+    ) -> dict:
+        return await self._update_miner_fields(
+            address,
+            {
+                "arena_multiplier": arena_multiplier,
+                "updated_at": updated_at,
+            },
+        )
+
+    async def update_poker_mtt_miner_multiplier(
+        self,
+        address: str,
+        *,
+        poker_mtt_multiplier: float,
+        updated_at: datetime | str,
+    ) -> dict:
+        return await self._update_miner_fields(
+            address,
+            {
+                "poker_mtt_multiplier": poker_mtt_multiplier,
+                "updated_at": updated_at,
+            },
+        )
 
     async def list_miners(self) -> list[dict]:
         async with self.engine.connect() as conn:
@@ -982,20 +1109,45 @@ class PostgresRepository:
             return [_hold_entry_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_reward_window(self, reward_window: dict) -> dict:
-        values = _reward_window_values(reward_window)
         async with self.engine.begin() as conn:
-            existing = await conn.execute(select(reward_windows.c.id).where(reward_windows.c.id == reward_window["id"]))
-            if existing.scalar_one_or_none():
+            existing = await conn.execute(select(reward_windows).where(reward_windows.c.id == reward_window["id"]))
+            existing_reward_window = _reward_window_row_to_dict(existing.first())
+            if existing_reward_window:
+                merged = deepcopy(existing_reward_window)
+                merged.update(deepcopy(reward_window))
                 await conn.execute(
                     update(reward_windows)
                     .where(reward_windows.c.id == reward_window["id"])
-                    .values(**values)
+                    .values(**_reward_window_values(merged))
                 )
             else:
-                await conn.execute(insert(reward_windows).values(**values))
+                await conn.execute(insert(reward_windows).values(**_reward_window_values(reward_window)))
         async with self.engine.connect() as conn:
             row = await conn.execute(select(reward_windows).where(reward_windows.c.id == reward_window["id"]))
             return _reward_window_row_to_dict(row.first()) or reward_window
+
+    async def link_reward_window_settlement_batch(
+        self,
+        reward_window_id: str,
+        *,
+        settlement_batch_id: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(reward_windows)
+                .where(reward_windows.c.id == reward_window_id)
+                .values(
+                    settlement_batch_id=settlement_batch_id,
+                    updated_at=_maybe_dt(updated_at),
+                )
+            )
+        if result.rowcount == 0:
+            raise ValueError("reward window not found")
+        reward_window = await self.get_reward_window(reward_window_id)
+        if reward_window is None:
+            raise ValueError("reward window not found")
+        return reward_window
 
     async def get_reward_window(self, reward_window_id: str) -> dict | None:
         async with self.engine.connect() as conn:
@@ -1066,24 +1218,176 @@ class PostgresRepository:
             return [_poker_mtt_budget_ledger_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_settlement_batch(self, settlement_batch: dict) -> dict:
-        values = _settlement_batch_values(settlement_batch)
         async with self.engine.begin() as conn:
             existing = await conn.execute(
-                select(settlement_batches.c.id).where(settlement_batches.c.id == settlement_batch["id"])
+                select(settlement_batches).where(settlement_batches.c.id == settlement_batch["id"])
             )
-            if existing.scalar_one_or_none():
+            existing_batch = _settlement_batch_row_to_dict(existing.first())
+            if existing_batch:
+                merged = deepcopy(existing_batch)
+                merged.update(deepcopy(settlement_batch))
                 await conn.execute(
                     update(settlement_batches)
                     .where(settlement_batches.c.id == settlement_batch["id"])
-                    .values(**values)
+                    .values(**_settlement_batch_values(merged))
                 )
             else:
-                await conn.execute(insert(settlement_batches).values(**values))
+                await conn.execute(insert(settlement_batches).values(**_settlement_batch_values(settlement_batch)))
         async with self.engine.connect() as conn:
             row = await conn.execute(
                 select(settlement_batches).where(settlement_batches.c.id == settlement_batch["id"])
             )
             return _settlement_batch_row_to_dict(row.first()) or settlement_batch
+
+    async def sync_open_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        lane: str,
+        window_start_at: datetime | str,
+        window_end_at: datetime | str,
+        reward_window_ids: list[str],
+        policy_bundle_version: str,
+        task_count: int,
+        miner_count: int,
+        total_reward_amount: int,
+        updated_at: datetime | str,
+        created_at: datetime | str | None = None,
+    ) -> dict:
+        payload = {
+            "id": settlement_batch_id,
+            "lane": lane,
+            "state": "open",
+            "window_start_at": window_start_at,
+            "window_end_at": window_end_at,
+            "reward_window_ids": reward_window_ids,
+            "policy_bundle_version": policy_bundle_version,
+            "task_count": task_count,
+            "miner_count": miner_count,
+            "total_reward_amount": total_reward_amount,
+            "updated_at": updated_at,
+        }
+        if created_at is not None:
+            payload.update(
+                {
+                    "anchor_job_id": None,
+                    "anchor_schema_version": None,
+                    "canonical_root": None,
+                    "anchor_payload_json": None,
+                    "anchor_payload_hash": None,
+                    "created_at": created_at,
+                }
+            )
+        return await self.save_settlement_batch(payload)
+
+    async def mark_settlement_batch_anchor_ready(
+        self,
+        settlement_batch_id: str,
+        *,
+        policy_bundle_version: str,
+        anchor_schema_version: str,
+        canonical_root: str,
+        anchor_payload_json: dict,
+        anchor_payload_hash: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(settlement_batches)
+                .where(settlement_batches.c.id == settlement_batch_id)
+                .values(
+                    state="anchor_ready",
+                    anchor_job_id=None,
+                    policy_bundle_version=policy_bundle_version,
+                    anchor_schema_version=anchor_schema_version,
+                    canonical_root=canonical_root,
+                    anchor_payload_json=anchor_payload_json,
+                    anchor_payload_hash=anchor_payload_hash,
+                    updated_at=_maybe_dt(updated_at),
+                )
+            )
+        if result.rowcount == 0:
+            raise ValueError("settlement batch not found")
+        batch = await self.get_settlement_batch(settlement_batch_id)
+        if batch is None:
+            raise ValueError("settlement batch not found")
+        return batch
+
+    async def mark_settlement_batch_anchor_submitted(
+        self,
+        settlement_batch_id: str,
+        *,
+        anchor_job_id: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(settlement_batches)
+                .where(settlement_batches.c.id == settlement_batch_id)
+                .values(
+                    state="anchor_submitted",
+                    anchor_job_id=anchor_job_id,
+                    updated_at=_maybe_dt(updated_at),
+                )
+            )
+        if result.rowcount == 0:
+            raise ValueError("settlement batch not found")
+        batch = await self.get_settlement_batch(settlement_batch_id)
+        if batch is None:
+            raise ValueError("settlement batch not found")
+        return batch
+
+    async def mark_settlement_batch_terminal(
+        self,
+        settlement_batch_id: str,
+        *,
+        state: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(settlement_batches)
+                .where(settlement_batches.c.id == settlement_batch_id)
+                .values(
+                    state=state,
+                    updated_at=_maybe_dt(updated_at),
+                )
+            )
+        if result.rowcount == 0:
+            raise ValueError("settlement batch not found")
+        batch = await self.get_settlement_batch(settlement_batch_id)
+        if batch is None:
+            raise ValueError("settlement batch not found")
+        return batch
+
+    async def cancel_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        total_reward_amount: int,
+        updated_at: datetime | str,
+    ) -> dict:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(settlement_batches)
+                .where(settlement_batches.c.id == settlement_batch_id)
+                .values(
+                    state="cancelled",
+                    total_reward_amount=total_reward_amount,
+                    anchor_job_id=None,
+                    anchor_schema_version=None,
+                    canonical_root=None,
+                    anchor_payload_json=None,
+                    anchor_payload_hash=None,
+                    updated_at=_maybe_dt(updated_at),
+                )
+            )
+        if result.rowcount == 0:
+            raise ValueError("settlement batch not found")
+        batch = await self.get_settlement_batch(settlement_batch_id)
+        if batch is None:
+            raise ValueError("settlement batch not found")
+        return batch
 
     async def get_settlement_batch(self, settlement_batch_id: str) -> dict | None:
         async with self.engine.connect() as conn:
@@ -1104,20 +1408,100 @@ class PostgresRepository:
             return [_settlement_batch_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_anchor_job(self, anchor_job: dict) -> dict:
-        values = _anchor_job_values(anchor_job)
         async with self.engine.begin() as conn:
-            existing = await conn.execute(select(anchor_jobs.c.id).where(anchor_jobs.c.id == anchor_job["id"]))
-            if existing.scalar_one_or_none():
+            existing = await conn.execute(select(anchor_jobs).where(anchor_jobs.c.id == anchor_job["id"]))
+            existing_row = existing.first()
+            existing_anchor_job = _anchor_job_row_to_dict(existing_row)
+            if existing_anchor_job:
+                merged = deepcopy(existing_anchor_job)
+                merged.update(deepcopy(anchor_job))
                 await conn.execute(
                     update(anchor_jobs)
                     .where(anchor_jobs.c.id == anchor_job["id"])
-                    .values(**values)
+                    .values(**_anchor_job_values(merged))
                 )
             else:
-                await conn.execute(insert(anchor_jobs).values(**values))
+                await conn.execute(insert(anchor_jobs).values(**_anchor_job_values(anchor_job)))
         async with self.engine.connect() as conn:
             row = await conn.execute(select(anchor_jobs).where(anchor_jobs.c.id == anchor_job["id"]))
             return _anchor_job_row_to_dict(row.first()) or anchor_job
+
+    async def update_anchor_job_broadcast(
+        self,
+        anchor_job_id: str,
+        *,
+        broadcast_status: str,
+        broadcast_tx_hash: str | None,
+        last_broadcast_at: datetime | str,
+        updated_at: datetime | str,
+    ) -> dict:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(anchor_jobs)
+                .where(anchor_jobs.c.id == anchor_job_id)
+                .values(
+                    state="anchor_submitted",
+                    broadcast_status=broadcast_status,
+                    broadcast_tx_hash=broadcast_tx_hash,
+                    last_broadcast_at=_maybe_dt(last_broadcast_at),
+                    updated_at=_maybe_dt(updated_at),
+                )
+            )
+            if result.rowcount == 0:
+                raise ValueError(f"anchor job not found: {anchor_job_id}")
+        anchor_job = await self.get_anchor_job(anchor_job_id)
+        return anchor_job or {}
+
+    async def update_anchor_job_confirmation(
+        self,
+        anchor_job_id: str,
+        *,
+        chain_confirmation_status: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(anchor_jobs)
+                .where(anchor_jobs.c.id == anchor_job_id)
+                .values(
+                    chain_confirmation_status=chain_confirmation_status,
+                    updated_at=_maybe_dt(updated_at),
+                )
+            )
+            if result.rowcount == 0:
+                raise ValueError(f"anchor job not found: {anchor_job_id}")
+        anchor_job = await self.get_anchor_job(anchor_job_id)
+        return anchor_job or {}
+
+    async def mark_anchor_job_terminal(
+        self,
+        anchor_job_id: str,
+        *,
+        state: str,
+        updated_at: datetime | str,
+        anchored_at: datetime | str | None = None,
+        failure_reason: str | None = None,
+        chain_confirmation_status: str | None = None,
+    ) -> dict:
+        values: dict = {
+            "state": state,
+            "updated_at": _maybe_dt(updated_at),
+            "failure_reason": failure_reason,
+        }
+        if anchored_at is not None:
+            values["anchored_at"] = _maybe_dt(anchored_at)
+        if chain_confirmation_status is not None:
+            values["chain_confirmation_status"] = chain_confirmation_status
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(anchor_jobs)
+                .where(anchor_jobs.c.id == anchor_job_id)
+                .values(**values)
+            )
+            if result.rowcount == 0:
+                raise ValueError(f"anchor job not found: {anchor_job_id}")
+        anchor_job = await self.get_anchor_job(anchor_job_id)
+        return anchor_job or {}
 
     async def get_anchor_job(self, anchor_job_id: str) -> dict | None:
         async with self.engine.connect() as conn:
@@ -1136,17 +1520,20 @@ class PostgresRepository:
             return [_anchor_job_row_to_dict(row) for row in rows.fetchall()]
 
     async def save_artifact(self, artifact: dict) -> dict:
-        values = _artifact_values(artifact)
         async with self.engine.begin() as conn:
-            existing = await conn.execute(select(artifacts.c.id).where(artifacts.c.id == artifact["id"]))
-            if existing.scalar_one_or_none():
+            existing = await conn.execute(select(artifacts).where(artifacts.c.id == artifact["id"]))
+            existing_row = existing.first()
+            existing_artifact = _artifact_row_to_dict(existing_row)
+            if existing_artifact:
+                merged = deepcopy(existing_artifact)
+                merged.update(deepcopy(artifact))
                 await conn.execute(
                     update(artifacts)
                     .where(artifacts.c.id == artifact["id"])
-                    .values(**values)
+                    .values(**_artifact_values(merged))
                 )
             else:
-                await conn.execute(insert(artifacts).values(**values))
+                await conn.execute(insert(artifacts).values(**_artifact_values(artifact)))
         async with self.engine.connect() as conn:
             row = await conn.execute(select(artifacts).where(artifacts.c.id == artifact["id"]))
             return _artifact_row_to_dict(row.first()) or artifact
@@ -1779,7 +2166,11 @@ class PostgresRepository:
             .where(poker_mtt_result_entries.c.locked_at < window_end)
             .where(poker_mtt_result_entries.c.rated_or_practice == "rated")
             .where(poker_mtt_result_entries.c.human_only.is_(True))
-            .where(poker_mtt_result_entries.c.evaluation_state == "final")
+            .where(
+                poker_mtt_result_entries.c.evaluation_state.in_(
+                    ("final", "provisional") if include_provisional else ("final",)
+                )
+            )
             .where(poker_mtt_result_entries.c.evaluation_version.in_(compatible_policy_versions))
             .where(poker_mtt_result_entries.c.evidence_state.in_(sorted(poker_mtt_results.REWARD_READY_EVIDENCE_STATES)))
             .where(poker_mtt_result_entries.c.final_ranking_id.is_not(None))
@@ -1840,6 +2231,7 @@ class PostgresRepository:
         results: list[dict] = []
         final_rankings_by_id: dict[str, dict] = {}
         miners_by_address: dict[str, dict] = {}
+        multiplier_snapshots_by_miner: dict[str, list[dict]] = {}
         async with self.engine.connect() as conn:
             rows = await conn.execute(query)
             for row in rows.fetchall():
@@ -1857,6 +2249,27 @@ class PostgresRepository:
                     final_rankings_by_id[final_ranking["id"]] = final_ranking
                 if miner:
                     miners_by_address[miner["address"]] = miner
+            if miners_by_address:
+                multiplier_query = (
+                    select(poker_mtt_multiplier_snapshots)
+                    .where(poker_mtt_multiplier_snapshots.c.miner_address.in_(sorted(miners_by_address)))
+                    .where(poker_mtt_multiplier_snapshots.c.effective_window_start_at.is_not(None))
+                    .where(poker_mtt_multiplier_snapshots.c.effective_window_end_at.is_not(None))
+                    .where(poker_mtt_multiplier_snapshots.c.effective_window_start_at < window_end)
+                    .where(poker_mtt_multiplier_snapshots.c.effective_window_end_at > window_start)
+                    .order_by(
+                        poker_mtt_multiplier_snapshots.c.miner_address.asc(),
+                        poker_mtt_multiplier_snapshots.c.effective_window_start_at.asc(),
+                        poker_mtt_multiplier_snapshots.c.updated_at.asc(),
+                        poker_mtt_multiplier_snapshots.c.id.asc(),
+                    )
+                )
+                multiplier_rows = await conn.execute(multiplier_query)
+                for row in multiplier_rows.fetchall():
+                    snapshot = _poker_mtt_multiplier_snapshot_row_to_dict(row)
+                    if not snapshot:
+                        continue
+                    multiplier_snapshots_by_miner.setdefault(snapshot["miner_address"], []).append(snapshot)
         miner_addresses = sorted(miners_by_address)
         rating_snapshots = await self.list_latest_poker_mtt_rating_snapshots_for_miners(miner_addresses)
         return {
@@ -1864,6 +2277,7 @@ class PostgresRepository:
             "final_rankings_by_id": final_rankings_by_id,
             "miners_by_address": miners_by_address,
             "rating_snapshots_by_miner": {row["miner_address"]: row for row in rating_snapshots},
+            "multiplier_snapshots_by_miner": multiplier_snapshots_by_miner,
         }
 
     async def list_poker_mtt_closed_reward_window_candidates(

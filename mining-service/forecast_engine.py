@@ -739,6 +739,7 @@ def _poker_mtt_reward_window_input_root(
     final_rankings_by_id: dict[str, dict],
     miners_by_address: dict[str, dict],
     rating_snapshots_by_miner: dict[str, dict],
+    multiplier_input_rows: list[dict] | None = None,
 ) -> str:
     result_refs = []
     miner_refs = []
@@ -814,6 +815,7 @@ def _poker_mtt_reward_window_input_root(
             "final_ranking_refs": sorted(final_ranking_refs, key=lambda item: item["id"] or ""),
             "miner_refs": sorted(miner_refs, key=lambda item: item["address"] or ""),
             "rating_refs": sorted(rating_refs, key=lambda item: item["miner_address"] or ""),
+            "multiplier_refs": list(multiplier_input_rows or []),
         }
     )
 
@@ -938,6 +940,65 @@ def _poker_mtt_multiplier_effective_window(value: datetime) -> tuple[datetime, d
     return next_start, next_start + timedelta(days=1)
 
 
+def _poker_mtt_resolve_effective_reward_multiplier(
+    snapshot_rows: list[dict],
+    *,
+    effective_at: datetime | str | None,
+) -> tuple[float, dict | None]:
+    if effective_at is None:
+        return 1.0, None
+    target = as_utc_datetime(effective_at).replace(microsecond=0)
+    applicable = []
+    for row in snapshot_rows:
+        start = row.get("effective_window_start_at")
+        end = row.get("effective_window_end_at")
+        if not start or not end:
+            continue
+        start_at = as_utc_datetime(start).replace(microsecond=0)
+        end_at = as_utc_datetime(end).replace(microsecond=0)
+        if start_at <= target < end_at:
+            applicable.append((start_at, as_utc_datetime(row.get("updated_at") or start).replace(microsecond=0), row))
+    if not applicable:
+        return 1.0, None
+    applicable.sort(key=lambda item: (item[0], item[1], item[2].get("id") or ""))
+    chosen = applicable[-1][2]
+    return float(chosen.get("multiplier_after") or 1.0), chosen
+
+
+def _poker_mtt_apply_effective_reward_multipliers(
+    selected_results: list[dict],
+    *,
+    multiplier_snapshots_by_miner: dict[str, list[dict]],
+) -> tuple[list[dict], list[dict]]:
+    weighted_results: list[dict] = []
+    multiplier_input_rows: list[dict] = []
+    for result in selected_results:
+        reward_multiplier, snapshot = _poker_mtt_resolve_effective_reward_multiplier(
+            multiplier_snapshots_by_miner.get(result["miner_address"]) or [],
+            effective_at=result.get("locked_at") or result.get("anchorable_at"),
+        )
+        weighted_results.append(
+            {
+                **result,
+                "total_score": round(float(result.get("total_score", 0.0) or 0.0) * reward_multiplier, 6),
+            }
+        )
+        multiplier_input_rows.append(
+            {
+                "poker_mtt_result_id": result["id"],
+                "miner_address": result["miner_address"],
+                "economic_unit_id": result.get("economic_unit_id"),
+                "effective_reward_multiplier": round(reward_multiplier, 6),
+                "multiplier_snapshot_id": snapshot.get("id") if snapshot else None,
+                "source_result_id": snapshot.get("source_result_id") if snapshot else None,
+                "effective_window_start_at": snapshot.get("effective_window_start_at") if snapshot else None,
+                "effective_window_end_at": snapshot.get("effective_window_end_at") if snapshot else None,
+            }
+        )
+    multiplier_input_rows.sort(key=lambda item: item["poker_mtt_result_id"])
+    return weighted_results, multiplier_input_rows
+
+
 def _poker_mtt_reward_aggregation_policy_version(settings: ForecastSettings) -> str:
     return getattr(settings, "poker_mtt_reward_aggregation_policy_version", "capped_top3_mean_v1") or "capped_top3_mean_v1"
 
@@ -946,10 +1007,13 @@ def _poker_mtt_aggregate_reward_weights(
     selected_results: list[dict],
     *,
     policy_version: str,
+    miners_by_address: dict[str, dict] | None = None,
 ) -> tuple[dict[str, float], dict[str, int], dict[str, str]]:
     grouped: dict[str, list[dict]] = {}
     for result in selected_results:
-        economic_unit_id = result.get("economic_unit_id") or result["miner_address"]
+        miner_address = result["miner_address"]
+        miner = (miners_by_address or {}).get(miner_address) or {}
+        economic_unit_id = miner.get("economic_unit_id") or result.get("economic_unit_id") or miner_address
         grouped.setdefault(economic_unit_id, []).append(result)
 
     score_weights: dict[str, float] = {}
@@ -1344,12 +1408,10 @@ class ForecastMiningService:
         for existing in existing_miners:
             new_component_id = component_map.get(existing["address"])
             if new_component_id and new_component_id != existing.get("economic_unit_id"):
-                await self.repo.update_miner(
+                await self.repo.update_miner_cluster_identity(
                     existing["address"],
-                    {
-                        "economic_unit_id": new_component_id,
-                        "updated_at": now,
-                    },
+                    economic_unit_id=new_component_id,
+                    updated_at=now,
                 )
                 all_miners = [
                     {**miner_item, "economic_unit_id": new_component_id}
@@ -1440,12 +1502,10 @@ class ForecastMiningService:
                 "updated_at": isoformat_z(accepted_at),
             }
         )
-        await self.repo.update_miner(
+        await self.repo.update_miner_forecast_participation(
             miner_address,
-            {
-                "forecast_commits": miner["forecast_commits"] + 1,
-                "updated_at": accepted_at,
-            },
+            forecast_commits=miner["forecast_commits"] + 1,
+            updated_at=accepted_at,
         )
         return saved
 
@@ -1522,13 +1582,11 @@ class ForecastMiningService:
 
         reveal_count = miner["forecast_reveals"] + 1
         ops_reliability = self._compute_ops_reliability({**miner, "forecast_reveals": reveal_count})
-        await self.repo.update_miner(
+        await self.repo.update_miner_forecast_participation(
             miner_address,
-            {
-                "forecast_reveals": reveal_count,
-                "ops_reliability": ops_reliability,
-                "updated_at": accepted_at,
-            },
+            forecast_reveals=reveal_count,
+            ops_reliability=ops_reliability,
+            updated_at=accepted_at,
         )
         return saved
 
@@ -2077,7 +2135,15 @@ class ForecastMiningService:
             "updated_at": isoformat_z(current),
         }
         await self._upsert_settlement_anchor_artifact(candidate_batch, current, pages=anchor_pages)
-        saved = await self.repo.save_settlement_batch(candidate_batch)
+        saved = await self.repo.mark_settlement_batch_anchor_ready(
+            settlement_batch_id=settlement_batch_id,
+            policy_bundle_version=policy_bundle_version,
+            anchor_schema_version=ANCHOR_PAYLOAD_SCHEMA_VERSION,
+            canonical_root=canonical_root,
+            anchor_payload_json=anchor_payload_json,
+            anchor_payload_hash=anchor_payload_hash,
+            updated_at=isoformat_z(current),
+        )
         return _summarize_settlement_batch_response(saved)
 
     async def list_anchor_jobs(self, *, now: datetime | None = None) -> list[dict]:
@@ -2137,15 +2203,12 @@ class ForecastMiningService:
             await self.mark_anchor_job_failed(anchor_job_id, failure_reason=str(exc), now=current)
             raise
 
-        saved_job = await self.repo.save_anchor_job(
-            {
-                **anchor_job,
-                "state": "anchor_submitted",
-                "broadcast_status": "broadcast_submitted",
-                "broadcast_tx_hash": receipt.get("tx_hash"),
-                "last_broadcast_at": receipt.get("broadcast_at") or isoformat_z(current),
-                "updated_at": isoformat_z(current),
-            }
+        saved_job = await self.repo.update_anchor_job_broadcast(
+            anchor_job_id,
+            broadcast_status="broadcast_submitted",
+            broadcast_tx_hash=receipt.get("tx_hash"),
+            last_broadcast_at=receipt.get("broadcast_at") or isoformat_z(current),
+            updated_at=current,
         )
         await self.repo.save_artifact(
             {
@@ -2201,15 +2264,12 @@ class ForecastMiningService:
             await self.mark_anchor_job_failed(anchor_job_id, failure_reason=str(exc), now=current)
             raise
 
-        saved_job = await self.repo.save_anchor_job(
-            {
-                **anchor_job,
-                "state": "anchor_submitted",
-                "broadcast_status": "broadcast_submitted",
-                "broadcast_tx_hash": receipt.get("tx_hash"),
-                "last_broadcast_at": receipt.get("broadcast_at") or isoformat_z(current),
-                "updated_at": isoformat_z(current),
-            }
+        saved_job = await self.repo.update_anchor_job_broadcast(
+            anchor_job_id,
+            broadcast_status="broadcast_submitted",
+            broadcast_tx_hash=receipt.get("tx_hash"),
+            last_broadcast_at=receipt.get("broadcast_at") or isoformat_z(current),
+            updated_at=current,
         )
         receipt_payload = {
             "receipt": receipt,
@@ -2349,22 +2409,36 @@ class ForecastMiningService:
             raise ValueError("settlement batch not found")
         if receipt.get("confirmation_status") == "confirmed":
             if receipt.get("query_response") is not None:
-                anchor_confirmation = confirm_chain_anchor_response(
-                    query_response=receipt.get("query_response") or {},
-                    settlement_batch_id=settlement_batch["id"],
-                    canonical_root=settlement_batch.get("canonical_root"),
-                    anchor_payload_hash=settlement_batch.get("anchor_payload_hash"),
-                    expected_anchor=_expected_settlement_anchor(anchor_job, settlement_batch),
-                    tx_receipt=receipt,
-                    broadcast_method=receipt.get("broadcast_method") or "typed_msg",
-                )
-                receipt = {
-                    **receipt,
-                    **anchor_confirmation,
-                    "height": receipt.get("height"),
-                    "code": receipt.get("code"),
-                    "raw_log": receipt.get("raw_log"),
-                }
+                try:
+                    settlement_artifacts = await self.repo.list_artifacts_for_entity("settlement_batch", settlement_batch["id"])
+                    resolve_settlement_anchor_reward_rows(
+                        settlement_batch.get("anchor_payload_json") or {},
+                        settlement_artifacts,
+                    )
+                except ValueError as exc:
+                    receipt = {
+                        **receipt,
+                        "confirmed": False,
+                        "confirmation_status": "root_hash_mismatch",
+                        "raw_log": str(exc),
+                    }
+                else:
+                    anchor_confirmation = confirm_chain_anchor_response(
+                        query_response=receipt.get("query_response") or {},
+                        settlement_batch_id=settlement_batch["id"],
+                        canonical_root=settlement_batch.get("canonical_root"),
+                        anchor_payload_hash=settlement_batch.get("anchor_payload_hash"),
+                        expected_anchor=_expected_settlement_anchor(anchor_job, settlement_batch),
+                        tx_receipt=receipt,
+                        broadcast_method=receipt.get("broadcast_method") or "typed_msg",
+                    )
+                    receipt = {
+                        **receipt,
+                        **anchor_confirmation,
+                        "height": receipt.get("height"),
+                        "code": receipt.get("code"),
+                        "raw_log": receipt.get("raw_log"),
+                    }
             elif receipt.get("confirmed") is not True:
                 receipt = {
                     **receipt,
@@ -2377,12 +2451,10 @@ class ForecastMiningService:
             **receipt,
             "chain_confirmation_status": chain_confirmation_status,
         }
-        anchor_job = await self.repo.save_anchor_job(
-            {
-                **anchor_job,
-                "chain_confirmation_status": chain_confirmation_status,
-                "updated_at": isoformat_z(current),
-            }
+        anchor_job = await self.repo.update_anchor_job_confirmation(
+            resolved_anchor_job_id,
+            chain_confirmation_status=chain_confirmation_status,
+            updated_at=current,
         )
         receipt_payload = {
             "receipt": receipt,
@@ -2482,13 +2554,10 @@ class ForecastMiningService:
                 "updated_at": isoformat_z(current),
             }
         )
-        return await self.repo.save_settlement_batch(
-            {
-                **batch,
-                "state": "anchor_submitted",
-                "anchor_job_id": anchor_job_id,
-                "updated_at": isoformat_z(current),
-            }
+        return await self.repo.mark_settlement_batch_anchor_submitted(
+            settlement_batch_id=batch["id"],
+            anchor_job_id=anchor_job_id,
+            updated_at=isoformat_z(current),
         )
 
     async def mark_anchor_job_anchored(
@@ -2507,25 +2576,34 @@ class ForecastMiningService:
             raise ValueError("anchor job not found")
         resolved_anchor_job_id = anchor_job["id"]
         current = now or utc_now()
-        saved_job = await self.repo.save_anchor_job(
-            {
-                **anchor_job,
-                "state": "anchored",
-                "chain_confirmation_status": "confirmed",
-                "anchored_at": isoformat_z(current),
-                "failure_reason": None,
-                "updated_at": isoformat_z(current),
-            }
+        saved_job = await self.repo.mark_anchor_job_terminal(
+            resolved_anchor_job_id,
+            state="anchored",
+            chain_confirmation_status="confirmed",
+            anchored_at=current,
+            failure_reason=None,
+            updated_at=current,
         )
         batch = await self.repo.get_settlement_batch(anchor_job["settlement_batch_id"])
         if batch and batch.get("anchor_job_id") == resolved_anchor_job_id:
-            await self.repo.save_settlement_batch(
-                {
-                    **batch,
-                    "state": "anchored",
-                    "updated_at": isoformat_z(current),
-                }
+            await self.repo.mark_settlement_batch_terminal(
+                batch["id"],
+                state="anchored",
+                updated_at=isoformat_z(current),
             )
+            for reward_window_id in batch.get("reward_window_ids") or []:
+                ledgers = await self.repo.list_poker_mtt_budget_ledgers(reward_window_id=reward_window_id)
+                for ledger in ledgers:
+                    approved_amount = int(ledger.get("approved_amount") or 0)
+                    await self.repo.save_poker_mtt_budget_ledger(
+                        {
+                            **ledger,
+                            "settlement_batch_id": batch["id"],
+                            "paid_amount": approved_amount,
+                            "state": "paid" if approved_amount > 0 else (ledger.get("state") or "paid"),
+                            "updated_at": isoformat_z(current),
+                        }
+                    )
         return saved_job
 
     async def mark_anchor_job_failed(
@@ -2545,22 +2623,18 @@ class ForecastMiningService:
             raise ValueError("anchor job not found")
         resolved_anchor_job_id = anchor_job["id"]
         current = now or utc_now()
-        saved_job = await self.repo.save_anchor_job(
-            {
-                **anchor_job,
-                "state": "anchor_failed",
-                "failure_reason": failure_reason,
-                "updated_at": isoformat_z(current),
-            }
+        saved_job = await self.repo.mark_anchor_job_terminal(
+            resolved_anchor_job_id,
+            state="anchor_failed",
+            failure_reason=failure_reason,
+            updated_at=current,
         )
         batch = await self.repo.get_settlement_batch(anchor_job["settlement_batch_id"])
         if batch and batch.get("anchor_job_id") == resolved_anchor_job_id:
-            await self.repo.save_settlement_batch(
-                {
-                    **batch,
-                    "state": "anchor_failed",
-                    "updated_at": isoformat_z(current),
-                }
+            await self.repo.mark_settlement_batch_terminal(
+                batch["id"],
+                state="anchor_failed",
+                updated_at=isoformat_z(current),
             )
         return saved_job
 
@@ -2708,6 +2782,7 @@ class ForecastMiningService:
             rank_state = str(result.get("rank_state") or "ranked")
             chip_delta = result.get("chip_delta")
             final_ranking_id = result.get("final_ranking_id")
+            canonical_anchorable_at = None
             no_multiplier_reason = result.get("no_multiplier_reason") or poker_mtt_results.reward_gate_reason(
                 rank_state=rank_state,
                 rank=final_rank,
@@ -2736,6 +2811,9 @@ class ForecastMiningService:
                     policy_bundle_version=policy_bundle_version,
                 ):
                     no_multiplier_reason = "canonical_final_ranking_mismatch"
+                else:
+                    locked_at = final_ranking.get("locked_at") or locked_at
+                    canonical_anchorable_at = final_ranking.get("anchorable_at") or locked_at
             if no_multiplier_reason is None:
                 hidden_eval_entry = hidden_eval_by_final_ranking_id.get(final_ranking_id)
                 if hidden_eval_entry is None:
@@ -2748,7 +2826,9 @@ class ForecastMiningService:
                 consistency_input_score=consistency_input_score,
             )
             eligible_for_multiplier = no_multiplier_reason is None
-            anchorable_at = result.get("anchorable_at") or (locked_at if eligible_for_multiplier else None)
+            anchorable_at = canonical_anchorable_at or result.get("anchorable_at") or (
+                locked_at if eligible_for_multiplier else None
+            )
 
             entry = await self.repo.save_poker_mtt_result(
                 {
@@ -2817,12 +2897,10 @@ class ForecastMiningService:
                         "updated_at": isoformat_z(completed_at),
                     }
                 )
-                await self.repo.update_miner(
+                await self.repo.update_poker_mtt_miner_multiplier(
                     miner_address,
-                    {
-                        "poker_mtt_multiplier": multiplier_after,
-                        "updated_at": completed_at,
-                    },
+                    poker_mtt_multiplier=multiplier_after,
+                    updated_at=completed_at,
                 )
                 await self._save_poker_mtt_multiplier_snapshot(
                     miner_address=miner_address,
@@ -3050,12 +3128,10 @@ class ForecastMiningService:
                         "updated_at": isoformat_z(locked_at_utc),
                     }
                 )
-                await self.repo.update_miner(
+                await self.repo.update_poker_mtt_miner_multiplier(
                     miner_address,
-                    {
-                        "poker_mtt_multiplier": multiplier_after,
-                        "updated_at": locked_at_utc,
-                    },
+                    poker_mtt_multiplier=multiplier_after,
+                    updated_at=locked_at_utc,
                 )
                 await self._save_poker_mtt_multiplier_snapshot(
                     miner_address=miner_address,
@@ -3512,7 +3588,11 @@ class ForecastMiningService:
         requested_amount = int(budget_disposition.get("requested_reward_pool_amount") or 0)
         paid_amount = int(budget_disposition.get("paid_amount") or 0)
         forfeited_amount = int(budget_disposition.get("forfeited_amount") or 0)
-        approved_amount = paid_amount
+        approved_amount = int(
+            budget_disposition.get("approved_amount")
+            if budget_disposition.get("approved_amount") is not None
+            else max(requested_amount - forfeited_amount, 0)
+        )
         base_payload = {
             "budget_source_id": getattr(self.settings, "poker_mtt_budget_source_id", None) or "unbudgeted",
             "emission_epoch_id": getattr(self.settings, "poker_mtt_emission_epoch_id", None) or "unbudgeted",
@@ -3525,7 +3605,7 @@ class ForecastMiningService:
             "paid_amount": paid_amount,
             "forfeited_amount": forfeited_amount,
             "rolled_amount": 0,
-            "state": budget_disposition.get("state") or "paid",
+            "state": budget_disposition.get("state") or "reserved",
             "policy_bundle_version": policy_bundle_version,
         }
 
@@ -3644,6 +3724,10 @@ class ForecastMiningService:
         final_rankings_by_id = dict(window_inputs.get("final_rankings_by_id") or {})
         miners_by_address = dict(window_inputs.get("miners_by_address") or {})
         rating_snapshots_by_miner = dict(window_inputs.get("rating_snapshots_by_miner") or {})
+        multiplier_snapshots_by_miner = {
+            miner_address: list(rows)
+            for miner_address, rows in dict(window_inputs.get("multiplier_snapshots_by_miner") or {}).items()
+        }
 
         selected_results = []
         for result in candidate_results:
@@ -3690,11 +3774,16 @@ class ForecastMiningService:
         )
         correction_lineage_root = _hash_sequence(correction_lineage_refs)
 
+        weighted_results, multiplier_input_rows = _poker_mtt_apply_effective_reward_multipliers(
+            selected_results,
+            multiplier_snapshots_by_miner=multiplier_snapshots_by_miner,
+        )
         input_snapshot_root = _poker_mtt_reward_window_input_root(
             selected_results=selected_results,
             final_rankings_by_id=final_rankings_by_id,
             miners_by_address=miners_by_address,
             rating_snapshots_by_miner=rating_snapshots_by_miner,
+            multiplier_input_rows=multiplier_input_rows,
         )
         if existing_window and existing_projection_artifact:
             existing_projection_payload = existing_projection_artifact.get("payload_json") or {}
@@ -3722,11 +3811,17 @@ class ForecastMiningService:
         score_weights, submission_counts, representative_miners = _poker_mtt_aggregate_reward_weights(
             selected_results,
             policy_version=aggregation_policy_version,
+            miners_by_address=miners_by_address,
+        )
+        reward_score_weights, _, _ = _poker_mtt_aggregate_reward_weights(
+            weighted_results,
+            policy_version=aggregation_policy_version,
+            miners_by_address=miners_by_address,
         )
 
         economic_unit_ids = sorted(score_weights)
         miner_addresses = sorted(representative_miners[economic_unit_id] for economic_unit_id in economic_unit_ids)
-        has_positive_weight = sum(weight for weight in score_weights.values() if weight > 0) > 0
+        has_positive_weight = sum(weight for weight in reward_score_weights.values() if weight > 0) > 0
         projected_settlement_batch_id = None
         if has_positive_weight:
             projected_settlement_batch_id = (
@@ -3734,13 +3829,17 @@ class ForecastMiningService:
             ) or "sb_" + resolved_reward_window_id.removeprefix("rw_")
         if has_positive_weight:
             reward_allocations = _allocate_integer_pool_by_weights(
-                [(economic_unit_id, score_weights.get(economic_unit_id, 0.0)) for economic_unit_id in economic_unit_ids],
+                [
+                    (economic_unit_id, reward_score_weights.get(economic_unit_id, 0.0))
+                    for economic_unit_id in economic_unit_ids
+                ],
                 reward_pool_amount,
             )
             budget_disposition = {
-                "state": "paid",
+                "state": "reserved",
                 "requested_reward_pool_amount": reward_pool_amount,
-                "paid_amount": reward_pool_amount,
+                "approved_amount": reward_pool_amount,
+                "paid_amount": 0,
                 "forfeited_amount": 0,
             }
             reward_window_state = "finalized"
@@ -3748,8 +3847,9 @@ class ForecastMiningService:
         else:
             reward_allocations = {economic_unit_id: 0 for economic_unit_id in economic_unit_ids}
             budget_disposition = {
-                "state": "no_positive_weight",
+                "state": "forfeited",
                 "requested_reward_pool_amount": reward_pool_amount,
+                "approved_amount": 0,
                 "paid_amount": 0,
                 "forfeited_amount": reward_pool_amount,
             }
@@ -3758,18 +3858,10 @@ class ForecastMiningService:
             if existing_window and existing_window.get("settlement_batch_id"):
                 existing_batch = await self.repo.get_settlement_batch(existing_window["settlement_batch_id"])
                 if existing_batch and existing_batch.get("state") in {None, "open"}:
-                    await self.repo.save_settlement_batch(
-                        {
-                            **existing_batch,
-                            "state": "cancelled",
-                            "total_reward_amount": 0,
-                            "anchor_job_id": None,
-                            "anchor_schema_version": None,
-                            "canonical_root": None,
-                            "anchor_payload_json": None,
-                            "anchor_payload_hash": None,
-                            "updated_at": isoformat_z(current),
-                        }
+                    await self.repo.cancel_settlement_batch(
+                        existing_batch["id"],
+                        total_reward_amount=0,
+                        updated_at=isoformat_z(current),
                     )
         budget_disposition, budget_ledger = await self._prepare_poker_mtt_budget_ledger(
             budget_disposition=budget_disposition,
@@ -3811,19 +3903,7 @@ class ForecastMiningService:
             ),
             key=lambda item: item["poker_mtt_result_id"],
         )
-        multiplier_snapshot_rows = sorted(
-            (
-                {
-                    "poker_mtt_result_id": result["id"],
-                    "miner_address": result["miner_address"],
-                    "multiplier_before": result.get("multiplier_before", 1.0),
-                    "multiplier_after": result.get("multiplier_after", 1.0),
-                    "eligible_for_multiplier": result.get("eligible_for_multiplier") is True,
-                }
-                for result in selected_results
-            ),
-            key=lambda item: item["poker_mtt_result_id"],
-        )
+        multiplier_snapshot_rows = list(multiplier_input_rows)
         rating_snapshot_rows = []
         for miner_address in miner_addresses:
             snapshot = rating_snapshots_by_miner.get(miner_address)
@@ -4043,12 +4123,10 @@ class ForecastMiningService:
                         "updated_at": isoformat_z(completed_at),
                     }
                 )
-                await self.repo.update_miner(
+                await self.repo.update_arena_miner_multiplier(
                     miner_address,
-                    {
-                        "arena_multiplier": multiplier_after,
-                        "updated_at": completed_at,
-                    },
+                    arena_multiplier=multiplier_after,
+                    updated_at=completed_at,
                 )
 
             items.append(
@@ -4144,18 +4222,16 @@ class ForecastMiningService:
                             "updated_at": isoformat_z(now),
                         }
                     )
-                await self.repo.update_miner(
+                await self.repo.update_miner_forecast_settlement(
                     submission["miner_address"],
-                    {
-                        "total_rewards": miner["total_rewards"] + released_reward,
-                        "held_rewards": miner.get("held_rewards", 0) + held_reward,
-                        "settled_tasks": settled_tasks,
-                        "correct_direction_count": miner["correct_direction_count"] + direction_correct,
-                        "edge_score_total": edge_score_total,
-                        "model_reliability": model_reliability,
-                        "admission_state": admission_state,
-                        "updated_at": now,
-                    },
+                    total_rewards=miner["total_rewards"] + released_reward,
+                    held_rewards=miner.get("held_rewards", 0) + held_reward,
+                    settled_tasks=settled_tasks,
+                    correct_direction_count=miner["correct_direction_count"] + direction_correct,
+                    edge_score_total=edge_score_total,
+                    model_reliability=model_reliability,
+                    admission_state=admission_state,
+                    updated_at=now,
                 )
 
             await self._apply_fast_task_participation(task, submissions, now)
@@ -4213,12 +4289,10 @@ class ForecastMiningService:
                     }
                 )
                 miner = await self.repo.get_miner(submission["miner_address"])
-                await self.repo.update_miner(
+                await self.repo.update_miner_forecast_settlement(
                     submission["miner_address"],
-                    {
-                        "model_reliability": clamp(miner["model_reliability"] * anchor_multiplier, 0.97, 1.03),
-                        "updated_at": now,
-                    },
+                    model_reliability=clamp(miner["model_reliability"] * anchor_multiplier, 0.97, 1.03),
+                    updated_at=now,
                 )
 
             await self.repo.upsert_task(
@@ -4255,40 +4329,32 @@ class ForecastMiningService:
                         }
                     )
                 if released_total > 0:
-                    await self.repo.update_miner(
+                    await self.repo.update_miner_forecast_settlement(
                         miner["address"],
-                        {
-                            "total_rewards": miner["total_rewards"] + released_total,
-                            "held_rewards": max(0, held_rewards - released_total),
-                            "admission_state": "mature",
-                            "updated_at": now,
-                        },
+                        total_rewards=miner["total_rewards"] + released_total,
+                        held_rewards=max(0, held_rewards - released_total),
+                        admission_state="mature",
+                        updated_at=now,
                     )
                 elif held_rewards > 0:
-                    await self.repo.update_miner(
+                    await self.repo.update_miner_forecast_settlement(
                         miner["address"],
-                        {
-                            "total_rewards": miner["total_rewards"] + held_rewards,
-                            "held_rewards": 0,
-                            "admission_state": "mature",
-                            "updated_at": now,
-                        },
+                        total_rewards=miner["total_rewards"] + held_rewards,
+                        held_rewards=0,
+                        admission_state="mature",
+                        updated_at=now,
                     )
                 elif miner.get("admission_state") != admission_state:
-                    await self.repo.update_miner(
+                    await self.repo.update_miner_forecast_settlement(
                         miner["address"],
-                        {
-                            "admission_state": "mature",
-                            "updated_at": now,
-                        },
+                        admission_state="mature",
+                        updated_at=now,
                     )
             elif miner.get("admission_state") != admission_state:
-                await self.repo.update_miner(
+                await self.repo.update_miner_forecast_settlement(
                     miner["address"],
-                    {
-                        "admission_state": admission_state,
-                        "updated_at": now,
-                    },
+                    admission_state=admission_state,
+                    updated_at=now,
                 )
 
     async def _build_reward_windows(self, now: datetime) -> None:
@@ -4457,52 +4523,38 @@ class ForecastMiningService:
             if existing_batch:
                 batch = existing_batch
                 if existing_batch.get("state") == "open":
-                    batch = await self.repo.save_settlement_batch(
-                        {
-                            **existing_batch,
-                            "lane": reward_window["lane"],
-                            "window_start_at": reward_window["window_start_at"],
-                            "window_end_at": reward_window["window_end_at"],
-                            "reward_window_ids": [reward_window["id"]],
-                            "policy_bundle_version": reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
-                            "task_count": reward_window.get("task_count", 0),
-                            "miner_count": reward_window.get("miner_count", 0),
-                            "total_reward_amount": reward_window.get("total_reward_amount", 0),
-                            "updated_at": isoformat_z(now),
-                        }
+                    batch = await self.repo.sync_open_settlement_batch(
+                        settlement_batch_id=existing_batch["id"],
+                        lane=reward_window["lane"],
+                        window_start_at=reward_window["window_start_at"],
+                        window_end_at=reward_window["window_end_at"],
+                        reward_window_ids=[reward_window["id"]],
+                        policy_bundle_version=reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
+                        task_count=reward_window.get("task_count", 0),
+                        miner_count=reward_window.get("miner_count", 0),
+                        total_reward_amount=reward_window.get("total_reward_amount", 0),
+                        updated_at=isoformat_z(now),
                     )
             else:
-                batch = await self.repo.save_settlement_batch(
-                    {
-                        "id": settlement_batch_id,
-                        "lane": reward_window["lane"],
-                        "state": "open",
-                        "window_start_at": reward_window["window_start_at"],
-                        "window_end_at": reward_window["window_end_at"],
-                        "reward_window_ids": [reward_window["id"]],
-                        "policy_bundle_version": reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
-                        "task_count": reward_window.get("task_count", 0),
-                        "miner_count": reward_window.get("miner_count", 0),
-                        "total_reward_amount": reward_window.get("total_reward_amount", 0),
-                        "anchor_job_id": None,
-                        "anchor_schema_version": None,
-                        "canonical_root": None,
-                        "anchor_payload_json": None,
-                        "anchor_payload_hash": None,
-                        "created_at": isoformat_z(now),
-                        "updated_at": isoformat_z(now),
-                    }
+                batch = await self.repo.sync_open_settlement_batch(
+                    settlement_batch_id=settlement_batch_id,
+                    lane=reward_window["lane"],
+                    window_start_at=reward_window["window_start_at"],
+                    window_end_at=reward_window["window_end_at"],
+                    reward_window_ids=[reward_window["id"]],
+                    policy_bundle_version=reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
+                    task_count=reward_window.get("task_count", 0),
+                    miner_count=reward_window.get("miner_count", 0),
+                    total_reward_amount=reward_window.get("total_reward_amount", 0),
+                    created_at=isoformat_z(now),
+                    updated_at=isoformat_z(now),
                 )
 
             if reward_window.get("settlement_batch_id") != batch["id"]:
-                saved_reward_window = await self.repo.save_reward_window(
-                    _materialize_reward_window(
-                        {
-                            **reward_window,
-                            "settlement_batch_id": batch["id"],
-                            "updated_at": isoformat_z(now),
-                        }
-                    )[0]
+                saved_reward_window = await self.repo.link_reward_window_settlement_batch(
+                    reward_window["id"],
+                    settlement_batch_id=batch["id"],
+                    updated_at=isoformat_z(now),
                 )
                 await self._upsert_reward_window_artifact(saved_reward_window, now)
 
@@ -4674,22 +4726,20 @@ class ForecastMiningService:
             opportunities += 1
             if miner["address"] not in revealed_addresses:
                 misses += 1
-            await self.repo.update_miner(
+            await self.repo.update_miner_forecast_participation(
                 miner["address"],
-                {
-                    "fast_task_opportunities": opportunities,
-                    "fast_task_misses": misses,
-                    "fast_window_start_at": window_start,
-                    "ops_reliability": self._compute_ops_reliability(
-                        miner={
-                            **miner,
-                            "fast_task_opportunities": opportunities,
-                            "fast_task_misses": misses,
-                            "fast_window_start_at": window_start,
-                        }
-                    ),
-                    "updated_at": now,
-                },
+                fast_task_opportunities=opportunities,
+                fast_task_misses=misses,
+                fast_window_start_at=window_start,
+                ops_reliability=self._compute_ops_reliability(
+                    miner={
+                        **miner,
+                        "fast_task_opportunities": opportunities,
+                        "fast_task_misses": misses,
+                        "fast_window_start_at": window_start,
+                    }
+                ),
+                updated_at=now,
             )
 
     async def _refresh_miner_cluster(
@@ -4733,7 +4783,13 @@ class ForecastMiningService:
                 updates["economic_unit_id"] = desired_eu
             if updates:
                 updates["updated_at"] = now
-                await self.repo.update_miner(miner["address"], updates)
+                await self.repo.update_miner_cluster_identity(
+                    miner["address"],
+                    economic_unit_id=updates.get("economic_unit_id"),
+                    ip_address=updates.get("ip_address"),
+                    user_agent_hash=updates.get("user_agent_hash"),
+                    updated_at=now,
+                )
 
         await self._sync_cluster_risk_cases(
             [
@@ -4917,12 +4973,10 @@ class ForecastMiningService:
             settled_tasks = max(1, miner["settled_tasks"])
             avg_edge = miner["edge_score_total"] / settled_tasks
             public_elo = 1200 + int(avg_edge * 800) + min(miner["settled_tasks"], 100)
-            await self.repo.update_miner(
+            await self.repo.update_miner_public_ranking(
                 miner["address"],
-                {
-                    "public_rank": index,
-                    "public_elo": max(900, min(1800, public_elo)),
-                },
+                public_rank=index,
+                public_elo=max(900, min(1800, public_elo)),
             )
 
     def _task_card(self, task: dict) -> dict:

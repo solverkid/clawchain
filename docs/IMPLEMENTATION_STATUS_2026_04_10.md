@@ -172,17 +172,28 @@ Implemented:
   - `forecast_participation`
   - `forecast_settlement`
   - `public_ranking`
+  - `arena_multiplier`
+  - `poker_mtt_multiplier`
 - reward window / settlement batch shared updates are now routed through explicit helper paths instead of generic state patches:
   - `link_reward_window_settlement_batch`
   - `sync_open_settlement_batch`
   - `mark_settlement_batch_anchor_ready`
   - `mark_settlement_batch_anchor_submitted`
   - `mark_settlement_batch_terminal`
-- `save_reward_window / save_settlement_batch` now preserve unspecified fields on update in both Fake and Postgres repos
+  - `cancel_settlement_batch`
+- anchor job shared updates are now routed through explicit helper paths:
+  - `update_anchor_job_broadcast`
+  - `update_anchor_job_confirmation`
+  - `mark_anchor_job_terminal`
+- `save_reward_window / save_settlement_batch / save_anchor_job / save_artifact` now preserve unspecified fields on update in both Fake and Postgres repos
+- `forecast_engine.py` no longer calls generic `update_miner()` directly; fast lane, daily lane, arena, poker MTT, cluster rebinding, and public rank refresh all route through explicit helper writers
+- `forecast_engine.py` no longer uses generic `save_settlement_batch()` for partial state transitions; settlement state flips now route through explicit helpers, while `save_reward_window()` remains only for full materialization paths
 
 Primary files:
 
 - `mining-service/forecast_engine.py`
+- `mining-service/repository.py`
+- `mining-service/pg_repository.py`
 - `mining-service/server.py`
 - `mining-service/models.py`
 

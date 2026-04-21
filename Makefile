@@ -1,4 +1,4 @@
-.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase2 test-poker-mtt-phase3-fast test-poker-mtt-phase3-ops test-poker-mtt-phase3-heavy lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
+.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase2 test-poker-mtt-phase3-fast test-poker-mtt-phase3-ops test-poker-mtt-phase3-heavy build-poker-mtt-release-review-bundle lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
@@ -9,6 +9,33 @@ POKER_MTT_PHASE3_POSTGRES_URL ?= $(CLAWCHAIN_DATABASE_URL)
 POKER_MTT_PHASE3_CLAWCHAIND ?= ./build/clawchaind
 POKER_MTT_PHASE3_CHAIN_ARGS ?=
 POKER_MTT_PHASE3_HARNESS_ARGS ?=
+POKER_MTT_RELEASE_REVIEW_DIR ?= artifacts/poker-mtt/release-review
+POKER_MTT_RELEASE_PACK ?=
+POKER_MTT_RELEASE_METADATA_JSON ?=
+POKER_MTT_RELEASE_SIGNOFFS_JSON ?=
+
+ifeq ($(strip $(POKER_MTT_RELEASE_METADATA_JSON)),)
+POKER_MTT_RELEASE_METADATA_ARGS = \
+	--budget-source-id '$(POKER_MTT_BUDGET_SOURCE_ID)' \
+	--emission-epoch-id '$(POKER_MTT_EMISSION_EPOCH_ID)' \
+	--epoch-cap '$(POKER_MTT_EMISSION_EPOCH_CAP)' \
+	--settlement-operator-role '$(POKER_MTT_SETTLEMENT_OPERATOR_ROLE)' \
+	--chain-submitter '$(POKER_MTT_CHAIN_SUBMITTER)' \
+	--fallback-tx-policy '$(POKER_MTT_FALLBACK_TX_POLICY)' \
+	--donor-runtime-version '$(POKER_MTT_DONOR_RUNTIME_VERSION)' \
+	--admin-auth-mode '$(POKER_MTT_ADMIN_AUTH_MODE)' \
+	--reward-bound-identity-authority '$(POKER_MTT_REWARD_IDENTITY_AUTHORITY)' \
+	--monitoring-evidence-ref '$(POKER_MTT_MONITORING_EVIDENCE_REF)' \
+	--rollback-runbook-ref '$(POKER_MTT_ROLLBACK_RUNBOOK_REF)'
+else
+POKER_MTT_RELEASE_METADATA_ARGS = --metadata-json '$(POKER_MTT_RELEASE_METADATA_JSON)'
+endif
+
+ifneq ($(strip $(POKER_MTT_RELEASE_SIGNOFFS_JSON)),)
+POKER_MTT_RELEASE_SIGNOFFS_ARGS = --signoffs-json '$(POKER_MTT_RELEASE_SIGNOFFS_JSON)'
+else
+POKER_MTT_RELEASE_SIGNOFFS_ARGS =
+endif
 
 LDFLAGS := -X github.com/cosmos/cosmos-sdk/version.Name=clawchain \
            -X github.com/cosmos/cosmos-sdk/version.AppName=clawchaind \
@@ -98,6 +125,35 @@ test-poker-mtt-phase3-heavy:
 	@python3 scripts/poker_mtt/check_local_run_logs.py build/poker-mtt/run_server.log | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/local-run-log-check.json'
 	@'$(POKER_MTT_PHASE3_CLAWCHAIND)' query settlement settlement-anchor '$(POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID)' --output json $(POKER_MTT_PHASE3_CHAIN_ARGS) | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/settlement-anchor-query-receipt.json'
 
+build-poker-mtt-release-review-bundle:
+	@echo "Building Poker MTT reward-bearing release review bundle..."
+	@test -n "$(POKER_MTT_RELEASE_PACK)" || (echo "Set POKER_MTT_RELEASE_PACK to a release pack JSON path." >&2; exit 2)
+ifeq ($(strip $(POKER_MTT_RELEASE_METADATA_JSON)),)
+	@test -n "$(POKER_MTT_BUDGET_SOURCE_ID)" || (echo "Set POKER_MTT_BUDGET_SOURCE_ID." >&2; exit 2)
+	@test -n "$(POKER_MTT_EMISSION_EPOCH_ID)" || (echo "Set POKER_MTT_EMISSION_EPOCH_ID." >&2; exit 2)
+	@test -n "$(POKER_MTT_EMISSION_EPOCH_CAP)" || (echo "Set POKER_MTT_EMISSION_EPOCH_CAP." >&2; exit 2)
+	@test -n "$(POKER_MTT_SETTLEMENT_OPERATOR_ROLE)" || (echo "Set POKER_MTT_SETTLEMENT_OPERATOR_ROLE." >&2; exit 2)
+	@test -n "$(POKER_MTT_CHAIN_SUBMITTER)" || (echo "Set POKER_MTT_CHAIN_SUBMITTER." >&2; exit 2)
+	@test -n "$(POKER_MTT_FALLBACK_TX_POLICY)" || (echo "Set POKER_MTT_FALLBACK_TX_POLICY." >&2; exit 2)
+	@test -n "$(POKER_MTT_DONOR_RUNTIME_VERSION)" || (echo "Set POKER_MTT_DONOR_RUNTIME_VERSION." >&2; exit 2)
+	@test -n "$(POKER_MTT_ADMIN_AUTH_MODE)" || (echo "Set POKER_MTT_ADMIN_AUTH_MODE." >&2; exit 2)
+	@test -n "$(POKER_MTT_REWARD_IDENTITY_AUTHORITY)" || (echo "Set POKER_MTT_REWARD_IDENTITY_AUTHORITY." >&2; exit 2)
+	@test -n "$(POKER_MTT_MONITORING_EVIDENCE_REF)" || (echo "Set POKER_MTT_MONITORING_EVIDENCE_REF." >&2; exit 2)
+	@test -n "$(POKER_MTT_ROLLBACK_RUNBOOK_REF)" || (echo "Set POKER_MTT_ROLLBACK_RUNBOOK_REF." >&2; exit 2)
+else
+	@test -f "$(POKER_MTT_RELEASE_METADATA_JSON)" || (echo "Set POKER_MTT_RELEASE_METADATA_JSON to an existing metadata JSON path." >&2; exit 2)
+endif
+ifneq ($(strip $(POKER_MTT_RELEASE_SIGNOFFS_JSON)),)
+	@test -f "$(POKER_MTT_RELEASE_SIGNOFFS_JSON)" || (echo "Set POKER_MTT_RELEASE_SIGNOFFS_JSON to an existing signoffs JSON path." >&2; exit 2)
+endif
+	@mkdir -p '$(POKER_MTT_RELEASE_REVIEW_DIR)'
+	@python3 scripts/poker_mtt/build_release_review_bundle.py \
+		--artifact-dir '$(POKER_MTT_PHASE3_ARTIFACT_DIR)' \
+		--release-pack '$(POKER_MTT_RELEASE_PACK)' \
+		$(POKER_MTT_RELEASE_METADATA_ARGS) \
+		$(POKER_MTT_RELEASE_SIGNOFFS_ARGS) \
+		--output '$(POKER_MTT_RELEASE_REVIEW_DIR)/release-review-bundle.json'
+
 # Run linter
 lint:
 	@echo "Running linter..."
@@ -155,6 +211,7 @@ help:
 	@echo "  test-poker-mtt-phase3-fast - Run Poker MTT Phase 3 fast unit/contract gates"
 	@echo "  test-poker-mtt-phase3-ops - Run Poker MTT Phase 3 sidecar/load ops gates"
 	@echo "  test-poker-mtt-phase3-heavy - Run Poker MTT Phase 3 staging/manual gates and write artifacts"
+	@echo "  build-poker-mtt-release-review-bundle - Build the Poker MTT reward rollout review bundle from Phase 3 artifacts"
 	@echo "  lint       - Run linter"
 	@echo "  tidy       - Tidy go.mod dependencies"
 	@echo "  proto-gen  - Generate protobuf code"

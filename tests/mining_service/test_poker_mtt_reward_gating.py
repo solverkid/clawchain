@@ -626,6 +626,97 @@ def test_legacy_apply_caller_hidden_score_does_not_unlock_reward_readiness():
     asyncio.run(scenario())
 
 
+def test_legacy_apply_uses_canonical_locked_at_for_reward_window_membership():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        await service.register_miner(
+            address="claw1canonicallocked",
+            name="canonical-locked",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        final_ranking = final_ranking_row(
+            tournament_id="mtt-canonical-locked",
+            miner_address="claw1canonicallocked",
+            rank=1,
+        )
+        final_ranking["locked_at"] = "2026-04-10T09:00:00Z"
+        final_ranking["anchorable_at"] = "2026-04-10T09:00:00Z"
+        await repo.save_poker_mtt_final_ranking(final_ranking)
+        await repo.save_poker_mtt_hidden_eval_entry(
+            {
+                "tournament_id": "mtt-canonical-locked",
+                "miner_address": "claw1canonicallocked",
+                "final_ranking_id": final_ranking["id"],
+                "seed_assignment_id": "hidden-seed:mtt-canonical-locked",
+                "hidden_eval_score": 0.0,
+                "score_components_json": {"test_fixture": True},
+                "evidence_root": final_ranking["evidence_root"],
+                "policy_bundle_version": "poker_mtt_v1",
+                "created_at": final_ranking["created_at"],
+                "updated_at": final_ranking["updated_at"],
+            }
+        )
+
+        await service.apply_poker_mtt_results(
+            tournament_id="mtt-canonical-locked",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_v1",
+            results=[
+                {
+                    "miner_id": "claw1canonicallocked",
+                    "final_rank": 1,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "final",
+                    "final_ranking_id": final_ranking["id"],
+                    "standing_snapshot_id": final_ranking["standing_snapshot_id"],
+                    "standing_snapshot_hash": final_ranking["standing_snapshot_hash"],
+                    "evidence_root": final_ranking["evidence_root"],
+                    "evidence_state": final_ranking["evidence_state"],
+                    "locked_at": "2026-04-11T10:00:00Z",
+                }
+            ],
+            completed_at=datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        stored = (await repo.list_poker_mtt_results_for_miner("claw1canonicallocked"))[0]
+        canonical_window = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc),
+            window_end_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+            reward_pool_amount=100,
+            include_provisional=False,
+            policy_bundle_version="poker_mtt_v1",
+            now=datetime(2026, 4, 11, 0, 5, 0, tzinfo=timezone.utc),
+        )
+
+        assert stored["locked_at"] == "2026-04-10T09:00:00Z"
+        assert stored["anchorable_at"] == "2026-04-10T09:00:00Z"
+        assert canonical_window["submission_count"] == 1
+
+        try:
+            await service.build_poker_mtt_reward_window(
+                lane="poker_mtt_daily",
+                window_start_at=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+                window_end_at=datetime(2026, 4, 12, 0, 0, 0, tzinfo=timezone.utc),
+                reward_pool_amount=100,
+                include_provisional=False,
+                policy_bundle_version="poker_mtt_v1",
+                now=datetime(2026, 4, 12, 0, 5, 0, tzinfo=timezone.utc),
+            )
+        except ValueError as exc:
+            assert str(exc) == "no poker mtt results found for reward window"
+        else:
+            raise AssertionError("caller-supplied locked_at must not move canonical results into a different window")
+
+    asyncio.run(scenario())
+
+
 def test_poker_mtt_reward_window_requires_saved_canonical_final_ranking():
     async def scenario():
         repo = FakeRepository()

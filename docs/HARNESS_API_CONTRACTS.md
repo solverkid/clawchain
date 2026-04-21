@@ -923,6 +923,7 @@ Phase 3 artifact locations:
 ```text
 artifacts/poker-mtt/phase3/db-load-20k.log
 artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json
+artifacts/poker-mtt/phase3/local-run-log-check.json
 artifacts/poker-mtt/phase3/settlement-anchor-query-receipt.json
 ```
 

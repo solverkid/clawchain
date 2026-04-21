@@ -10,7 +10,7 @@
 - `docs/HARNESS_API_CONTRACTS.md`
 - `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 - `docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md`
-- `docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md`
+- `docs/superpowers/plans/2026-04-20-poker-mtt-phase3-production-readiness.md`
 
 ---
 
@@ -369,7 +369,7 @@ Phase 3 不等同于 high-value reward rollout。它的职责是把本文件列�
 
 Canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 
-Execution plan: `docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md`
+Execution plan: `docs/superpowers/plans/2026-04-20-poker-mtt-phase3-production-readiness.md`
 
 ## 8. Implementation Order
 

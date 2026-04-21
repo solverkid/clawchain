@@ -1037,7 +1037,7 @@ ClawChain 调 donor 内部端口：
 RocketMQ 本地 harness 有两层地址要同时正确：
 
 - broker 对 proxy 广告 `brokerIP1=host.docker.internal`，并把 broker 端口直映射为 `10909:10909`、`10911:10911`、`10912:10912`，这样 Docker proxy 能用 route 访问 broker 并创建 system topic。
-- proxy 对宿主机 donor 广告 host-mapped gRPC 入口。`proxy.json` 必须启用 `useEndpointPortFromRequest=true`，让 Go v5 producer 通过 `127.0.0.1:38081` QueryRoute 后拿回 `127.0.0.1:38081`，而不是 container-internal 的 `127.0.0.1:8081`。
+- proxy 对宿主机 donor 广告 host-mapped gRPC 入口。`rmq-proxy.json` 必须启用 `useEndpointPortFromRequest=true`，让 Go v5 producer 通过 `127.0.0.1:38081` QueryRoute 后拿回 `127.0.0.1:38081`，而不是 container-internal 的 `127.0.0.1:8081`。
 
 `brokerIP1=127.0.0.1` 只对宿主机 donor 有效但会让 proxy 容器打到自己，Docker service DNS（例如 `poker_mtt_rmqbroker:10911`）只对容器有效但宿主机 donor 无法解析，proxy 缺少 `useEndpointPortFromRequest` 则会复现 `telemeter to 127.0.0.1:8081 failed` / publish timeout。
 

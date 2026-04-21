@@ -280,13 +280,22 @@ Alpha 默认方法：
   - `forecast_participation`
   - `forecast_settlement`
   - `public_ranking`
+  - `arena_multiplier`
+  - `poker_mtt_multiplier`
+- `forecast_engine.py` 内已清零直接 `update_miner()` 调用；共享 miner patch 必须经由对应 lane-owned helper
 - Reward / settlement shared objects 也已按职责拆分 update path：
   - `link_reward_window_settlement_batch`
   - `sync_open_settlement_batch`
   - `mark_settlement_batch_anchor_ready`
   - `mark_settlement_batch_anchor_submitted`
   - `mark_settlement_batch_terminal`
-- `save_reward_window / save_settlement_batch` 的 update 语义在 Fake / Postgres 两个 repo 中保持一致，都是 merge-preserving；窄变更优先走显式 helper，generic save 只保留给 create 或 full materialization
+  - `cancel_settlement_batch`
+- Anchor job shared objects 也已按职责拆分 update path：
+  - `update_anchor_job_broadcast`
+  - `update_anchor_job_confirmation`
+  - `mark_anchor_job_terminal`
+- `forecast_engine.py` 已清零直接 `save_settlement_batch()` 的 partial state transition；`save_reward_window()` 只保留给 full materialization，reward-window link 走显式 helper
+- `save_reward_window / save_settlement_batch / save_anchor_job / save_artifact` 的 update 语义在 Fake / Postgres 两个 repo 中保持一致，都是 merge-preserving；窄变更优先走显式 helper，generic save 只保留给 create 或 full materialization
 
 ---
 

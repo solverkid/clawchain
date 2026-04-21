@@ -1,0 +1,14 @@
+{
+  "signoffs": [
+    {
+      "role": "operator",
+      "name": "alice",
+      "signed_at": "2026-04-21T10:00:00Z"
+    },
+    {
+      "role": "owner",
+      "name": "bob",
+      "signed_at": "2026-04-21T10:05:00Z"
+    }
+  ]
+}

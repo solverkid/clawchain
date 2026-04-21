@@ -11,6 +11,61 @@ class MiningRepository(Protocol):
     async def register_miner(self, miner: dict) -> dict: ...
     async def get_miner(self, address: str) -> dict | None: ...
     async def update_miner(self, address: str, updates: dict) -> dict: ...
+    async def update_miner_cluster_identity(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        economic_unit_id: str | None = None,
+        ip_address: str | None = None,
+        user_agent_hash: str | None = None,
+    ) -> dict: ...
+    async def update_miner_forecast_participation(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        forecast_commits: int | None = None,
+        forecast_reveals: int | None = None,
+        ops_reliability: float | None = None,
+        fast_task_opportunities: int | None = None,
+        fast_task_misses: int | None = None,
+        fast_window_start_at: datetime | str | None = None,
+    ) -> dict: ...
+    async def update_miner_forecast_settlement(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        total_rewards: int | None = None,
+        held_rewards: int | None = None,
+        settled_tasks: int | None = None,
+        correct_direction_count: int | None = None,
+        edge_score_total: float | None = None,
+        model_reliability: float | None = None,
+        admission_state: str | None = None,
+    ) -> dict: ...
+    async def update_miner_public_ranking(
+        self,
+        address: str,
+        *,
+        public_rank: int,
+        public_elo: int,
+    ) -> dict: ...
+    async def update_arena_miner_multiplier(
+        self,
+        address: str,
+        *,
+        arena_multiplier: float,
+        updated_at: datetime | str,
+    ) -> dict: ...
+    async def update_poker_mtt_miner_multiplier(
+        self,
+        address: str,
+        *,
+        poker_mtt_multiplier: float,
+        updated_at: datetime | str,
+    ) -> dict: ...
     async def list_miners(self) -> list[dict]: ...
     async def list_miners_by_addresses(self, addresses: list[str]) -> list[dict]: ...
     async def count_active_miners(self) -> int: ...
@@ -26,6 +81,13 @@ class MiningRepository(Protocol):
     async def list_hold_entries_for_miner(self, miner_address: str) -> list[dict]: ...
     async def list_due_hold_entries(self, now_iso: str) -> list[dict]: ...
     async def save_reward_window(self, reward_window: dict) -> dict: ...
+    async def link_reward_window_settlement_batch(
+        self,
+        reward_window_id: str,
+        *,
+        settlement_batch_id: str,
+        updated_at: datetime | str,
+    ) -> dict: ...
     async def get_reward_window(self, reward_window_id: str) -> dict | None: ...
     async def list_reward_windows(self) -> list[dict]: ...
     async def save_poker_mtt_budget_ledger(self, row: dict) -> dict: ...
@@ -38,9 +100,82 @@ class MiningRepository(Protocol):
         lane: str | None = None,
     ) -> list[dict]: ...
     async def save_settlement_batch(self, settlement_batch: dict) -> dict: ...
+    async def sync_open_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        lane: str,
+        window_start_at: datetime | str,
+        window_end_at: datetime | str,
+        reward_window_ids: list[str],
+        policy_bundle_version: str,
+        task_count: int,
+        miner_count: int,
+        total_reward_amount: int,
+        updated_at: datetime | str,
+        created_at: datetime | str | None = None,
+    ) -> dict: ...
+    async def mark_settlement_batch_anchor_ready(
+        self,
+        settlement_batch_id: str,
+        *,
+        policy_bundle_version: str,
+        anchor_schema_version: str,
+        canonical_root: str,
+        anchor_payload_json: dict,
+        anchor_payload_hash: str,
+        updated_at: datetime | str,
+    ) -> dict: ...
+    async def mark_settlement_batch_anchor_submitted(
+        self,
+        settlement_batch_id: str,
+        *,
+        anchor_job_id: str,
+        updated_at: datetime | str,
+    ) -> dict: ...
+    async def mark_settlement_batch_terminal(
+        self,
+        settlement_batch_id: str,
+        *,
+        state: str,
+        updated_at: datetime | str,
+    ) -> dict: ...
+    async def cancel_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        total_reward_amount: int,
+        updated_at: datetime | str,
+    ) -> dict: ...
     async def get_settlement_batch(self, settlement_batch_id: str) -> dict | None: ...
     async def list_settlement_batches(self) -> list[dict]: ...
     async def save_anchor_job(self, anchor_job: dict) -> dict: ...
+    async def update_anchor_job_broadcast(
+        self,
+        anchor_job_id: str,
+        *,
+        broadcast_status: str,
+        broadcast_tx_hash: str | None,
+        last_broadcast_at: datetime | str,
+        updated_at: datetime | str,
+    ) -> dict: ...
+    async def update_anchor_job_confirmation(
+        self,
+        anchor_job_id: str,
+        *,
+        chain_confirmation_status: str,
+        updated_at: datetime | str,
+    ) -> dict: ...
+    async def mark_anchor_job_terminal(
+        self,
+        anchor_job_id: str,
+        *,
+        state: str,
+        updated_at: datetime | str,
+        anchored_at: datetime | str | None = None,
+        failure_reason: str | None = None,
+        chain_confirmation_status: str | None = None,
+    ) -> dict: ...
     async def get_anchor_job(self, anchor_job_id: str) -> dict | None: ...
     async def list_anchor_jobs(self) -> list[dict]: ...
     async def save_artifact(self, artifact: dict) -> dict: ...
@@ -197,9 +332,131 @@ class FakeRepository:
         return deepcopy(miner) if miner else None
 
     async def update_miner(self, address: str, updates: dict) -> dict:
-        miner = self._miners[address]
+        miner = self._miners.get(address)
+        if miner is None:
+            raise ValueError("miner not found")
         miner.update(deepcopy(updates))
         return deepcopy(miner)
+
+    async def update_miner_cluster_identity(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        economic_unit_id: str | None = None,
+        ip_address: str | None = None,
+        user_agent_hash: str | None = None,
+    ) -> dict:
+        updates = {"updated_at": updated_at}
+        if economic_unit_id is not None:
+            updates["economic_unit_id"] = economic_unit_id
+        if ip_address is not None:
+            updates["ip_address"] = ip_address
+        if user_agent_hash is not None:
+            updates["user_agent_hash"] = user_agent_hash
+        return await self.update_miner(address, updates)
+
+    async def update_miner_forecast_participation(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        forecast_commits: int | None = None,
+        forecast_reveals: int | None = None,
+        ops_reliability: float | None = None,
+        fast_task_opportunities: int | None = None,
+        fast_task_misses: int | None = None,
+        fast_window_start_at: datetime | str | None = None,
+    ) -> dict:
+        updates = {"updated_at": updated_at}
+        if forecast_commits is not None:
+            updates["forecast_commits"] = forecast_commits
+        if forecast_reveals is not None:
+            updates["forecast_reveals"] = forecast_reveals
+        if ops_reliability is not None:
+            updates["ops_reliability"] = ops_reliability
+        if fast_task_opportunities is not None:
+            updates["fast_task_opportunities"] = fast_task_opportunities
+        if fast_task_misses is not None:
+            updates["fast_task_misses"] = fast_task_misses
+        if fast_window_start_at is not None:
+            updates["fast_window_start_at"] = fast_window_start_at
+        return await self.update_miner(address, updates)
+
+    async def update_miner_forecast_settlement(
+        self,
+        address: str,
+        *,
+        updated_at: datetime | str,
+        total_rewards: int | None = None,
+        held_rewards: int | None = None,
+        settled_tasks: int | None = None,
+        correct_direction_count: int | None = None,
+        edge_score_total: float | None = None,
+        model_reliability: float | None = None,
+        admission_state: str | None = None,
+    ) -> dict:
+        updates = {"updated_at": updated_at}
+        if total_rewards is not None:
+            updates["total_rewards"] = total_rewards
+        if held_rewards is not None:
+            updates["held_rewards"] = held_rewards
+        if settled_tasks is not None:
+            updates["settled_tasks"] = settled_tasks
+        if correct_direction_count is not None:
+            updates["correct_direction_count"] = correct_direction_count
+        if edge_score_total is not None:
+            updates["edge_score_total"] = edge_score_total
+        if model_reliability is not None:
+            updates["model_reliability"] = model_reliability
+        if admission_state is not None:
+            updates["admission_state"] = admission_state
+        return await self.update_miner(address, updates)
+
+    async def update_miner_public_ranking(
+        self,
+        address: str,
+        *,
+        public_rank: int,
+        public_elo: int,
+    ) -> dict:
+        return await self.update_miner(
+            address,
+            {
+                "public_rank": public_rank,
+                "public_elo": public_elo,
+            },
+        )
+
+    async def update_arena_miner_multiplier(
+        self,
+        address: str,
+        *,
+        arena_multiplier: float,
+        updated_at: datetime | str,
+    ) -> dict:
+        return await self.update_miner(
+            address,
+            {
+                "arena_multiplier": arena_multiplier,
+                "updated_at": updated_at,
+            },
+        )
+
+    async def update_poker_mtt_miner_multiplier(
+        self,
+        address: str,
+        *,
+        poker_mtt_multiplier: float,
+        updated_at: datetime | str,
+    ) -> dict:
+        return await self.update_miner(
+            address,
+            {
+                "poker_mtt_multiplier": poker_mtt_multiplier,
+                "updated_at": updated_at,
+            },
+        )
 
     async def list_miners(self) -> list[dict]:
         return [deepcopy(m) for m in self._miners.values()]
@@ -317,6 +574,23 @@ class FakeRepository:
         self._reward_windows[reward_window["id"]] = current
         return deepcopy(current)
 
+    async def link_reward_window_settlement_batch(
+        self,
+        reward_window_id: str,
+        *,
+        settlement_batch_id: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        if reward_window_id not in self._reward_windows:
+            raise ValueError(f"reward window not found: {reward_window_id}")
+        return await self.save_reward_window(
+            {
+                "id": reward_window_id,
+                "settlement_batch_id": settlement_batch_id,
+                "updated_at": updated_at,
+            }
+        )
+
     async def get_reward_window(self, reward_window_id: str) -> dict | None:
         reward_window = self._reward_windows.get(reward_window_id)
         return deepcopy(reward_window) if reward_window else None
@@ -366,6 +640,132 @@ class FakeRepository:
         self._settlement_batches[settlement_batch["id"]] = current
         return deepcopy(current)
 
+    async def sync_open_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        lane: str,
+        window_start_at: datetime | str,
+        window_end_at: datetime | str,
+        reward_window_ids: list[str],
+        policy_bundle_version: str,
+        task_count: int,
+        miner_count: int,
+        total_reward_amount: int,
+        updated_at: datetime | str,
+        created_at: datetime | str | None = None,
+    ) -> dict:
+        payload = {
+            "id": settlement_batch_id,
+            "lane": lane,
+            "state": "open",
+            "window_start_at": window_start_at,
+            "window_end_at": window_end_at,
+            "reward_window_ids": reward_window_ids,
+            "policy_bundle_version": policy_bundle_version,
+            "task_count": task_count,
+            "miner_count": miner_count,
+            "total_reward_amount": total_reward_amount,
+            "updated_at": updated_at,
+        }
+        if created_at is not None:
+            payload.update(
+                {
+                    "anchor_job_id": None,
+                    "anchor_schema_version": None,
+                    "canonical_root": None,
+                    "anchor_payload_json": None,
+                    "anchor_payload_hash": None,
+                    "created_at": created_at,
+                }
+            )
+        return await self.save_settlement_batch(payload)
+
+    async def mark_settlement_batch_anchor_ready(
+        self,
+        settlement_batch_id: str,
+        *,
+        policy_bundle_version: str,
+        anchor_schema_version: str,
+        canonical_root: str,
+        anchor_payload_json: dict,
+        anchor_payload_hash: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        if settlement_batch_id not in self._settlement_batches:
+            raise ValueError(f"settlement batch not found: {settlement_batch_id}")
+        return await self.save_settlement_batch(
+            {
+                "id": settlement_batch_id,
+                "state": "anchor_ready",
+                "anchor_job_id": None,
+                "policy_bundle_version": policy_bundle_version,
+                "anchor_schema_version": anchor_schema_version,
+                "canonical_root": canonical_root,
+                "anchor_payload_json": anchor_payload_json,
+                "anchor_payload_hash": anchor_payload_hash,
+                "updated_at": updated_at,
+            }
+        )
+
+    async def mark_settlement_batch_anchor_submitted(
+        self,
+        settlement_batch_id: str,
+        *,
+        anchor_job_id: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        if settlement_batch_id not in self._settlement_batches:
+            raise ValueError(f"settlement batch not found: {settlement_batch_id}")
+        return await self.save_settlement_batch(
+            {
+                "id": settlement_batch_id,
+                "state": "anchor_submitted",
+                "anchor_job_id": anchor_job_id,
+                "updated_at": updated_at,
+            }
+        )
+
+    async def mark_settlement_batch_terminal(
+        self,
+        settlement_batch_id: str,
+        *,
+        state: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        if settlement_batch_id not in self._settlement_batches:
+            raise ValueError(f"settlement batch not found: {settlement_batch_id}")
+        return await self.save_settlement_batch(
+            {
+                "id": settlement_batch_id,
+                "state": state,
+                "updated_at": updated_at,
+            }
+        )
+
+    async def cancel_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        total_reward_amount: int,
+        updated_at: datetime | str,
+    ) -> dict:
+        if settlement_batch_id not in self._settlement_batches:
+            raise ValueError(f"settlement batch not found: {settlement_batch_id}")
+        return await self.save_settlement_batch(
+            {
+                "id": settlement_batch_id,
+                "state": "cancelled",
+                "total_reward_amount": total_reward_amount,
+                "anchor_job_id": None,
+                "anchor_schema_version": None,
+                "canonical_root": None,
+                "anchor_payload_json": None,
+                "anchor_payload_hash": None,
+                "updated_at": updated_at,
+            }
+        )
+
     async def get_settlement_batch(self, settlement_batch_id: str) -> dict | None:
         settlement_batch = self._settlement_batches.get(settlement_batch_id)
         return deepcopy(settlement_batch) if settlement_batch else None
@@ -387,6 +787,69 @@ class FakeRepository:
         current.update(deepcopy(anchor_job))
         self._anchor_jobs[anchor_job["id"]] = current
         return deepcopy(current)
+
+    async def update_anchor_job_broadcast(
+        self,
+        anchor_job_id: str,
+        *,
+        broadcast_status: str,
+        broadcast_tx_hash: str | None,
+        last_broadcast_at: datetime | str,
+        updated_at: datetime | str,
+    ) -> dict:
+        if anchor_job_id not in self._anchor_jobs:
+            raise ValueError(f"anchor job not found: {anchor_job_id}")
+        return await self.save_anchor_job(
+            {
+                "id": anchor_job_id,
+                "state": "anchor_submitted",
+                "broadcast_status": broadcast_status,
+                "broadcast_tx_hash": broadcast_tx_hash,
+                "last_broadcast_at": last_broadcast_at,
+                "updated_at": updated_at,
+            }
+        )
+
+    async def update_anchor_job_confirmation(
+        self,
+        anchor_job_id: str,
+        *,
+        chain_confirmation_status: str,
+        updated_at: datetime | str,
+    ) -> dict:
+        if anchor_job_id not in self._anchor_jobs:
+            raise ValueError(f"anchor job not found: {anchor_job_id}")
+        return await self.save_anchor_job(
+            {
+                "id": anchor_job_id,
+                "chain_confirmation_status": chain_confirmation_status,
+                "updated_at": updated_at,
+            }
+        )
+
+    async def mark_anchor_job_terminal(
+        self,
+        anchor_job_id: str,
+        *,
+        state: str,
+        updated_at: datetime | str,
+        anchored_at: datetime | str | None = None,
+        failure_reason: str | None = None,
+        chain_confirmation_status: str | None = None,
+    ) -> dict:
+        if anchor_job_id not in self._anchor_jobs:
+            raise ValueError(f"anchor job not found: {anchor_job_id}")
+        updates: dict = {
+            "id": anchor_job_id,
+            "state": state,
+            "updated_at": updated_at,
+            "failure_reason": failure_reason,
+        }
+        if anchored_at is not None:
+            updates["anchored_at"] = anchored_at
+        if chain_confirmation_status is not None:
+            updates["chain_confirmation_status"] = chain_confirmation_status
+        return await self.save_anchor_job(updates)
 
     async def get_anchor_job(self, anchor_job_id: str) -> dict | None:
         anchor_job = self._anchor_jobs.get(anchor_job_id)
@@ -813,7 +1276,10 @@ class FakeRepository:
                 continue
             if entry.get("human_only") is not True:
                 continue
-            if entry.get("evaluation_state") != "final":
+            evaluation_state = entry.get("evaluation_state")
+            if evaluation_state != "final" and not (
+                include_provisional and evaluation_state == "provisional"
+            ):
                 continue
             if not poker_mtt_results.result_policy_matches_reward_window(
                 result_policy_bundle_version=entry.get("evaluation_version"),
@@ -868,6 +1334,28 @@ class FakeRepository:
                 current.get("id") or "",
             ):
                 latest_rating_by_miner[miner_address] = snapshot
+        window_start_iso = _utc_iso(window_start_at)
+        window_end_iso = _utc_iso(window_end_at)
+        multiplier_snapshots_by_miner: dict[str, list[dict]] = {}
+        for snapshot in self._poker_mtt_multiplier_snapshots.values():
+            miner_address = snapshot.get("miner_address")
+            if miner_address not in miner_set:
+                continue
+            effective_start = snapshot.get("effective_window_start_at")
+            effective_end = snapshot.get("effective_window_end_at")
+            if not effective_start or not effective_end:
+                continue
+            if effective_start >= window_end_iso or effective_end <= window_start_iso:
+                continue
+            multiplier_snapshots_by_miner.setdefault(miner_address, []).append(deepcopy(snapshot))
+        for rows in multiplier_snapshots_by_miner.values():
+            rows.sort(
+                key=lambda item: (
+                    item.get("effective_window_start_at") or "",
+                    item.get("updated_at") or "",
+                    item.get("id") or "",
+                )
+            )
         return {
             "results": results,
             "final_rankings_by_id": {
@@ -884,6 +1372,7 @@ class FakeRepository:
                 miner_address: deepcopy(row)
                 for miner_address, row in latest_rating_by_miner.items()
             },
+            "multiplier_snapshots_by_miner": multiplier_snapshots_by_miner,
         }
 
     async def list_poker_mtt_closed_reward_window_candidates(
@@ -942,7 +1431,10 @@ class FakeRepository:
                 continue
             if entry.get("human_only") is not True:
                 continue
-            if entry.get("evaluation_state") != "final":
+            evaluation_state = entry.get("evaluation_state")
+            if evaluation_state != "final" and not (
+                include_provisional and evaluation_state == "provisional"
+            ):
                 continue
             if not poker_mtt_results.result_policy_matches_reward_window(
                 result_policy_bundle_version=entry.get("evaluation_version"),

@@ -86,7 +86,9 @@ def test_daily_and_weekly_windows_share_one_emission_budget_slice():
             emission_epoch_id="epoch-2026w15",
         )
         assert len(ledgers) == 1
+        assert ledgers[0]["state"] == "reserved"
         assert ledgers[0]["approved_amount"] == 70
+        assert ledgers[0]["paid_amount"] == 0
         assert ledgers[0]["budget_root"].startswith("sha256:")
 
     asyncio.run(scenario())
@@ -119,6 +121,31 @@ def test_reward_window_uses_versioned_capped_top3_mean_not_lucky_single_max():
 
         assert projection["payload_json"]["aggregation_policy_version"] == "capped_top3_mean_v1"
         assert rewards["claw1stablegrinder"] > rewards["claw1luckyspike"]
+
+    asyncio.run(scenario())
+
+
+def test_reward_window_uses_current_miner_economic_unit_after_late_merge():
+    async def scenario():
+        repo = FakeRepository()
+        _seed_reward_ready_result(repo, tournament_id="mtt-merge-a", miner_address="claw1mergea", total_score=0.9)
+        _seed_reward_ready_result(repo, tournament_id="mtt-merge-b", miner_address="claw1mergeb", total_score=0.3)
+        repo._miners["claw1mergea"]["economic_unit_id"] = "eu:late-merge"
+        repo._miners["claw1mergeb"]["economic_unit_id"] = "eu:late-merge"
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        window = await _build_window(service, reward_pool_amount=100)
+        artifacts = await repo.list_artifacts_for_entity("reward_window", window["id"])
+        projection = next(item for item in artifacts if item["kind"] == "poker_mtt_reward_window_projection")
+
+        assert window["miner_count"] == 1
+        assert projection["payload_json"]["miner_reward_rows"] == [
+            {
+                "gross_reward_amount": 100,
+                "miner_address": "claw1mergea",
+                "submission_count": 2,
+            }
+        ]
 
     asyncio.run(scenario())
 
@@ -184,6 +211,125 @@ def test_multiplier_snapshot_is_effective_only_for_next_window():
         assert snapshots
         assert snapshots[0]["effective_window_start_at"] == "2026-04-11T00:00:00Z"
         assert snapshots[0]["effective_window_end_at"] == "2026-04-12T00:00:00Z"
+
+    asyncio.run(scenario())
+
+
+def test_budget_ledger_marks_paid_only_after_anchor_confirmation():
+    async def scenario():
+        repo = FakeRepository()
+        _seed_reward_ready_result(repo, tournament_id="mtt-budget-paid", miner_address="claw1budgetpaid", total_score=1.0)
+        service = forecast_engine.ForecastMiningService(
+            repo,
+            forecast_engine.ForecastSettings(
+                poker_mtt_budget_enforcement_enabled=True,
+                poker_mtt_budget_source_id="treasury:poker-mtt:beta",
+                poker_mtt_emission_epoch_id="epoch-2026w15",
+                poker_mtt_emission_epoch_budget_amount=100,
+                poker_mtt_settlement_anchoring_enabled=True,
+            ),
+        )
+
+        window = await _build_window(service, reward_pool_amount=70)
+        ledgers = await repo.list_poker_mtt_budget_ledgers(
+            budget_source_id="treasury:poker-mtt:beta",
+            emission_epoch_id="epoch-2026w15",
+        )
+        assert len(ledgers) == 1
+        assert ledgers[0]["reward_window_id"] == window["id"]
+        assert ledgers[0]["state"] == "reserved"
+        assert ledgers[0]["approved_amount"] == 70
+        assert ledgers[0]["paid_amount"] == 0
+
+        batch = await repo.get_settlement_batch(window["settlement_batch_id"])
+        ready = await service.retry_anchor_settlement_batch(batch["id"], now=BUILD_NOW + timedelta(minutes=1))
+        submitted = await service.submit_anchor_job(batch["id"], now=BUILD_NOW + timedelta(minutes=2))
+        anchored = await service.mark_anchor_job_anchored(submitted["id"], now=BUILD_NOW + timedelta(minutes=3))
+
+        refreshed = await repo.list_poker_mtt_budget_ledgers(
+            budget_source_id="treasury:poker-mtt:beta",
+            emission_epoch_id="epoch-2026w15",
+        )
+        assert ready["state"] == "anchor_ready"
+        assert anchored["state"] == "anchored"
+        assert refreshed[0]["settlement_batch_id"] == batch["id"]
+        assert refreshed[0]["state"] == "paid"
+        assert refreshed[0]["approved_amount"] == 70
+        assert refreshed[0]["paid_amount"] == 70
+
+    asyncio.run(scenario())
+
+
+def test_reward_window_rebuild_uses_effective_multiplier_snapshots_as_inputs():
+    async def scenario():
+        repo = FakeRepository()
+        _seed_reward_ready_result(repo, tournament_id="mtt-mult-a", miner_address="claw1multia", total_score=1.0)
+        _seed_reward_ready_result(repo, tournament_id="mtt-mult-b", miner_address="claw1multib", total_score=1.0)
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        initial_window = await _build_window(service, reward_pool_amount=100)
+        initial_projection = next(
+            artifact["payload_json"]
+            for artifact in await repo.list_artifacts_for_entity("reward_window", initial_window["id"])
+            if artifact["kind"] == "poker_mtt_reward_window_projection"
+        )
+        assert initial_projection["miner_reward_rows"] == [
+            {
+                "gross_reward_amount": 50,
+                "miner_address": "claw1multia",
+                "submission_count": 1,
+            },
+            {
+                "gross_reward_amount": 50,
+                "miner_address": "claw1multib",
+                "submission_count": 1,
+            },
+        ]
+
+        await repo.save_poker_mtt_multiplier_snapshot(
+            {
+                "id": "poker_mtt_multiplier:prior-window-a",
+                "miner_address": "claw1multia",
+                "source_result_id": "prior-window-a",
+                "multiplier_before": 1.0,
+                "multiplier_after": 1.04,
+                "rolling_score": 1.0,
+                "effective_window_start_at": "2026-04-10T00:00:00Z",
+                "effective_window_end_at": "2026-04-11T00:00:00Z",
+                "policy_bundle_version": "poker_mtt_v1",
+                "created_at": "2026-04-09T23:59:00Z",
+                "updated_at": "2026-04-09T23:59:00Z",
+            }
+        )
+
+        rebuilt_window = await service.build_poker_mtt_reward_window(
+            lane="poker_mtt_daily",
+            window_start_at=WINDOW_START,
+            window_end_at=WINDOW_END,
+            reward_pool_amount=100,
+            include_provisional=False,
+            policy_bundle_version=POLICY_VERSION,
+            now=BUILD_NOW + timedelta(minutes=5),
+        )
+        rebuilt_projection = next(
+            artifact["payload_json"]
+            for artifact in await repo.list_artifacts_for_entity("reward_window", rebuilt_window["id"])
+            if artifact["kind"] == "poker_mtt_reward_window_projection"
+        )
+
+        assert rebuilt_projection["input_snapshot_root"] != initial_projection["input_snapshot_root"]
+        assert rebuilt_projection["miner_reward_rows"] == [
+            {
+                "gross_reward_amount": 51,
+                "miner_address": "claw1multia",
+                "submission_count": 1,
+            },
+            {
+                "gross_reward_amount": 49,
+                "miner_address": "claw1multib",
+                "submission_count": 1,
+            },
+        ]
 
     asyncio.run(scenario())
 

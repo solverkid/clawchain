@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +42,275 @@ class StaticTaskProvider:
 
     async def aclose(self):
         return None
+
+
+class GuardedMinerWriterRepository(FakeRepository):
+    def __init__(self):
+        super().__init__()
+        self.writer_calls: list[tuple[str, str]] = []
+
+    async def update_miner(self, address: str, updates: dict) -> dict:  # noqa: ARG002
+        raise AssertionError("generic update_miner should not be used")
+
+    async def update_miner_cluster_identity(
+        self,
+        address: str,
+        *,
+        economic_unit_id: str,
+        updated_at,
+        ip_address: str | None = None,
+        user_agent_hash: str | None = None,
+    ) -> dict:
+        self.writer_calls.append(("cluster_identity", address))
+        updates = {
+            "economic_unit_id": economic_unit_id,
+            "updated_at": updated_at,
+        }
+        if ip_address is not None:
+            updates["ip_address"] = ip_address
+        if user_agent_hash is not None:
+            updates["user_agent_hash"] = user_agent_hash
+        return await FakeRepository.update_miner(self, address, updates)
+
+    async def update_miner_forecast_participation(
+        self,
+        address: str,
+        *,
+        updated_at,
+        forecast_commits: int | None = None,
+        forecast_reveals: int | None = None,
+        ops_reliability: float | None = None,
+        fast_task_opportunities: int | None = None,
+        fast_task_misses: int | None = None,
+        fast_window_start_at=None,
+    ) -> dict:
+        self.writer_calls.append(("forecast_participation", address))
+        updates = {"updated_at": updated_at}
+        if forecast_commits is not None:
+            updates["forecast_commits"] = forecast_commits
+        if forecast_reveals is not None:
+            updates["forecast_reveals"] = forecast_reveals
+        if ops_reliability is not None:
+            updates["ops_reliability"] = ops_reliability
+        if fast_task_opportunities is not None:
+            updates["fast_task_opportunities"] = fast_task_opportunities
+        if fast_task_misses is not None:
+            updates["fast_task_misses"] = fast_task_misses
+        if fast_window_start_at is not None:
+            updates["fast_window_start_at"] = fast_window_start_at
+        return await FakeRepository.update_miner(self, address, updates)
+
+    async def update_miner_forecast_settlement(
+        self,
+        address: str,
+        *,
+        updated_at,
+        total_rewards: int | None = None,
+        held_rewards: int | None = None,
+        settled_tasks: int | None = None,
+        correct_direction_count: int | None = None,
+        edge_score_total: float | None = None,
+        model_reliability: float | None = None,
+        admission_state: str | None = None,
+    ) -> dict:
+        self.writer_calls.append(("forecast_settlement", address))
+        updates = {"updated_at": updated_at}
+        if total_rewards is not None:
+            updates["total_rewards"] = total_rewards
+        if held_rewards is not None:
+            updates["held_rewards"] = held_rewards
+        if settled_tasks is not None:
+            updates["settled_tasks"] = settled_tasks
+        if correct_direction_count is not None:
+            updates["correct_direction_count"] = correct_direction_count
+        if edge_score_total is not None:
+            updates["edge_score_total"] = edge_score_total
+        if model_reliability is not None:
+            updates["model_reliability"] = model_reliability
+        if admission_state is not None:
+            updates["admission_state"] = admission_state
+        return await FakeRepository.update_miner(self, address, updates)
+
+    async def update_miner_public_ranking(self, address: str, *, public_rank: int, public_elo: int) -> dict:
+        self.writer_calls.append(("public_ranking", address))
+        return await FakeRepository.update_miner(
+            self,
+            address,
+            {
+                "public_rank": public_rank,
+                "public_elo": public_elo,
+            },
+        )
+
+    async def update_arena_miner_multiplier(self, address: str, *, arena_multiplier: float, updated_at) -> dict:
+        self.writer_calls.append(("arena_multiplier", address))
+        return await FakeRepository.update_miner(
+            self,
+            address,
+            {
+                "arena_multiplier": arena_multiplier,
+                "updated_at": updated_at,
+            },
+        )
+
+    async def update_poker_mtt_miner_multiplier(self, address: str, *, poker_mtt_multiplier: float, updated_at) -> dict:
+        self.writer_calls.append(("poker_mtt_multiplier", address))
+        return await FakeRepository.update_miner(
+            self,
+            address,
+            {
+                "poker_mtt_multiplier": poker_mtt_multiplier,
+                "updated_at": updated_at,
+            },
+        )
+
+
+class GuardedSettlementWriterRepository(GuardedMinerWriterRepository):
+    async def save_reward_window(self, reward_window: dict) -> dict:  # noqa: ARG002
+        raise AssertionError("generic save_reward_window should not be used")
+
+    async def save_settlement_batch(self, settlement_batch: dict) -> dict:  # noqa: ARG002
+        raise AssertionError("generic save_settlement_batch should not be used")
+
+    async def link_reward_window_settlement_batch(
+        self,
+        reward_window_id: str,
+        *,
+        settlement_batch_id: str,
+        updated_at,
+    ) -> dict:
+        self.writer_calls.append(("reward_window_link", reward_window_id))
+        return await FakeRepository.save_reward_window(
+            self,
+            {
+                "id": reward_window_id,
+                "settlement_batch_id": settlement_batch_id,
+                "updated_at": updated_at,
+            },
+        )
+
+    async def sync_open_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        lane: str,
+        window_start_at,
+        window_end_at,
+        reward_window_ids: list[str],
+        policy_bundle_version: str,
+        task_count: int,
+        miner_count: int,
+        total_reward_amount: int,
+        updated_at,
+        created_at=None,
+    ) -> dict:
+        self.writer_calls.append(("settlement_sync_open", settlement_batch_id))
+        payload = {
+            "id": settlement_batch_id,
+            "lane": lane,
+            "state": "open",
+            "window_start_at": window_start_at,
+            "window_end_at": window_end_at,
+            "reward_window_ids": reward_window_ids,
+            "policy_bundle_version": policy_bundle_version,
+            "task_count": task_count,
+            "miner_count": miner_count,
+            "total_reward_amount": total_reward_amount,
+            "updated_at": updated_at,
+        }
+        if created_at is not None:
+            payload["created_at"] = created_at
+            payload["anchor_job_id"] = None
+            payload["anchor_schema_version"] = None
+            payload["canonical_root"] = None
+            payload["anchor_payload_json"] = None
+            payload["anchor_payload_hash"] = None
+        return await FakeRepository.save_settlement_batch(self, payload)
+
+    async def mark_settlement_batch_anchor_ready(
+        self,
+        settlement_batch_id: str,
+        *,
+        policy_bundle_version: str,
+        anchor_schema_version: str,
+        canonical_root: str,
+        anchor_payload_json: dict,
+        anchor_payload_hash: str,
+        updated_at,
+    ) -> dict:
+        self.writer_calls.append(("settlement_anchor_ready", settlement_batch_id))
+        return await FakeRepository.save_settlement_batch(
+            self,
+            {
+                "id": settlement_batch_id,
+                "state": "anchor_ready",
+                "anchor_job_id": None,
+                "policy_bundle_version": policy_bundle_version,
+                "anchor_schema_version": anchor_schema_version,
+                "canonical_root": canonical_root,
+                "anchor_payload_json": anchor_payload_json,
+                "anchor_payload_hash": anchor_payload_hash,
+                "updated_at": updated_at,
+            },
+        )
+
+    async def mark_settlement_batch_anchor_submitted(
+        self,
+        settlement_batch_id: str,
+        *,
+        anchor_job_id: str,
+        updated_at,
+    ) -> dict:
+        self.writer_calls.append(("settlement_anchor_submitted", settlement_batch_id))
+        return await FakeRepository.save_settlement_batch(
+            self,
+            {
+                "id": settlement_batch_id,
+                "state": "anchor_submitted",
+                "anchor_job_id": anchor_job_id,
+                "updated_at": updated_at,
+            },
+        )
+
+    async def mark_settlement_batch_terminal(
+        self,
+        settlement_batch_id: str,
+        *,
+        state: str,
+        updated_at,
+    ) -> dict:
+        self.writer_calls.append(("settlement_terminal", settlement_batch_id))
+        return await FakeRepository.save_settlement_batch(
+            self,
+            {
+                "id": settlement_batch_id,
+                "state": state,
+                "updated_at": updated_at,
+            },
+        )
+
+    async def cancel_settlement_batch(
+        self,
+        settlement_batch_id: str,
+        *,
+        total_reward_amount: int,
+        updated_at,
+    ) -> dict:
+        self.writer_calls.append(("settlement_cancel", settlement_batch_id))
+        return await FakeRepository.save_settlement_batch(
+            self,
+            {
+                "id": settlement_batch_id,
+                "state": "cancelled",
+                "total_reward_amount": total_reward_amount,
+                "anchor_job_id": None,
+                "anchor_schema_version": None,
+                "canonical_root": None,
+                "anchor_payload_json": None,
+                "anchor_payload_hash": None,
+                "updated_at": updated_at,
+            },
+        )
 
 
 def test_build_fast_task_window():
@@ -1112,6 +1381,123 @@ def test_daily_anchor_updates_model_reliability_without_rewards():
     asyncio.run(scenario())
 
 
+def test_daily_anchor_resolution_uses_forecast_settlement_writer():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        provider = StaticTaskProvider(
+            [],
+            daily_resolutions=[
+                {
+                    "outcome": 1,
+                    "resolution_status": "resolved",
+                    "start_ref_price": 70000.0,
+                    "end_ref_price": 71200.0,
+                }
+            ],
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=provider)
+
+        await service.register_miner(
+            address="claw1dailywriter",
+            name="daily-writer",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        now = datetime(2026, 4, 10, 0, 0, 1, tzinfo=timezone.utc)
+        task = forecast_engine.build_daily_anchor_task(now, asset="BTC")
+        await repo.upsert_task(task)
+        await repo.save_submission(
+            {
+                "id": f"sub:{task['task_run_id']}:claw1dailywriter",
+                "task_run_id": task["task_run_id"],
+                "miner_address": "claw1dailywriter",
+                "economic_unit_id": "eu:dailywriter",
+                "commit_request_id": "req-commit",
+                "reveal_request_id": "req-reveal",
+                "commit_hash": "hash",
+                "commit_nonce": "nonce",
+                "p_yes_bps": 8500,
+                "eligibility_status": "eligible",
+                "state": "revealed",
+                "score": 0.0,
+                "reward_amount": 0,
+                "accepted_commit_at": "2026-04-10T00:00:02Z",
+                "accepted_reveal_at": "2026-04-10T00:00:06Z",
+                "created_at": "2026-04-10T00:00:02Z",
+                "updated_at": "2026-04-10T00:00:06Z",
+            }
+        )
+
+        await service._settle_due_daily_tasks(datetime(2026, 4, 11, 0, 0, 5, tzinfo=timezone.utc))
+
+        assert ("forecast_settlement", "claw1dailywriter") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_release_matured_holds_uses_forecast_settlement_writer():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        settings = forecast_engine.ForecastSettings()
+        service = forecast_engine.ForecastMiningService(repo, settings)
+        created_at = datetime(2026, 4, 9, 0, 0, 0, tzinfo=timezone.utc)
+        await repo.register_miner(
+            {
+                "address": "claw1holdwriter",
+                "name": "hold-writer",
+                "public_key": "pubkey",
+                "status": "active",
+                "economic_unit_id": "eu:holdwriter",
+                "miner_version": "0.4.0",
+                "admission_state": "probation",
+                "forecast_commits": 0,
+                "forecast_reveals": settings.admission_mature_fast_reveals,
+                "total_rewards": 100,
+                "held_rewards": 80,
+                "fast_task_opportunities": 0,
+                "fast_task_misses": 0,
+                "fast_window_start_at": created_at,
+                "settled_tasks": 0,
+                "correct_direction_count": 0,
+                "edge_score_total": 0.0,
+                "model_reliability": 1.0,
+                "ops_reliability": 1.0,
+                "arena_multiplier": 1.0,
+                "poker_mtt_multiplier": 1.0,
+                **forecast_engine._poker_mtt_reward_identity_defaults("claw1holdwriter", created_at),
+                "public_rank": None,
+                "public_elo": 1200,
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+        )
+        await repo.save_hold_entry(
+            {
+                "id": "hold:claw1holdwriter:1",
+                "miner_address": "claw1holdwriter",
+                "task_run_id": "task-hold-1",
+                "submission_id": "submission-hold-1",
+                "amount_held": 80,
+                "amount_released": 0,
+                "state": "held",
+                "release_after": "2026-04-09T00:00:01Z",
+                "created_at": "2026-04-09T00:00:01Z",
+                "updated_at": "2026-04-09T00:00:01Z",
+            }
+        )
+
+        await service._release_matured_holds(datetime(2026, 4, 11, 0, 0, 5, tzinfo=timezone.utc))
+
+        assert ("forecast_settlement", "claw1holdwriter") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_active_tasks_exclude_resolved_daily_tasks_from_prior_days():
     async def scenario():
         repo = FakeRepository()
@@ -1202,6 +1588,238 @@ def test_arena_multiplier_changes_after_sixteenth_eligible_result():
         assert result["items"][0]["eligible_for_multiplier"] is True
         assert miner["arena_multiplier"] > 1.0
         assert miner["arena_multiplier"] <= 1.04
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_apply_arena_results_uses_arena_multiplier_writer():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        settings = forecast_engine.ForecastSettings()
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1arenawriter",
+            name="arena-writer",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+
+        for index in range(16):
+            await service.apply_arena_results(
+                tournament_id=f"arena-writer-{index}",
+                rated_or_practice="rated",
+                human_only=True,
+                results=[{"miner_id": "claw1arenawriter", "arena_score": 0.8}],
+                completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+            )
+
+        assert ("arena_multiplier", "claw1arenawriter") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_commit_submission_uses_cluster_identity_and_forecast_participation_writers():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1writercommit",
+            name="writer-commit",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        task = forecast_engine.build_fast_task(datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc), settings, asset="BTCUSDT")
+        await repo.upsert_task(task)
+
+        await service.commit_submission(
+            task_run_id=task["task_run_id"],
+            miner_address="claw1writercommit",
+            economic_unit_id="eu:writercommit",
+            request_id="req-commit",
+            commit_hash="hash",
+            commit_nonce="nonce",
+            accepted_at=datetime(2026, 4, 10, 9, 0, 2, tzinfo=timezone.utc),
+            ip_address="10.0.0.1",
+            user_agent="claw/1.0",
+        )
+
+        assert ("cluster_identity", "claw1writercommit") in repo.writer_calls
+        assert ("forecast_participation", "claw1writercommit") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_register_miner_rebinds_existing_cluster_with_cluster_identity_writer():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        settings = forecast_engine.ForecastSettings()
+        service = forecast_engine.ForecastMiningService(repo, settings)
+        now = datetime(2026, 4, 10, 8, 0, 0, tzinfo=timezone.utc)
+
+        await repo.register_miner(
+            {
+                "address": "claw1existingcluster",
+                "name": "existing-cluster",
+                "public_key": "pubkey-existing",
+                "status": "active",
+                "economic_unit_id": "eu:legacycluster",
+                "miner_version": "0.4.0",
+                "ip_address": "10.0.0.9",
+                "user_agent_hash": "ua-existing",
+                "admission_state": "probation",
+                "forecast_commits": 0,
+                "forecast_reveals": 0,
+                "total_rewards": 0,
+                "held_rewards": 0,
+                "fast_task_opportunities": 0,
+                "fast_task_misses": 0,
+                "fast_window_start_at": now,
+                "settled_tasks": 0,
+                "correct_direction_count": 0,
+                "edge_score_total": 0.0,
+                "model_reliability": 1.0,
+                "ops_reliability": 1.0,
+                "arena_multiplier": 1.0,
+                "poker_mtt_multiplier": 1.0,
+                **forecast_engine._poker_mtt_reward_identity_defaults("claw1existingcluster", now),
+                "public_rank": None,
+                "public_elo": 1200,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+        original_compute = forecast_engine.compute_economic_unit_components
+        original_utc_now = forecast_engine.utc_now
+        forecast_engine.compute_economic_unit_components = lambda miners: {
+            "claw1existingcluster": "eu:rebuiltcluster",
+            "claw1newcluster": "eu:newcluster",
+        }
+        forecast_engine.utc_now = lambda: now
+        try:
+            await service.register_miner(
+                address="claw1newcluster",
+                name="new-cluster",
+                public_key="pubkey-new",
+                miner_version="0.4.0",
+            )
+        finally:
+            forecast_engine.compute_economic_unit_components = original_compute
+            forecast_engine.utc_now = original_utc_now
+
+        assert ("cluster_identity", "claw1existingcluster") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_settle_due_tasks_uses_forecast_settlement_writer():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        provider = StaticTaskProvider(
+            [{"outcome": 1, "resolution_status": "resolved", "commit_close_ref_price": 70000.5, "end_ref_price": 70120.0}]
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=provider)
+
+        await service.register_miner(
+            address="claw1writersettle",
+            name="writer-settle",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        task_now = datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc)
+        task = forecast_engine.build_fast_task(task_now, settings, asset="BTCUSDT")
+        task["commit_close_ref_price"] = 70000.5
+        await repo.upsert_task(task)
+        await repo.save_submission(
+            {
+                "id": f"sub:{task['task_run_id']}:claw1writersettle",
+                "task_run_id": task["task_run_id"],
+                "miner_address": "claw1writersettle",
+                "economic_unit_id": "eu:writersettle",
+                "commit_request_id": "req-commit",
+                "reveal_request_id": "req-reveal",
+                "commit_hash": "hash",
+                "commit_nonce": "nonce",
+                "p_yes_bps": 6200,
+                "eligibility_status": "eligible",
+                "state": "revealed",
+                "score": 0.0,
+                "reward_amount": 0,
+                "accepted_commit_at": "2026-04-10T09:00:02Z",
+                "accepted_reveal_at": "2026-04-10T09:00:06Z",
+                "created_at": "2026-04-10T09:00:02Z",
+                "updated_at": "2026-04-10T09:00:06Z",
+            }
+        )
+
+        await service.reconcile(datetime(2026, 4, 10, 9, 1, 5, tzinfo=timezone.utc))
+
+        assert ("forecast_settlement", "claw1writersettle") in repo.writer_calls
+        assert ("forecast_participation", "claw1writersettle") in repo.writer_calls
+        assert ("public_ranking", "claw1writersettle") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_refresh_public_ranks_uses_public_ranking_writer():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        now = datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc)
+
+        for address, rewards, edge in [
+            ("claw1rankone", 120, 0.7),
+            ("claw1ranktwo", 90, 0.3),
+        ]:
+            await repo.register_miner(
+                {
+                    "address": address,
+                    "name": address,
+                    "public_key": f"{address}-pubkey",
+                    "status": "active",
+                    "economic_unit_id": f"eu:{address}",
+                    "miner_version": "0.4.0",
+                    "admission_state": "mature",
+                    "forecast_commits": 0,
+                    "forecast_reveals": 0,
+                    "total_rewards": rewards,
+                    "held_rewards": 0,
+                    "fast_task_opportunities": 0,
+                    "fast_task_misses": 0,
+                    "fast_window_start_at": now,
+                    "settled_tasks": 10,
+                    "correct_direction_count": 5,
+                    "edge_score_total": edge,
+                    "model_reliability": 1.0,
+                    "ops_reliability": 1.0,
+                    "arena_multiplier": 1.0,
+                    "poker_mtt_multiplier": 1.0,
+                    **forecast_engine._poker_mtt_reward_identity_defaults(address, now),
+                    "public_rank": None,
+                    "public_elo": 1200,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+
+        await service._refresh_public_ranks()
+
+        assert ("public_ranking", "claw1rankone") in repo.writer_calls
+        assert ("public_ranking", "claw1ranktwo") in repo.writer_calls
 
     import asyncio
 
@@ -1460,6 +2078,64 @@ def test_reconcile_skips_poker_mtt_auto_windows_when_rollout_disabled():
     asyncio.run(scenario())
 
 
+def test_reconcile_builds_poker_mtt_window_for_provisional_rows_after_watermark():
+    async def scenario():
+        repo = FakeRepository()
+        settings = poker_mtt_rollout_settings(
+            poker_mtt_daily_reward_pool_amount=100,
+            poker_mtt_weekly_reward_pool_amount=0,
+            poker_mtt_finalization_watermark_seconds=60,
+            poker_mtt_daily_policy_bundle_version="poker_mtt_daily_policy_v2",
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1pokerprovisionalauto",
+            name="poker-provisional-auto",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        await save_poker_mtt_final_ranking_refs(
+            repo,
+            "poker-mtt-provisional-auto-1",
+            [("claw1pokerprovisionalauto", 1)],
+            policy_bundle_version="poker_mtt_daily_policy_v2",
+        )
+        await service.apply_poker_mtt_results(
+            tournament_id="poker-mtt-provisional-auto-1",
+            rated_or_practice="rated",
+            human_only=True,
+            field_size=30,
+            policy_bundle_version="poker_mtt_daily_policy_v2",
+            results=[
+                {
+                    "miner_id": "claw1pokerprovisionalauto",
+                    "final_rank": 1,
+                    "tournament_result_score": 1.0,
+                    "hidden_eval_score": 0.0,
+                    "consistency_input_score": 0.0,
+                    "evaluation_state": "provisional",
+                    **poker_mtt_reward_ready_refs(
+                        "poker-mtt-provisional-auto-1",
+                        "claw1pokerprovisionalauto",
+                    ),
+                }
+            ],
+            completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+        await service.reconcile(datetime(2026, 4, 11, 0, 2, 0, tzinfo=timezone.utc))
+
+        reward_windows = [window for window in await repo.list_reward_windows() if window["lane"] == "poker_mtt_daily"]
+        assert len(reward_windows) == 1
+        assert reward_windows[0]["state"] == "finalized"
+        assert reward_windows[0]["submission_count"] == 1
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_retry_anchor_settlement_batch_rejects_poker_mtt_when_rollout_disabled():
     async def scenario():
         repo = FakeRepository()
@@ -1571,6 +2247,336 @@ def test_poker_mtt_multiplier_changes_after_sixteenth_eligible_result():
         assert snapshots[0]["multiplier_before"] == 1.0
         assert snapshots[0]["multiplier_after"] == miner["poker_mtt_multiplier"]
         assert snapshots[0]["rolling_score"] == result["items"][0]["rolling_score"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_apply_poker_mtt_results_uses_poker_multiplier_writer():
+    async def scenario():
+        repo = GuardedMinerWriterRepository()
+        settings = forecast_engine.ForecastSettings()
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1pokerwriter",
+            name="poker-writer",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+
+        for index in range(16):
+            tournament_id = f"poker-writer-{index}"
+            await save_poker_mtt_final_ranking_refs(repo, tournament_id, [("claw1pokerwriter", 1)])
+            await service.apply_poker_mtt_results(
+                tournament_id=tournament_id,
+                rated_or_practice="rated",
+                human_only=True,
+                field_size=30,
+                policy_bundle_version="poker_mtt_v1",
+                results=[
+                    {
+                        "miner_id": "claw1pokerwriter",
+                        "final_rank": 1,
+                        "tournament_result_score": 0.9,
+                        "hidden_eval_score": 0.6,
+                        "consistency_input_score": 0.3,
+                        "evaluation_state": "final",
+                        **poker_mtt_reward_ready_refs(tournament_id, "claw1pokerwriter"),
+                    }
+                ],
+                completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+            )
+
+        assert ("poker_mtt_multiplier", "claw1pokerwriter") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_build_settlement_batches_uses_settlement_writer_helpers():
+    async def scenario():
+        repo = GuardedSettlementWriterRepository()
+        now = datetime(2026, 4, 11, 0, 1, 0, tzinfo=timezone.utc)
+        reward_window_id = "rw_forecast_20260411T000000Z"
+        await FakeRepository.save_reward_window(
+            repo,
+            {
+                "id": reward_window_id,
+                "lane": "forecast_15m",
+                "state": "finalized",
+                "window_start_at": "2026-04-11T00:00:00Z",
+                "window_end_at": "2026-04-11T00:15:00Z",
+                "task_count": 1,
+                "submission_count": 1,
+                "miner_count": 1,
+                "total_reward_amount": 37,
+                "settlement_batch_id": None,
+                "task_run_ids": ["task-1"],
+                "miner_addresses": ["claw1settlementwriter"],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "created_at": "2026-04-11T00:00:00Z",
+                "updated_at": "2026-04-11T00:00:00Z",
+            },
+        )
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        await service._build_settlement_batches(now)
+
+        batch_id = "sb_forecast_20260411T000000Z"
+        saved_batch = await repo.get_settlement_batch(batch_id)
+        saved_window = await repo.get_reward_window(reward_window_id)
+
+        assert ("settlement_sync_open", batch_id) in repo.writer_calls
+        assert ("reward_window_link", reward_window_id) in repo.writer_calls
+        assert saved_batch["state"] == "open"
+        assert saved_window["settlement_batch_id"] == batch_id
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_retry_anchor_settlement_batch_uses_anchor_ready_writer():
+    async def scenario():
+        repo = GuardedSettlementWriterRepository()
+        now = datetime(2026, 4, 11, 0, 1, 6, tzinfo=timezone.utc)
+        reward_window_id = "rw_anchor_ready"
+        batch_id = "sb_anchor_ready"
+        await FakeRepository.save_reward_window(
+            repo,
+            {
+                "id": reward_window_id,
+                "lane": "forecast_15m",
+                "state": "finalized",
+                "window_start_at": "2026-04-11T00:00:00Z",
+                "window_end_at": "2026-04-11T00:15:00Z",
+                "task_count": 1,
+                "submission_count": 0,
+                "miner_count": 0,
+                "total_reward_amount": 11,
+                "settlement_batch_id": batch_id,
+                "task_run_ids": [],
+                "miner_addresses": [],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "created_at": "2026-04-11T00:00:00Z",
+                "updated_at": "2026-04-11T00:00:00Z",
+            },
+        )
+        await FakeRepository.save_settlement_batch(
+            repo,
+            {
+                "id": batch_id,
+                "lane": "forecast_15m",
+                "state": "open",
+                "window_start_at": "2026-04-11T00:00:00Z",
+                "window_end_at": "2026-04-11T00:15:00Z",
+                "reward_window_ids": [reward_window_id],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "task_count": 1,
+                "miner_count": 0,
+                "total_reward_amount": 11,
+                "anchor_job_id": None,
+                "anchor_schema_version": None,
+                "canonical_root": None,
+                "anchor_payload_json": None,
+                "anchor_payload_hash": None,
+                "created_at": "2026-04-11T00:00:00Z",
+                "updated_at": "2026-04-11T00:00:00Z",
+            },
+        )
+
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        async def noop_reconcile(now=None):  # noqa: ANN001
+            return None
+
+        service.reconcile = noop_reconcile  # type: ignore[method-assign]
+
+        saved = await service.retry_anchor_settlement_batch(batch_id, now=now)
+
+        assert ("settlement_anchor_ready", batch_id) in repo.writer_calls
+        assert saved["state"] == "anchor_ready"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_submit_anchor_job_uses_anchor_submitted_writer():
+    async def scenario():
+        repo = GuardedSettlementWriterRepository()
+        now = datetime(2026, 4, 11, 0, 1, 7, tzinfo=timezone.utc)
+        batch_id = "sb_anchor_submit"
+        await FakeRepository.save_settlement_batch(
+            repo,
+            {
+                "id": batch_id,
+                "lane": "forecast_15m",
+                "state": "anchor_ready",
+                "window_start_at": "2026-04-11T00:00:00Z",
+                "window_end_at": "2026-04-11T00:15:00Z",
+                "reward_window_ids": ["rw_anchor_submit"],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "task_count": 1,
+                "miner_count": 1,
+                "total_reward_amount": 11,
+                "anchor_job_id": None,
+                "anchor_schema_version": "clawchain.anchor_payload.v1",
+                "canonical_root": "sha256:" + "a" * 64,
+                "anchor_payload_json": {"canonical_root": "sha256:" + "a" * 64},
+                "anchor_payload_hash": "sha256:" + "b" * 64,
+                "created_at": "2026-04-11T00:00:00Z",
+                "updated_at": "2026-04-11T00:00:00Z",
+            },
+        )
+
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        async def noop_reconcile(now=None):  # noqa: ANN001
+            return None
+
+        service.reconcile = noop_reconcile  # type: ignore[method-assign]
+
+        saved = await service.submit_anchor_job(batch_id, now=now)
+
+        assert ("settlement_anchor_submitted", batch_id) in repo.writer_calls
+        assert saved["state"] == "anchor_submitted"
+        assert saved["anchor_job_id"].startswith("aj_sb_anchor_submit_")
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_mark_anchor_job_anchored_uses_terminal_writer():
+    async def scenario():
+        repo = GuardedSettlementWriterRepository()
+        now = datetime(2026, 4, 11, 0, 1, 8, tzinfo=timezone.utc)
+        batch_id = "sb_anchor_terminal"
+        anchor_job_id = "aj_anchor_terminal"
+        await FakeRepository.save_settlement_batch(
+            repo,
+            {
+                "id": batch_id,
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "window_start_at": "2026-04-11T00:00:00Z",
+                "window_end_at": "2026-04-11T00:15:00Z",
+                "reward_window_ids": [],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "task_count": 1,
+                "miner_count": 1,
+                "total_reward_amount": 11,
+                "anchor_job_id": anchor_job_id,
+                "anchor_schema_version": "clawchain.anchor_payload.v1",
+                "canonical_root": "sha256:" + "a" * 64,
+                "anchor_payload_json": {"canonical_root": "sha256:" + "a" * 64},
+                "anchor_payload_hash": "sha256:" + "b" * 64,
+                "created_at": "2026-04-11T00:00:00Z",
+                "updated_at": "2026-04-11T00:00:00Z",
+            },
+        )
+        await repo.save_anchor_job(
+            {
+                "id": anchor_job_id,
+                "settlement_batch_id": batch_id,
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "anchor_payload_hash": "sha256:" + "b" * 64,
+                "broadcast_status": None,
+                "broadcast_tx_hash": None,
+                "chain_confirmation_status": None,
+                "last_broadcast_at": None,
+                "failure_reason": None,
+                "submitted_at": "2026-04-11T00:00:01Z",
+                "anchored_at": None,
+                "created_at": "2026-04-11T00:00:01Z",
+                "updated_at": "2026-04-11T00:00:01Z",
+            }
+        )
+
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        async def noop_reconcile(now=None):  # noqa: ANN001
+            return None
+
+        service.reconcile = noop_reconcile  # type: ignore[method-assign]
+
+        saved = await service.mark_anchor_job_anchored(anchor_job_id, now=now)
+        saved_batch = await repo.get_settlement_batch(batch_id)
+
+        assert ("settlement_terminal", batch_id) in repo.writer_calls
+        assert saved["state"] == "anchored"
+        assert saved_batch["state"] == "anchored"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_mark_anchor_job_failed_uses_terminal_writer():
+    async def scenario():
+        repo = GuardedSettlementWriterRepository()
+        now = datetime(2026, 4, 11, 0, 1, 9, tzinfo=timezone.utc)
+        batch_id = "sb_anchor_failed"
+        anchor_job_id = "aj_anchor_failed"
+        await FakeRepository.save_settlement_batch(
+            repo,
+            {
+                "id": batch_id,
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "window_start_at": "2026-04-11T00:00:00Z",
+                "window_end_at": "2026-04-11T00:15:00Z",
+                "reward_window_ids": [],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "task_count": 1,
+                "miner_count": 1,
+                "total_reward_amount": 11,
+                "anchor_job_id": anchor_job_id,
+                "anchor_schema_version": "clawchain.anchor_payload.v1",
+                "canonical_root": "sha256:" + "a" * 64,
+                "anchor_payload_json": {"canonical_root": "sha256:" + "a" * 64},
+                "anchor_payload_hash": "sha256:" + "b" * 64,
+                "created_at": "2026-04-11T00:00:00Z",
+                "updated_at": "2026-04-11T00:00:00Z",
+            },
+        )
+        await repo.save_anchor_job(
+            {
+                "id": anchor_job_id,
+                "settlement_batch_id": batch_id,
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "anchor_payload_hash": "sha256:" + "b" * 64,
+                "broadcast_status": None,
+                "broadcast_tx_hash": None,
+                "chain_confirmation_status": None,
+                "last_broadcast_at": None,
+                "failure_reason": None,
+                "submitted_at": "2026-04-11T00:00:01Z",
+                "anchored_at": None,
+                "created_at": "2026-04-11T00:00:01Z",
+                "updated_at": "2026-04-11T00:00:01Z",
+            }
+        )
+
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        async def noop_reconcile(now=None):  # noqa: ANN001
+            return None
+
+        service.reconcile = noop_reconcile  # type: ignore[method-assign]
+
+        saved = await service.mark_anchor_job_failed(anchor_job_id, failure_reason="rpc timeout", now=now)
+        saved_batch = await repo.get_settlement_batch(batch_id)
+
+        assert ("settlement_terminal", batch_id) in repo.writer_calls
+        assert saved["state"] == "anchor_failed"
+        assert saved_batch["state"] == "anchor_failed"
 
     import asyncio
 
@@ -1844,7 +2850,7 @@ def test_build_poker_mtt_reward_window_rejects_no_positive_weights():
             "forfeited_amount": 100,
             "paid_amount": 0,
             "requested_reward_pool_amount": 100,
-            "state": "no_positive_weight",
+            "state": "forfeited",
         }
         assert budget_disposition["budget_enforcement"] == "disabled"
         assert budget_disposition["budget_root"].startswith("sha256:")
@@ -2854,6 +3860,349 @@ def test_reward_window_rebuild_replay_proof_and_anchor_payload():
     asyncio.run(scenario())
 
 
+def test_anchor_job_save_preserves_unspecified_fields_on_update():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_anchor_job(
+            {
+                "id": "aj_contract",
+                "settlement_batch_id": "sb_contract",
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "anchor_payload_hash": "sha256:anchor-job-contract",
+                "broadcast_status": "broadcast_submitted",
+                "broadcast_tx_hash": "ABC123",
+                "chain_confirmation_status": "pending",
+                "last_broadcast_at": "2026-04-10T12:00:05Z",
+                "failure_reason": None,
+                "submitted_at": "2026-04-10T12:00:01Z",
+                "anchored_at": None,
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:05Z",
+            }
+        )
+
+        saved = await repo.save_anchor_job(
+            {
+                "id": "aj_contract",
+                "chain_confirmation_status": "confirmed",
+                "updated_at": "2026-04-10T12:01:00Z",
+            }
+        )
+
+        assert saved["settlement_batch_id"] == "sb_contract"
+        assert saved["anchor_payload_hash"] == "sha256:anchor-job-contract"
+        assert saved["broadcast_tx_hash"] == "ABC123"
+        assert saved["chain_confirmation_status"] == "confirmed"
+        assert saved["submitted_at"] == "2026-04-10T12:00:01Z"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_reward_window_save_preserves_unspecified_fields_on_update():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_reward_window(
+            {
+                "id": "rw_contract",
+                "lane": "forecast_15m",
+                "state": "finalized",
+                "window_start_at": "2026-04-10T12:00:00Z",
+                "window_end_at": "2026-04-10T12:15:00Z",
+                "task_count": 1,
+                "submission_count": 2,
+                "miner_count": 1,
+                "total_reward_amount": 33,
+                "settlement_batch_id": None,
+                "task_run_ids": ["task-contract"],
+                "miner_addresses": ["claw1contract"],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:01Z",
+            }
+        )
+
+        saved = await repo.save_reward_window(
+            {
+                "id": "rw_contract",
+                "settlement_batch_id": "sb_contract",
+                "updated_at": "2026-04-10T12:01:00Z",
+            }
+        )
+
+        assert saved["lane"] == "forecast_15m"
+        assert saved["task_run_ids"] == ["task-contract"]
+        assert saved["miner_addresses"] == ["claw1contract"]
+        assert saved["settlement_batch_id"] == "sb_contract"
+        assert saved["created_at"] == "2026-04-10T12:00:01Z"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_reward_window_link_helper_only_patches_owned_fields():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_reward_window(
+            {
+                "id": "rw_link_helpers",
+                "lane": "forecast_15m",
+                "state": "finalized",
+                "window_start_at": "2026-04-10T12:00:00Z",
+                "window_end_at": "2026-04-10T12:15:00Z",
+                "task_count": 1,
+                "submission_count": 2,
+                "miner_count": 1,
+                "total_reward_amount": 33,
+                "settlement_batch_id": None,
+                "task_run_ids": ["task-link"],
+                "miner_addresses": ["claw1link"],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:01Z",
+            }
+        )
+
+        saved = await repo.link_reward_window_settlement_batch(
+            "rw_link_helpers",
+            settlement_batch_id="sb_link_helpers",
+            updated_at="2026-04-10T12:01:00Z",
+        )
+
+        assert saved["lane"] == "forecast_15m"
+        assert saved["task_count"] == 1
+        assert saved["policy_bundle_version"] == "pb_2026_04_09_a"
+        assert saved["settlement_batch_id"] == "sb_link_helpers"
+        assert saved["updated_at"] == "2026-04-10T12:01:00Z"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_settlement_batch_save_preserves_unspecified_fields_on_update():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_settlement_batch(
+            {
+                "id": "sb_contract",
+                "lane": "forecast_15m",
+                "state": "open",
+                "window_start_at": "2026-04-10T12:00:00Z",
+                "window_end_at": "2026-04-10T12:15:00Z",
+                "reward_window_ids": ["rw_contract"],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "task_count": 1,
+                "miner_count": 1,
+                "total_reward_amount": 33,
+                "anchor_job_id": None,
+                "anchor_schema_version": None,
+                "canonical_root": None,
+                "anchor_payload_json": None,
+                "anchor_payload_hash": None,
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:01Z",
+            }
+        )
+
+        saved = await repo.save_settlement_batch(
+            {
+                "id": "sb_contract",
+                "state": "anchor_failed",
+                "updated_at": "2026-04-10T12:01:00Z",
+            }
+        )
+
+        assert saved["lane"] == "forecast_15m"
+        assert saved["reward_window_ids"] == ["rw_contract"]
+        assert saved["policy_bundle_version"] == "pb_2026_04_09_a"
+        assert saved["state"] == "anchor_failed"
+        assert saved["created_at"] == "2026-04-10T12:00:01Z"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_settlement_batch_helpers_only_patch_owned_fields():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_settlement_batch(
+            {
+                "id": "sb_helpers",
+                "lane": "forecast_15m",
+                "state": "open",
+                "window_start_at": "2026-04-10T12:00:00Z",
+                "window_end_at": "2026-04-10T12:15:00Z",
+                "reward_window_ids": ["rw_helpers"],
+                "policy_bundle_version": "pb_2026_04_09_a",
+                "task_count": 1,
+                "miner_count": 1,
+                "total_reward_amount": 33,
+                "anchor_job_id": None,
+                "anchor_schema_version": None,
+                "canonical_root": None,
+                "anchor_payload_json": None,
+                "anchor_payload_hash": None,
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:01Z",
+            }
+        )
+
+        synced = await repo.sync_open_settlement_batch(
+            "sb_helpers",
+            lane="forecast_15m",
+            window_start_at="2026-04-10T12:00:00Z",
+            window_end_at="2026-04-10T12:15:00Z",
+            reward_window_ids=["rw_helpers"],
+            policy_bundle_version="pb_2026_04_09_a",
+            task_count=2,
+            miner_count=2,
+            total_reward_amount=55,
+            updated_at="2026-04-10T12:01:00Z",
+        )
+        ready = await repo.mark_settlement_batch_anchor_ready(
+            "sb_helpers",
+            policy_bundle_version="pb_2026_04_09_a",
+            anchor_schema_version="clawchain.anchor_payload.v1",
+            canonical_root="sha256:" + "a" * 64,
+            anchor_payload_json={"canonical_root": "sha256:" + "a" * 64},
+            anchor_payload_hash="sha256:" + "b" * 64,
+            updated_at="2026-04-10T12:01:01Z",
+        )
+        submitted = await repo.mark_settlement_batch_anchor_submitted(
+            "sb_helpers",
+            anchor_job_id="aj_helpers",
+            updated_at="2026-04-10T12:01:02Z",
+        )
+        anchored = await repo.mark_settlement_batch_terminal(
+            "sb_helpers",
+            state="anchored",
+            updated_at="2026-04-10T12:01:03Z",
+        )
+        cancelled = await repo.cancel_settlement_batch(
+            "sb_helpers",
+            total_reward_amount=0,
+            updated_at="2026-04-10T12:01:04Z",
+        )
+
+        assert synced["task_count"] == 2
+        assert synced["miner_count"] == 2
+        assert synced["state"] == "open"
+        assert ready["state"] == "anchor_ready"
+        assert ready["reward_window_ids"] == ["rw_helpers"]
+        assert ready["canonical_root"] == "sha256:" + "a" * 64
+        assert submitted["state"] == "anchor_submitted"
+        assert submitted["anchor_job_id"] == "aj_helpers"
+        assert anchored["state"] == "anchored"
+        assert anchored["policy_bundle_version"] == "pb_2026_04_09_a"
+        assert cancelled["state"] == "cancelled"
+        assert cancelled["reward_window_ids"] == ["rw_helpers"]
+        assert cancelled["anchor_payload_hash"] is None
+        assert cancelled["total_reward_amount"] == 0
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_anchor_job_helpers_only_patch_owned_fields():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_anchor_job(
+            {
+                "id": "aj_helpers",
+                "settlement_batch_id": "sb_helpers",
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "anchor_payload_hash": "sha256:helper-anchor",
+                "broadcast_status": None,
+                "broadcast_tx_hash": None,
+                "chain_confirmation_status": None,
+                "last_broadcast_at": None,
+                "failure_reason": None,
+                "submitted_at": "2026-04-10T12:00:01Z",
+                "anchored_at": None,
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:01Z",
+            }
+        )
+
+        broadcasted = await repo.update_anchor_job_broadcast(
+            "aj_helpers",
+            broadcast_status="broadcast_submitted",
+            broadcast_tx_hash="ABC999",
+            last_broadcast_at="2026-04-10T12:00:05Z",
+            updated_at="2026-04-10T12:00:05Z",
+        )
+        confirmed = await repo.update_anchor_job_confirmation(
+            "aj_helpers",
+            chain_confirmation_status="pending",
+            updated_at="2026-04-10T12:00:06Z",
+        )
+        anchored = await repo.mark_anchor_job_terminal(
+            "aj_helpers",
+            state="anchored",
+            anchored_at="2026-04-10T12:00:07Z",
+            chain_confirmation_status="confirmed",
+            failure_reason=None,
+            updated_at="2026-04-10T12:00:07Z",
+        )
+
+        assert broadcasted["state"] == "anchor_submitted"
+        assert broadcasted["broadcast_tx_hash"] == "ABC999"
+        assert broadcasted["settlement_batch_id"] == "sb_helpers"
+        assert confirmed["chain_confirmation_status"] == "pending"
+        assert confirmed["anchor_payload_hash"] == "sha256:helper-anchor"
+        assert anchored["state"] == "anchored"
+        assert anchored["anchored_at"] == "2026-04-10T12:00:07Z"
+        assert anchored["chain_confirmation_status"] == "confirmed"
+        assert anchored["submitted_at"] == "2026-04-10T12:00:01Z"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_artifact_save_preserves_unspecified_fields_on_update():
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_artifact(
+            {
+                "id": "art_contract",
+                "kind": "chain_tx_plan",
+                "entity_type": "anchor_job",
+                "entity_id": "aj_contract",
+                "payload_json": {"plan_hash": "sha256:plan-a"},
+                "payload_hash": "sha256:artifact-a",
+                "created_at": "2026-04-10T12:00:01Z",
+                "updated_at": "2026-04-10T12:00:01Z",
+            }
+        )
+
+        saved = await repo.save_artifact(
+            {
+                "id": "art_contract",
+                "payload_hash": "sha256:artifact-b",
+                "updated_at": "2026-04-10T12:00:02Z",
+            }
+        )
+
+        assert saved["kind"] == "chain_tx_plan"
+        assert saved["entity_type"] == "anchor_job"
+        assert saved["entity_id"] == "aj_contract"
+        assert saved["payload_json"] == {"plan_hash": "sha256:plan-a"}
+        assert saved["payload_hash"] == "sha256:artifact-b"
+        assert saved["created_at"] == "2026-04-10T12:00:01Z"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_anchor_job_progression_to_anchored():
     async def scenario():
         repo = FakeRepository()
@@ -3001,6 +4350,106 @@ def test_anchor_job_persists_terminal_query_mismatch_state():
         assert result["anchor_job_state"] == "anchor_failed"
         assert saved_job["chain_confirmation_status"] == "root_mismatch"
         assert "root_hash_mismatch" in saved_job["failure_reason"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_confirm_anchor_job_on_chain_rejects_corrupted_local_settlement_artifacts():
+    async def scenario():
+        repo = FakeRepository()
+        current = datetime(2026, 4, 11, 0, 7, 0, tzinfo=timezone.utc)
+        confirmer_response = {}
+
+        async def confirmer(_tx_hash, _now):
+            return {
+                "tx_hash": "TX-CORRUPT",
+                "confirmation_status": "confirmed",
+                "found": True,
+                "height": 77,
+                "code": 0,
+                "raw_log": "",
+                **confirmer_response,
+            }
+
+        service = forecast_engine.ForecastMiningService(
+            repo,
+            poker_mtt_rollout_settings(poker_mtt_projection_artifact_page_size=1),
+            chain_tx_confirmer=confirmer,
+        )
+        reward_window = await build_poker_mtt_anchor_fixture(
+            repo=repo,
+            service=service,
+            tournament_id="poker-mtt-corrupt-local-artifacts-1",
+            miner_addresses=["claw1artifacta", "claw1artifactb"],
+        )
+        batch = await repo.get_settlement_batch(reward_window["settlement_batch_id"])
+        ready_batch = await service.retry_anchor_settlement_batch(batch["id"], now=current)
+        artifacts = await repo.list_artifacts_for_entity("settlement_batch", batch["id"])
+        page_artifact = next(
+            artifact
+            for artifact in artifacts
+            if artifact["kind"] == forecast_engine.SETTLEMENT_ANCHOR_PAGE_ARTIFACT_KIND
+        )
+        corrupted_page = {
+            **page_artifact,
+            "payload_json": {
+                **page_artifact["payload_json"],
+                "miner_reward_rows": [
+                    {
+                        **page_artifact["payload_json"]["miner_reward_rows"][0],
+                        "gross_reward_amount": page_artifact["payload_json"]["miner_reward_rows"][0]["gross_reward_amount"] + 1,
+                    }
+                ],
+                "page_root": page_artifact["payload_json"]["page_root"],
+            },
+            "updated_at": "2026-04-11T00:07:01Z",
+        }
+        await repo.save_artifact(corrupted_page)
+
+        submitted = await service.submit_anchor_job(batch["id"], now=current + timedelta(seconds=1))
+        await repo.save_anchor_job(
+            {
+                **(await repo.get_anchor_job(submitted["anchor_job_id"])),
+                "broadcast_status": "broadcast_submitted",
+                "broadcast_tx_hash": "TX-CORRUPT",
+                "last_broadcast_at": "2026-04-11T00:07:02Z",
+                "updated_at": "2026-04-11T00:07:02Z",
+            }
+        )
+        confirmer_response.update(
+            {
+                "confirmed": True,
+                "query_response": {
+                    "anchor": {
+                        "settlement_batch_id": batch["id"],
+                        "anchor_job_id": submitted["anchor_job_id"],
+                        "lane": ready_batch["lane"],
+                        "schema_version": ready_batch["anchor_schema_version"],
+                        "policy_bundle_version": ready_batch["anchor_payload_json"]["policy_bundle_version"],
+                        "canonical_root": ready_batch["canonical_root"],
+                        "anchor_payload_hash": ready_batch["anchor_payload_hash"],
+                        "reward_window_ids_root": ready_batch["anchor_payload_json"]["reward_window_ids_root"],
+                        "task_run_ids_root": ready_batch["anchor_payload_json"]["task_run_ids_root"],
+                        "miner_reward_rows_root": ready_batch["anchor_payload_json"]["miner_reward_rows_root"],
+                        "window_end_at": ready_batch["window_end_at"],
+                        "total_reward_amount": ready_batch["total_reward_amount"],
+                    }
+                },
+            }
+        )
+
+        receipt = await service.confirm_anchor_job_on_chain(
+            submitted["anchor_job_id"],
+            now=current + timedelta(seconds=3),
+        )
+        saved_job = await repo.get_anchor_job(submitted["anchor_job_id"])
+
+        assert receipt["chain_confirmation_status"] == "root_mismatch"
+        assert receipt["anchor_job_state"] == "anchor_failed"
+        assert saved_job["chain_confirmation_status"] == "root_mismatch"
+        assert "settlement anchor page root mismatch" in saved_job["failure_reason"]
 
     import asyncio
 

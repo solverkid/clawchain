@@ -174,10 +174,15 @@ def build_release_pack(
             "scale_burst_complete": burst_gate,
             "same_run_donor_emitted_payload_replay_complete": emitted_replay_gate,
             "same_run_live_mq_projector_complete": live_projector_complete,
-            "phase3_release_pack_complete": runtime_gate
+            "phase3_release_pack_built": runtime_gate
             and settlement_gate
             and burst_gate
             and (emitted_replay_gate if emitted_mq_replay_path else True),
+            "phase3_release_pack_complete": runtime_gate
+            and settlement_gate
+            and burst_gate
+            and (emitted_replay_gate if emitted_mq_replay_path else True)
+            and live_projector_complete,
         },
         "known_gap": (
             None

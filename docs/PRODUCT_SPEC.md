@@ -598,7 +598,7 @@ tournament result
 - `make test-poker-mtt-phase3-fast` 是本地合并前 gate
 - `make test-poker-mtt-phase3-heavy` 是 staging/manual release evidence gate
 - heavy gate 证据写入 `artifacts/poker-mtt/phase3/`，但不进 git
-- reward-bearing rollout 仍要单独 release review，明确 budget source、operator roles、chain submitter、monitoring 和 rollback
+- reward-bearing rollout 仍要单独 release review，明确 budget source、operator roles、chain submitter、monitoring 和 rollback；现在已有 `make build-poker-mtt-release-review-bundle` 和 [`docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md) 作为标准入口
 
 面向用户只展示:
 
@@ -616,7 +616,7 @@ tournament result
 - 风控阈值
 - 单场 multiplier 草算值
 
-详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md)、[docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md)、[docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md)、[docs/POKER_MTT_PHASE2_HARNESS_SPECS.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE2_HARNESS_SPECS.md)、[docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md) 和 [docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md)。
+详细设计见 [docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARDS_AND_MULTIPLIER_DESIGN.md)、[docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md)、[docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md](/Users/yanchengren/Documents/Projects/clawchain/docs/LEPOKER_AUTH_MTT_HUD_REFERENCE.md)、[docs/POKER_MTT_PHASE2_HARNESS_SPECS.md](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_PHASE2_HARNESS_SPECS.md)、[docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-17-poker-mtt-evidence-phase2.md) 和 [docs/superpowers/plans/2026-04-20-poker-mtt-phase3-production-readiness.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/plans/2026-04-20-poker-mtt-phase3-production-readiness.md)。
 
 ### 5.6 anti-abuse、review 与成熟度
 

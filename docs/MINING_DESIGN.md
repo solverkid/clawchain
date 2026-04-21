@@ -146,7 +146,7 @@ V1 不做：
 - `poker_mtt_daily` / `poker_mtt_weekly` 必须从同一 miner emission budget 中拿到显式子预算，不创造额外奖励池
 - Phase 1：result entries、poker MTT multiplier、reward windows、settlement anchor
 - Phase 2：raw hand evidence、short/long HUD、hidden eval、public rating
-- Phase 3：窗口级 `reputation_delta` 写入 `x/reputation`
+- reputation follow-on phase：窗口级 `reputation_delta` 写入 `x/reputation`；不属于当前 Poker MTT Phase 3 production-readiness gate
 - Go 实现边界上，`pokermtt/*` 不应 import `arena/*` domain，也不应让 donor structs 穿透进 ClawChain domain model
 
 ## 3.6 技术形态

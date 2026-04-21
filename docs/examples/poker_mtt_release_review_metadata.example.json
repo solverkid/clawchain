@@ -1,0 +1,13 @@
+{
+  "budget_source_id": "budget-2026-04",
+  "emission_epoch_id": "epoch-2026w17",
+  "epoch_cap": 5000,
+  "settlement_operator_role": "ops-poker-mtt",
+  "chain_submitter": "claw1submitterxyz",
+  "fallback_tx_policy": "typed_msg_only",
+  "donor_runtime_version": "lepoker-gameserver-dev-sha",
+  "admin_auth_mode": "internal-bearer",
+  "reward_bound_identity_authority": "clawchain_miner_binding_v1",
+  "monitoring_evidence_ref": "grafana:poker-mtt-rollout-2026-04-21",
+  "rollback_runbook_ref": "docs/runbooks/poker-mtt-rollout-rollback.md"
+}

@@ -428,7 +428,7 @@ HUD 应该进入 hidden eval 和 consistency，但不要以原始指标直接发
 - `reward_weight = max(0, total_score)`，避免负分消耗奖励池
 - 同一 `economic_unit_id` 在同一 tournament / window 只能有一个 reward-eligible canonical entry
 - re-entry 必须折叠到 canonical miner result，并保留 `reentry_count` 作为审计字段
-- 如果一个窗口所有 eligible rows 的 `reward_weight = 0`，该窗口不应按名次强行平分；建议进入 `no_positive_weight` 状态，预算回滚或滚入下一窗口，具体由 reward policy 版本定义
+- 如果一个窗口所有 eligible rows 的 `reward_weight = 0`，该窗口不应按名次强行平分；当前实现会把 `reward_window.state` 冻结为 `no_positive_weight`，同时把预算侧 `budget_disposition.state` / budget ledger 记成 `forfeited`，避免隐式平分或提前记账为已支付。以后如果要支持 carry-forward，必须通过新的 reward policy 版本显式开启。
 
 这可以避免“多打很多场，只累计正分、负分归零”的 volume grinding。
 
@@ -560,6 +560,8 @@ multiplier = clamp(1.0 + k * rolling_skill, lower_bound, upper_bound)
 
 - 窗口奖励分配
 - 某些 admission / seat quality 权重
+
+当前实现已经把它接到 reward-window build path：daily / weekly window 会按每条 result `locked_at` 所在的 `effective_window_start_at ~ effective_window_end_at` 读取已生效的 multiplier snapshot，再进入窗口分配；同窗口生成的 snapshot 不会反向影响本窗口。
 
 不建议 multiplier 直接作用在：
 
@@ -985,6 +987,8 @@ Phase 3 Task 7 已把这个口径落成服务端 contract：
 - 打开 `poker_mtt_budget_enforcement_enabled` 后，daily 和 weekly window 必须共享同一个 emission epoch slice；缺 `budget_source_id`、缺 epoch 或超预算都会在 settlement 前 fail closed
 - Projection artifact 同时保存 `budget_disposition` 与 `budget_root`，所以链锚定和外部审计可以从 reward window root 追溯到预算来源
 - 未开启预算 enforcement 的本地/harness 仍会生成 `budget_root`，但 `budget_enforcement = disabled`，避免测试路径和生产路径的 artifact shape 分叉
+- 当前预算记账语义已经收口为两段式：reward window build 时 ledger 只进入 `reserved`，写入 `requested_amount` / `approved_amount`，`paid_amount = 0`；只有 settlement batch 对应的 anchor 确认完成后，ledger 才会转成 `paid`
+- `no_positive_weight` 窗口不会占用已支付预算；该窗口的 `budget_disposition.state = forfeited`，`approved_amount = 0`，便于 epoch cap 审计和后续 carry-forward policy 演进
 
 ---
 
@@ -1405,7 +1409,7 @@ Phase 1 不做：
 
 Canonical spec: `docs/POKER_MTT_PHASE3_PRODUCTION_READINESS_SPEC.md`
 
-Execution plan: `docs/superpowers/plans/2026-04-17-poker-mtt-phase3-production-readiness.md`
+Execution plan: `docs/superpowers/plans/2026-04-20-poker-mtt-phase3-production-readiness.md`
 
 Phase 3 的目标:
 
@@ -1507,6 +1511,7 @@ Phase 3 完成前，仍保持:
 - Reward-window projection 默认聚合策略改为 `capped_top3_mean_v1`：每个 economic unit 取 top 3 positive `total_score` 的均值，而不是无版本的 `max()`。这能压低 lucky spike、单窗口 solver edge 和多号刷样本收益。
 - Projection artifact 新增 `aggregation_policy_version`、`budget_disposition`、`budget_root`。Settlement 的 `poker_projection_roots` 也会包含 `budget_root`，使链上 anchor 可回查预算来源。
 - `poker_mtt_multiplier_snapshots` 新增 `effective_window_start_at` / `effective_window_end_at`，以 source result 锁定/完成时间的下一个 UTC daily window 生效。它可以更新 miner 当前展示值，但 reward/reputation 消费时必须按 effective window 读取，避免同窗口反馈。
+- Reward-window build 现在已按上述 effective window 读取 multiplier snapshot，并把 multiplier 输入并入 `input_snapshot_root` / `multiplier_snapshot_root`，所以同赛果不同 multiplier 输入不会错误命中幂等重放。
 
 2026-04-18 Task 8 closeout:
 
@@ -1561,7 +1566,8 @@ Phase 3 完成前，仍保持:
 6. 补 settlement external query、bounded anchor artifacts、terminal mismatch states
 7. budget ledger、aggregation policy、multiplier effective-window 已落地；后续只需要接生产配置和 staging epoch cap artifact
 8. sidecar retry、30-player finish gate、2,000-table burst 已有本地 ops gate；real staging metrics/log sink artifact 仍需上线前补证据
-9. window-level `reputation_delta` dry-run 已完成；下一步只剩最终文档、CI target、release review 和 staging evidence 归档，`x/reputation` 写入另起 release review
+9. reward-bearing rollout 的单独 release review 已落地为 Makefile/script contract：`make build-poker-mtt-release-review-bundle` 会把 heavy gate artifact、Phase 3 release pack、budget/operator/submitter metadata 汇总成可审计 bundle
+10. window-level `reputation_delta` dry-run 已完成；下一步主要剩 staging evidence 归档和最终 release signoff，`x/reputation` 写入另起 release review
 
 一句话总结：
 
