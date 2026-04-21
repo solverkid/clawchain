@@ -362,8 +362,21 @@ Production/reward-bearing rollout remains disabled until a separate release revi
 
 The operator-facing review bundle is now a runnable contract:
 
+- local canonical closeout: `make materialize-poker-mtt-phase3-release-artifacts`
 - command: `make build-poker-mtt-release-review-bundle`
 - review doc: [`docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md)
 - output: `artifacts/poker-mtt/release-review/release-review-bundle.json`
+
+The canonical local closeout path now materializes:
+
+- `artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json`
+- `artifacts/poker-mtt/phase3/local-run-log-check.json`
+- `artifacts/poker-mtt/phase3/db-load-20k.log`
+- `artifacts/poker-mtt/phase3/settlement-anchor-query-receipt.json`
+- `artifacts/poker-mtt/release-review/phase3-release-pack.json`
+- `artifacts/poker-mtt/release-review/release-review-bundle.json`
+- `artifacts/poker-mtt/release-review/source-paths.json`
+
+`docs/runbooks/poker-mtt-rollout-rollback.md` is now the checked-in rollback reference for the release-review metadata contract.
 
 Only after that should `poker_mtt_daily` / `poker_mtt_weekly` be considered for reward-bearing staging rollout.

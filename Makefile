@@ -1,4 +1,4 @@
-.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase2 test-poker-mtt-phase3-fast test-poker-mtt-phase3-ops test-poker-mtt-phase3-heavy build-poker-mtt-release-review-bundle lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
+.PHONY: build build-arena build-arena-swarm install clean test test-arena test-poker-mtt-phase1 test-poker-mtt-phase2 test-poker-mtt-phase3-fast test-poker-mtt-phase3-ops test-poker-mtt-phase3-heavy materialize-poker-mtt-phase3-release-artifacts build-poker-mtt-release-review-bundle lint proto-gen run-arena run-arena-swarm arena-db-up arena-db-down tidy version help
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
 COMMIT := $(shell git log -1 --format='%H' 2>/dev/null || echo "unknown")
@@ -13,6 +13,9 @@ POKER_MTT_RELEASE_REVIEW_DIR ?= artifacts/poker-mtt/release-review
 POKER_MTT_RELEASE_PACK ?=
 POKER_MTT_RELEASE_METADATA_JSON ?=
 POKER_MTT_RELEASE_SIGNOFFS_JSON ?=
+POKER_MTT_RUNTIME_SUMMARY_SOURCE ?=
+POKER_MTT_RUNTIME_LOG_SOURCE ?= build/poker-mtt/run_server.log
+POKER_MTT_DB_LOAD_LOG_SOURCE ?= $(POKER_MTT_PHASE3_ARTIFACT_DIR)/db-load-20k.log
 
 ifeq ($(strip $(POKER_MTT_RELEASE_METADATA_JSON)),)
 POKER_MTT_RELEASE_METADATA_ARGS = \
@@ -125,6 +128,17 @@ test-poker-mtt-phase3-heavy:
 	@python3 scripts/poker_mtt/check_local_run_logs.py build/poker-mtt/run_server.log | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/local-run-log-check.json'
 	@'$(POKER_MTT_PHASE3_CLAWCHAIND)' query settlement settlement-anchor '$(POKER_MTT_PHASE3_SETTLEMENT_BATCH_ID)' --output json $(POKER_MTT_PHASE3_CHAIN_ARGS) | tee '$(POKER_MTT_PHASE3_ARTIFACT_DIR)/settlement-anchor-query-receipt.json'
 
+materialize-poker-mtt-phase3-release-artifacts:
+	@echo "Materializing canonical local Poker MTT Phase 3 release artifacts..."
+	@python3 scripts/poker_mtt/materialize_phase3_release_artifacts.py \
+		$(if $(strip $(POKER_MTT_RUNTIME_SUMMARY_SOURCE)),--runtime-summary-source '$(POKER_MTT_RUNTIME_SUMMARY_SOURCE)',) \
+		--runtime-log-source '$(POKER_MTT_RUNTIME_LOG_SOURCE)' \
+		--db-load-log-source '$(POKER_MTT_DB_LOAD_LOG_SOURCE)' \
+		--phase3-artifact-dir '$(POKER_MTT_PHASE3_ARTIFACT_DIR)' \
+		--release-review-dir '$(POKER_MTT_RELEASE_REVIEW_DIR)' \
+		$(if $(strip $(POKER_MTT_RELEASE_METADATA_JSON)),--metadata-json '$(POKER_MTT_RELEASE_METADATA_JSON)',--write-local-review-metadata) \
+		$(if $(strip $(POKER_MTT_RELEASE_SIGNOFFS_JSON)),--signoffs-json '$(POKER_MTT_RELEASE_SIGNOFFS_JSON)',)
+
 build-poker-mtt-release-review-bundle:
 	@echo "Building Poker MTT reward-bearing release review bundle..."
 	@test -n "$(POKER_MTT_RELEASE_PACK)" || (echo "Set POKER_MTT_RELEASE_PACK to a release pack JSON path." >&2; exit 2)
@@ -211,6 +225,7 @@ help:
 	@echo "  test-poker-mtt-phase3-fast - Run Poker MTT Phase 3 fast unit/contract gates"
 	@echo "  test-poker-mtt-phase3-ops - Run Poker MTT Phase 3 sidecar/load ops gates"
 	@echo "  test-poker-mtt-phase3-heavy - Run Poker MTT Phase 3 staging/manual gates and write artifacts"
+	@echo "  materialize-poker-mtt-phase3-release-artifacts - Materialize the canonical local Phase 3 release artifacts and release-review bundle"
 	@echo "  build-poker-mtt-release-review-bundle - Build the Poker MTT reward rollout review bundle from Phase 3 artifacts"
 	@echo "  lint       - Run linter"
 	@echo "  tidy       - Tidy go.mod dependencies"

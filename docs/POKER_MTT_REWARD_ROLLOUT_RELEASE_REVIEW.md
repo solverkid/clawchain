@@ -22,7 +22,7 @@ Heavy-gate artifacts under `artifacts/poker-mtt/phase3/`:
 
 Release pack:
 
-- `build/poker-mtt/non-mock-release-pack-r5.json` or another operator-approved pack with `phase3_release_pack_complete=true`
+- `artifacts/poker-mtt/release-review/phase3-release-pack.json` for the canonical local proof, or another operator-approved pack with `phase3_release_pack_complete=true`
 
 Rollout metadata:
 
@@ -42,12 +42,39 @@ Recommended checked-in templates:
 
 - [`docs/examples/poker_mtt_release_review_metadata.example.json`](/Users/yanchengren/Documents/Projects/clawchain/docs/examples/poker_mtt_release_review_metadata.example.json)
 - [`docs/examples/poker_mtt_release_review_signoffs.example.json`](/Users/yanchengren/Documents/Projects/clawchain/docs/examples/poker_mtt_release_review_signoffs.example.json)
+- [`docs/runbooks/poker-mtt-rollout-rollback.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/runbooks/poker-mtt-rollout-rollback.md)
+
+## Canonical Local Materialization
+
+When this checkout already has a donor-backed finish sample plus `db-load-20k.log`, use the canonical local materializer first:
+
+```bash
+make materialize-poker-mtt-phase3-release-artifacts
+```
+
+That command writes or refreshes:
+
+- `artifacts/poker-mtt/phase3/non-mock-30-finish-summary.json`
+- `artifacts/poker-mtt/phase3/local-run-log-check.json`
+- `artifacts/poker-mtt/phase3/settlement-anchor-query-receipt.json`
+- `artifacts/poker-mtt/release-review/phase3-runtime-evidence.json`
+- `artifacts/poker-mtt/release-review/phase3-release-evidence.json`
+- `artifacts/poker-mtt/release-review/phase3-release-pack.json`
+- `artifacts/poker-mtt/release-review/release-review-bundle.json`
+- `artifacts/poker-mtt/release-review/source-paths.json`
+
+By default it also writes local-proof rollout metadata:
+
+- `artifacts/poker-mtt/release-review/phase3-release-review-metadata.local.json`
+- `artifacts/poker-mtt/release-review/phase3-release-review-signoffs.local.json`
+
+Those local-proof metadata files are for reproducible closeout inside this checkout. Replace them with operator-approved metadata/signoffs before any real reward-bearing rollout.
 
 ## Standard Command
 
 ```bash
 make build-poker-mtt-release-review-bundle \
-  POKER_MTT_RELEASE_PACK=build/poker-mtt/non-mock-release-pack-r5.json \
+  POKER_MTT_RELEASE_PACK=artifacts/poker-mtt/release-review/phase3-release-pack.json \
   POKER_MTT_BUDGET_SOURCE_ID=budget-2026-04 \
   POKER_MTT_EMISSION_EPOCH_ID=epoch-2026w17 \
   POKER_MTT_EMISSION_EPOCH_CAP=5000 \
@@ -69,7 +96,7 @@ File-based review inputs are also supported:
 
 ```bash
 make build-poker-mtt-release-review-bundle \
-  POKER_MTT_RELEASE_PACK=build/poker-mtt/non-mock-release-pack-r5.json \
+  POKER_MTT_RELEASE_PACK=artifacts/poker-mtt/release-review/phase3-release-pack.json \
   POKER_MTT_RELEASE_METADATA_JSON=docs/examples/poker_mtt_release_review_metadata.example.json \
   POKER_MTT_RELEASE_SIGNOFFS_JSON=docs/examples/poker_mtt_release_review_signoffs.example.json
 ```

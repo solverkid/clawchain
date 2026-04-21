@@ -598,7 +598,8 @@ tournament result
 - `make test-poker-mtt-phase3-fast` 是本地合并前 gate
 - `make test-poker-mtt-phase3-heavy` 是 staging/manual release evidence gate
 - heavy gate 证据写入 `artifacts/poker-mtt/phase3/`，但不进 git
-- reward-bearing rollout 仍要单独 release review，明确 budget source、operator roles、chain submitter、monitoring 和 rollback；现在已有 `make build-poker-mtt-release-review-bundle` 和 [`docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md) 作为标准入口
+- `make materialize-poker-mtt-phase3-release-artifacts` 会把本地 canonical Phase 3 closeout 证据和 release-review bundle 一次性落到 `artifacts/poker-mtt/phase3/` 与 `artifacts/poker-mtt/release-review/`
+- reward-bearing rollout 仍要单独 release review，明确 budget source、operator roles、chain submitter、monitoring 和 rollback；现在已有 `make build-poker-mtt-release-review-bundle`、[`docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md) 和 [`docs/runbooks/poker-mtt-rollout-rollback.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/runbooks/poker-mtt-rollout-rollback.md) 作为标准入口
 
 面向用户只展示:
 
