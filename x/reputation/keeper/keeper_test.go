@@ -217,3 +217,55 @@ func TestGenesisExportImport(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, int32(600), score.Score)
 }
+
+func TestGetLeaderboard(t *testing.T) {
+	k, ctx := setupKeeper(t)
+
+	k.InitMiner(ctx, "claw1a")
+	k.InitMiner(ctx, "claw1b")
+	k.InitMiner(ctx, "claw1c")
+	k.UpdateScore(ctx, "claw1a", 250, "boost")
+	k.UpdateScore(ctx, "claw1b", 50, "boost")
+	k.UpdateScore(ctx, "claw1c", -100, "penalty")
+
+	leaderboard := k.GetLeaderboard(ctx, 2)
+	require.Len(t, leaderboard, 2)
+	require.Equal(t, "claw1a", leaderboard[0].MinerAddress)
+	require.Equal(t, int32(750), leaderboard[0].Score)
+	require.Equal(t, "claw1b", leaderboard[1].MinerAddress)
+	require.Equal(t, int32(550), leaderboard[1].Score)
+}
+
+func TestQueryScore(t *testing.T) {
+	k, ctx := setupKeeper(t)
+	k.InitMiner(ctx, "claw1query")
+
+	server := keeper.NewQueryServerImpl(k)
+	resp, err := server.Score(sdk.WrapSDKContext(ctx), &types.QueryScoreRequest{MinerAddress: "claw1query"})
+	require.NoError(t, err)
+	require.Equal(t, "claw1query", resp.Score.MinerAddress)
+	require.Equal(t, int32(500), resp.Score.Score)
+}
+
+func TestQueryScoreNotFound(t *testing.T) {
+	k, ctx := setupKeeper(t)
+	server := keeper.NewQueryServerImpl(k)
+
+	_, err := server.Score(sdk.WrapSDKContext(ctx), &types.QueryScoreRequest{MinerAddress: "claw1missing"})
+	require.ErrorIs(t, err, types.ErrMinerNotFound)
+}
+
+func TestQueryLeaderboard(t *testing.T) {
+	k, ctx := setupKeeper(t)
+
+	k.InitMiner(ctx, "claw1x")
+	k.InitMiner(ctx, "claw1y")
+	k.UpdateScore(ctx, "claw1x", 300, "boost")
+	k.UpdateScore(ctx, "claw1y", -50, "penalty")
+
+	server := keeper.NewQueryServerImpl(k)
+	resp, err := server.Leaderboard(sdk.WrapSDKContext(ctx), &types.QueryLeaderboardRequest{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, resp.Scores, 1)
+	require.Equal(t, "claw1x", resp.Scores[0].MinerAddress)
+}

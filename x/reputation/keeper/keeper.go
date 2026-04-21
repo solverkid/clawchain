@@ -3,6 +3,7 @@ package keeper
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"cosmossdk.io/log"
 	storetypes "cosmossdk.io/store/types"
@@ -172,4 +173,36 @@ func (k Keeper) GetAllScores(ctx sdk.Context) []types.ReputationScore {
 		scores = append(scores, s)
 	}
 	return scores
+}
+
+// GetLeaderboard 获取声誉排行榜，按分数降序、最近更新时间降序、矿工地址升序排序。
+// limit <= 0 时返回全部。
+func (k Keeper) GetLeaderboard(ctx sdk.Context, limit int) []types.ReputationScore {
+	scores := k.GetAllScores(ctx)
+	slices.SortFunc(scores, func(a, b types.ReputationScore) int {
+		if a.Score != b.Score {
+			if a.Score > b.Score {
+				return -1
+			}
+			return 1
+		}
+		if a.UpdatedAt != b.UpdatedAt {
+			if a.UpdatedAt > b.UpdatedAt {
+				return -1
+			}
+			return 1
+		}
+		switch {
+		case a.MinerAddress < b.MinerAddress:
+			return -1
+		case a.MinerAddress > b.MinerAddress:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if limit <= 0 || limit >= len(scores) {
+		return scores
+	}
+	return scores[:limit]
 }
