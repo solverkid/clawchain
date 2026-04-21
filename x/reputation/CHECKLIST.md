@@ -1,5 +1,7 @@
 # x/reputation 模块完成清单
 
+> 2026-04-21 注：下面很多条目是历史目标，不再代表当前运行真相。当前真实落地的是 keeper-level 声誉分管理、leaderboard/query helper、`challenge` 接口对齐，以及授权 controller 的 append-only `reputation_delta` apply contract；protobuf/gRPC/CLI tx surface、history 查询和 EndBlock 事件队列并未按本文完整落地。
+
 ## ✅ 核心功能实现
 
 - [x] **types/keys.go** - 存储键定义（5 种前缀）

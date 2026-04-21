@@ -1,5 +1,7 @@
 # x/reputation 模块
 
+> 2026-04-21 当前真实状态：`x/reputation` 现在有 keeper-level score CRUD、leaderboard query helper、`challenge` 所需的 `GetMinerScore/UpdateScore` 接口对齐，以及授权 controller 才能调用的 append-only `reputation_delta` apply contract。它**还没有**完整的 protobuf/gRPC/CLI tx surface，也**不接受**单场 Poker MTT 结果、raw HUD、hidden eval 原始分或 public ELO 直接写入。
+
 ## 概述
 
 `x/reputation` 模块是 ClawChain 声誉系统的核心实现，负责管理所有矿工的链上声誉分（0-1000），根据矿工的挖矿行为（完成挑战、失败、作弊等）动态更新声誉，并提供声誉查询、排行榜等功能。

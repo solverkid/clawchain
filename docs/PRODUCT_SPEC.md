@@ -600,6 +600,7 @@ tournament result
 - heavy gate 证据写入 `artifacts/poker-mtt/phase3/`，但不进 git
 - `make materialize-poker-mtt-phase3-release-artifacts` 会把本地 canonical Phase 3 closeout 证据和 release-review bundle 一次性落到 `artifacts/poker-mtt/phase3/` 与 `artifacts/poker-mtt/release-review/`
 - reward-bearing rollout 仍要单独 release review，明确 budget source、operator roles、chain submitter、monitoring 和 rollback；现在已有 `make build-poker-mtt-release-review-bundle`、[`docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/POKER_MTT_REWARD_ROLLOUT_RELEASE_REVIEW.md) 和 [`docs/runbooks/poker-mtt-rollout-rollback.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/runbooks/poker-mtt-rollout-rollback.md) 作为标准入口
+- 2026-04-21 follow-on：`x/reputation` 已补 keeper-level append-only `reputation_delta` apply contract 与 challenge wiring；它仍不是公开 tx/gRPC 写路径，也不改变 “单场 Poker MTT 结果不能直接写 reputation” 这个边界
 
 面向用户只展示:
 

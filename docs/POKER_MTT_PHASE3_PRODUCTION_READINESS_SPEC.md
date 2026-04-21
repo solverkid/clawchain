@@ -256,15 +256,15 @@ Acceptance:
 
 Current blockers:
 
-- `x/reputation` has useful primitives but is not ready for Poker MTT writes: service/query/CLI wiring, challenge interface alignment, and EndBlock ordering need review.
+- `x/reputation` now has keeper-level `reputation_delta` apply primitives and challenge interface wiring, but it is still not a production-ready external write surface: protobuf/gRPC/CLI tx plumbing, release review, and operator/runbook evidence are still missing.
 - Direct single-result reputation writes would over-amplify hidden eval and public rank noise.
-- The current Phase 3 output is intentionally dry-run: reward/settlement artifacts root the deltas, but no chain write path is enabled.
+- The current Phase 3 output remains dry-run at the Poker MTT service boundary: reward/settlement artifacts root the deltas, but no direct admin/client/single-result path is enabled.
 
 Acceptance:
 
 - Define window-level `reputation_delta_rows_root` only after reward/evidence/settlement gates are stable. Done in reward-window projection artifacts and settlement anchor payloads.
 - Reputation delta rows include window id, settlement batch id, policy version, prior score reference, delta reason, cap, score weight, source-result root, and correction lineage.
-- Authorized controller applies append-only compensating deltas only after settlement confirmation.
+- Authorized controller append-only apply contract now exists inside `x/reputation` keeper state with controller authorization and delta-id idempotency/conflict checks; external release enablement still needs a separate review.
 - No single tournament, raw HUD, public ELO, hidden eval raw score, or client/admin payload writes directly to `x/reputation`.
 
 ### G7 - Sidecar Reliability, WS Finish Gate, And Observability

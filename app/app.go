@@ -239,6 +239,7 @@ func NewClawChainApp(
 		appCodec,
 		keys[reputationtypes.StoreKey],
 	)
+	app.ChallengeKeeper.SetReputationKeeper(app.ReputationKeeper)
 
 	app.SettlementKeeper = settlementkeeper.NewKeeper(
 		appCodec,

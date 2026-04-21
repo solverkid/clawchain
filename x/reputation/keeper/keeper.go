@@ -31,17 +31,25 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 
 // InitGenesis 初始化创世
 func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) {
-	store := ctx.KVStore(k.storeKey)
 	for _, score := range gs.Scores {
 		bz, _ := json.Marshal(score)
-		store.Set(types.GetScoreKey(score.MinerAddress), bz)
+		ctx.KVStore(k.storeKey).Set(types.GetScoreKey(score.MinerAddress), bz)
+	}
+	for _, controller := range gs.AuthorizedDeltaControllers {
+		_ = k.SetAuthorizedDeltaController(ctx, controller)
+	}
+	for _, receipt := range gs.AppliedDeltas {
+		_ = k.SetAppliedReputationDelta(ctx, receipt)
 	}
 }
 
 // ExportGenesis 导出创世
 func (k Keeper) ExportGenesis(ctx sdk.Context) *types.GenesisState {
-	scores := k.GetAllScores(ctx)
-	return &types.GenesisState{Scores: scores}
+	return &types.GenesisState{
+		Scores:                     k.GetAllScores(ctx),
+		AuthorizedDeltaControllers: k.GetAuthorizedDeltaControllers(ctx),
+		AppliedDeltas:              k.GetAllAppliedReputationDeltas(ctx),
+	}
 }
 
 // GetScore 获取矿工声誉分
