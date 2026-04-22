@@ -7,4 +7,5 @@ var (
 	ErrInvalidReputationDelta      = errors.Register(ModuleName, 2, "invalid reputation delta")
 	ErrUnauthorizedDeltaController = errors.Register(ModuleName, 3, "unauthorized reputation delta controller")
 	ErrReputationDeltaConflict     = errors.Register(ModuleName, 4, "reputation delta conflict")
+	ErrSettlementAnchorRequired    = errors.Register(ModuleName, 5, "anchored settlement batch required for reputation delta")
 )

@@ -264,7 +264,7 @@ Acceptance:
 
 - Define window-level `reputation_delta_rows_root` only after reward/evidence/settlement gates are stable. Done in reward-window projection artifacts and settlement anchor payloads.
 - Reputation delta rows include window id, settlement batch id, policy version, prior score reference, delta reason, cap, score weight, source-result root, and correction lineage.
-- Authorized controller append-only apply contract now exists inside `x/reputation` keeper state with controller authorization and delta-id idempotency/conflict checks; external release enablement still needs a separate review.
+- Authorized controller append-only apply contract now exists inside `x/reputation` keeper state with controller authorization, anchored-settlement-batch guard, and delta-id idempotency/conflict checks; external release enablement still needs a separate review.
 - No single tournament, raw HUD, public ELO, hidden eval raw score, or client/admin payload writes directly to `x/reputation`.
 
 ### G7 - Sidecar Reliability, WS Finish Gate, And Observability

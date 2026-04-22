@@ -11,6 +11,15 @@ import (
 	"github.com/clawchain/clawchain/x/reputation/types"
 )
 
+// SettlementAnchorReader 限制 reputation delta 只能绑定已锚定的 settlement batch。
+type SettlementAnchorReader interface {
+	HasSettlementAnchor(ctx sdk.Context, settlementBatchID string) bool
+}
+
+func (k *Keeper) SetSettlementAnchorReader(reader SettlementAnchorReader) {
+	k.settlementAnchorReader = reader
+}
+
 // GetMinerScore 返回 challenge keeper 需要的分数视图。
 func (k Keeper) GetMinerScore(ctx sdk.Context, addr string) (int32, bool) {
 	score, found := k.GetScore(ctx, addr)
@@ -109,6 +118,9 @@ func (k Keeper) ApplyReputationDelta(
 	}
 	if err := delta.Validate(); err != nil {
 		return types.AppliedReputationDelta{}, err
+	}
+	if k.settlementAnchorReader == nil || !k.settlementAnchorReader.HasSettlementAnchor(ctx, delta.SettlementBatchID) {
+		return types.AppliedReputationDelta{}, types.ErrSettlementAnchorRequired.Wrapf("%s", delta.SettlementBatchID)
 	}
 
 	payloadHash, err := delta.PayloadHash()

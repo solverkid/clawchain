@@ -15,8 +15,9 @@ import (
 
 // Keeper 声誉模块 keeper
 type Keeper struct {
-	cdc      codec.BinaryCodec
-	storeKey storetypes.StoreKey
+	cdc                    codec.BinaryCodec
+	storeKey               storetypes.StoreKey
+	settlementAnchorReader SettlementAnchorReader
 }
 
 // NewKeeper 创建 keeper

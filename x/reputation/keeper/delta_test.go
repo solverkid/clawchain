@@ -15,6 +15,14 @@ import (
 
 var _ challengekeeper.ReputationKeeper = keeper.Keeper{}
 
+type stubSettlementAnchorReader struct {
+	anchored map[string]bool
+}
+
+func (s stubSettlementAnchorReader) HasSettlementAnchor(_ sdk.Context, settlementBatchID string) bool {
+	return s.anchored[settlementBatchID]
+}
+
 func testDeltaController() string {
 	return sdk.AccAddress(bytes.Repeat([]byte{0x07}, 20)).String()
 }
@@ -41,9 +49,19 @@ func testReputationDelta(deltaID string) types.ReputationDelta {
 
 func TestApplyReputationDeltaRequiresAuthorizedController(t *testing.T) {
 	k, ctx := setupKeeper(t)
+	k.SetSettlementAnchorReader(stubSettlementAnchorReader{anchored: map[string]bool{"sb_2026_04_21_0001": true}})
 
 	_, err := k.ApplyReputationDelta(ctx, testDeltaController(), testReputationDelta("delta:unauthorized"))
 	require.ErrorIs(t, err, types.ErrUnauthorizedDeltaController)
+}
+
+func TestApplyReputationDeltaRequiresAnchoredSettlementBatch(t *testing.T) {
+	k, ctx := setupKeeper(t)
+	controller := testDeltaController()
+	require.NoError(t, k.SetAuthorizedDeltaController(ctx, controller))
+
+	_, err := k.ApplyReputationDelta(ctx, controller, testReputationDelta("delta:missing-anchor"))
+	require.ErrorIs(t, err, types.ErrSettlementAnchorRequired)
 }
 
 func TestApplyReputationDeltaAppliesAndStoresReceipt(t *testing.T) {
@@ -51,6 +69,7 @@ func TestApplyReputationDeltaAppliesAndStoresReceipt(t *testing.T) {
 	ctx = ctx.WithBlockTime(time.Unix(1_713_715_200, 0))
 	controller := testDeltaController()
 	require.NoError(t, k.SetAuthorizedDeltaController(ctx, controller))
+	k.SetSettlementAnchorReader(stubSettlementAnchorReader{anchored: map[string]bool{"sb_2026_04_21_0001": true}})
 
 	receipt, err := k.ApplyReputationDelta(ctx, controller, testReputationDelta("delta:apply"))
 	require.NoError(t, err)
@@ -76,6 +95,7 @@ func TestApplyReputationDeltaIsIdempotentOnSamePayload(t *testing.T) {
 	k, ctx := setupKeeper(t)
 	controller := testDeltaController()
 	require.NoError(t, k.SetAuthorizedDeltaController(ctx, controller))
+	k.SetSettlementAnchorReader(stubSettlementAnchorReader{anchored: map[string]bool{"sb_2026_04_21_0001": true}})
 
 	first, err := k.ApplyReputationDelta(ctx, controller, testReputationDelta("delta:idempotent"))
 	require.NoError(t, err)
@@ -93,6 +113,7 @@ func TestApplyReputationDeltaRejectsPayloadConflict(t *testing.T) {
 	k, ctx := setupKeeper(t)
 	controller := testDeltaController()
 	require.NoError(t, k.SetAuthorizedDeltaController(ctx, controller))
+	k.SetSettlementAnchorReader(stubSettlementAnchorReader{anchored: map[string]bool{"sb_2026_04_21_0001": true}})
 
 	delta := testReputationDelta("delta:conflict")
 	_, err := k.ApplyReputationDelta(ctx, controller, delta)
@@ -108,6 +129,7 @@ func TestApplyReputationDeltaRespectsScoreCap(t *testing.T) {
 	k, ctx := setupKeeper(t)
 	controller := testDeltaController()
 	require.NoError(t, k.SetAuthorizedDeltaController(ctx, controller))
+	k.SetSettlementAnchorReader(stubSettlementAnchorReader{anchored: map[string]bool{"sb_2026_04_21_0001": true}})
 
 	delta := testReputationDelta("delta:cap")
 	delta.Delta = 600
@@ -121,6 +143,7 @@ func TestGenesisExportImportIncludesAuthorizedControllersAndAppliedDeltas(t *tes
 	k, ctx := setupKeeper(t)
 	controller := testDeltaController()
 	require.NoError(t, k.SetAuthorizedDeltaController(ctx, controller))
+	k.SetSettlementAnchorReader(stubSettlementAnchorReader{anchored: map[string]bool{"sb_2026_04_21_0001": true}})
 	_, err := k.ApplyReputationDelta(ctx, controller, testReputationDelta("delta:genesis"))
 	require.NoError(t, err)
 

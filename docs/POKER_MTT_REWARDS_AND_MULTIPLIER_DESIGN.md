@@ -1452,7 +1452,7 @@ Phase 3 完成前，仍保持:
 2026-04-18 Task 9 closeout:
 
 - Window-level reputation delta schema 已落地为 dry-run contract，包含 window id、settlement batch id、policy version、prior rating snapshot ref、delta cap、reason、source-result root、score weight、gross reward、submission count 和 correction lineage root。
-- Reward-window projection root、`poker_projection_roots`、settlement anchor canonical root 都会覆盖 `reputation_delta_rows_root`，所以后续 controller 只能基于已锚定窗口做 append-only reputation 写入。2026-04-21 起，`x/reputation` keeper 已支持授权 controller 的 delta-id 幂等 apply receipt，但仍未开放外部 tx surface。
+- Reward-window projection root、`poker_projection_roots`、settlement anchor canonical root 都会覆盖 `reputation_delta_rows_root`，所以后续 controller 只能基于已锚定窗口做 append-only reputation 写入。2026-04-22 起，`x/reputation` keeper 已支持授权 controller、anchored settlement batch guard、以及 delta-id 幂等 apply receipt，但仍未开放外部 tx surface。
 - 单场 tournament result、raw HUD、hidden eval、public ELO/public rating 仍不会直接写 `x/reputation`。
 
 2026-04-18 Task 1 closeout:

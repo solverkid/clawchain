@@ -245,6 +245,7 @@ func NewClawChainApp(
 		appCodec,
 		keys[settlementtypes.StoreKey],
 	)
+	app.ReputationKeeper.SetSettlementAnchorReader(app.SettlementKeeper)
 
 	// set BaseApp CMS
 	app.MountKVStores(keys)
