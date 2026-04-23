@@ -143,15 +143,10 @@ func buildMultiplierSnapshot(completion Completion, item OutcomeItem, at time.Ti
 }
 
 func buildMinerCompatibility(item OutcomeItem, at time.Time) model.MinerCompatibility {
-	publicRank := item.PublicRankAfter
-
 	return model.MinerCompatibility{
-		Address:          item.MinerAddress,
-		ModelReliability: item.ArenaReliabilityAfter,
-		ArenaMultiplier:  item.MultiplierAfter,
-		PublicRank:       &publicRank,
-		PublicELO:        item.PublicELOAfter,
-		UpdatedAt:        at,
+		Address:         item.MinerAddress,
+		ArenaMultiplier: item.MultiplierAfter,
+		UpdatedAt:       at,
 	}
 }
 

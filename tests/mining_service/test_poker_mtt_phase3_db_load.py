@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import tracemalloc
+import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+from sqlalchemy import text
 from fastapi.testclient import TestClient
 
 
@@ -18,6 +22,7 @@ if str(MINING_SERVICE_DIR) not in sys.path:
 
 import forecast_engine
 import server
+from pg_repository import PostgresRepository
 from repository import FakeRepository
 
 
@@ -324,6 +329,139 @@ def test_phase3_models_expose_reward_window_scale_indexes():
     assert _index_names(models.poker_mtt_final_rankings) >= {"ix_poker_mtt_final_rankings_window_join"}
 
 
+def test_phase3_postgres_reward_window_loader_honors_include_provisional():
+    async def scenario():
+        repo = PostgresRepository(_pg_database_url())
+        cleanup_ids: dict[str, str | None] = {
+            "result_id": None,
+            "final_ranking_id": None,
+            "miner_address": None,
+        }
+        try:
+            try:
+                await repo.init_schema()
+            except Exception as exc:  # pragma: no cover - local infra gate
+                pytest.skip(f"postgres unavailable for phase3 loader regression: {exc}")
+
+            suffix = uuid.uuid4().hex[:10]
+            miner_address = f"claw1phase3prov{suffix}"
+            tournament_id = f"mtt-phase3-prov-{suffix}"
+            final_ranking_id = f"poker_mtt_final_ranking:{tournament_id}:{miner_address}"
+            result_id = f"poker_mtt_result:{tournament_id}:{miner_address}"
+            standing_snapshot_id = f"poker_mtt_standing_snapshot:{tournament_id}:locked"
+            cleanup_ids.update(
+                {
+                    "result_id": result_id,
+                    "final_ranking_id": final_ranking_id,
+                    "miner_address": miner_address,
+                }
+            )
+
+            await repo.register_miner(
+                {
+                    "address": miner_address,
+                    "name": miner_address,
+                    "registration_index": 1,
+                    "public_key": "pubkey",
+                    "status": "active",
+                    "economic_unit_id": miner_address,
+                    "total_rewards": 0,
+                    "held_rewards": 0,
+                    "forecast_commits": 0,
+                    "forecast_reveals": 0,
+                    "fast_task_opportunities": 0,
+                    "fast_task_misses": 0,
+                    "fast_window_start_at": "2026-04-01T00:00:00Z",
+                    "settled_tasks": 0,
+                    "correct_direction_count": 0,
+                    "edge_score_total": 0.0,
+                    "admission_state": "probation",
+                    "model_reliability": 1.0,
+                    "ops_reliability": 1.0,
+                    "arena_multiplier": 1.0,
+                    "poker_mtt_multiplier": 1.0,
+                    "poker_mtt_user_id": f"user-{suffix}",
+                    "poker_mtt_auth_source": "donor_token",
+                    "poker_mtt_reward_bound": True,
+                    "poker_mtt_reward_bound_at": "2026-04-01T00:00:00Z",
+                    "poker_mtt_is_synthetic": False,
+                    "poker_mtt_identity_expires_at": None,
+                    "poker_mtt_identity_revoked_at": None,
+                    "public_rank": None,
+                    "public_elo": 1200,
+                    "created_at": "2026-04-01T00:00:00Z",
+                    "updated_at": "2026-04-01T00:00:00Z",
+                }
+            )
+            await repo.save_poker_mtt_final_ranking(
+                {
+                    **_final_ranking_row(
+                        tournament_id=tournament_id,
+                        miner_address=miner_address,
+                        final_ranking_id=final_ranking_id,
+                        rank=1,
+                        locked_at="2026-04-10T10:00:00Z",
+                    ),
+                    "standing_snapshot_id": standing_snapshot_id,
+                }
+            )
+            await repo.save_poker_mtt_result(
+                {
+                    **_result_row(
+                        tournament_id=tournament_id,
+                        miner_address=miner_address,
+                        final_ranking_id=final_ranking_id,
+                        rank=1,
+                        locked_at="2026-04-10T10:00:00Z",
+                    ),
+                    "id": result_id,
+                    "standing_snapshot_id": standing_snapshot_id,
+                    "evaluation_state": "provisional",
+                    "anchorable_at": "2026-04-10T10:00:00Z",
+                }
+            )
+
+            excluded = await repo.load_poker_mtt_reward_window_inputs(
+                lane="poker_mtt_daily",
+                window_start_at=WINDOW_START,
+                window_end_at=WINDOW_END,
+                include_provisional=False,
+                policy_bundle_version=POLICY_VERSION,
+                current_at=BUILD_NOW,
+            )
+            included = await repo.load_poker_mtt_reward_window_inputs(
+                lane="poker_mtt_daily",
+                window_start_at=WINDOW_START,
+                window_end_at=WINDOW_END,
+                include_provisional=True,
+                policy_bundle_version=POLICY_VERSION,
+                current_at=BUILD_NOW,
+            )
+
+            assert excluded["results"] == []
+            assert [row["id"] for row in included["results"]] == [result_id]
+            assert included["final_rankings_by_id"][final_ranking_id]["id"] == final_ranking_id
+            assert included["miners_by_address"][miner_address]["address"] == miner_address
+        finally:
+            if any(cleanup_ids.values()):
+                async with repo.engine.begin() as conn:
+                    await conn.execute(
+                        text("DELETE FROM poker_mtt_result_entries WHERE id = :result_id"),
+                        {"result_id": cleanup_ids["result_id"]},
+                    )
+                    await conn.execute(
+                        text("DELETE FROM poker_mtt_final_rankings WHERE id = :final_ranking_id"),
+                        {"final_ranking_id": cleanup_ids["final_ranking_id"]},
+                    )
+                    await conn.execute(
+                        text("DELETE FROM miners WHERE address = :miner_address"),
+                        {"miner_address": cleanup_ids["miner_address"]},
+                    )
+            await repo.engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def _service(repo: FakeRepository, **settings_overrides) -> forecast_engine.ForecastMiningService:
     settings = {
         "poker_mtt_projection_artifact_page_size": 5000,
@@ -333,6 +471,13 @@ def _service(repo: FakeRepository, **settings_overrides) -> forecast_engine.Fore
     return forecast_engine.ForecastMiningService(
         repo,
         forecast_engine.ForecastSettings(**settings),
+    )
+
+
+def _pg_database_url() -> str:
+    return os.environ.get(
+        "CLAWCHAIN_SHARED_TEST_DATABASE_URL",
+        "postgresql://clawchain:clawchain_dev_pw@127.0.0.1:55432/clawchain",
     )
 
 

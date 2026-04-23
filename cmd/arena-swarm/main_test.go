@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,4 +25,13 @@ func TestRunMainShowsHelp(t *testing.T) {
 	err := runMain([]string{"--help"}, &stdout, &stderr)
 	require.NoError(t, err)
 	require.Contains(t, stdout.String(), "arena-swarm")
+}
+
+func TestLoadMinerIDsFromFileSupportsManifestObjects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "miners.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"miners":[{"address":"claw1alpha"},{"miner_id":"claw1beta"}]}`), 0o600))
+
+	ids, err := loadMinerIDsFromFile(path)
+	require.NoError(t, err)
+	require.Equal(t, []string{"claw1alpha", "claw1beta"}, ids)
 }

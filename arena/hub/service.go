@@ -17,6 +17,11 @@ import (
 
 const seatsPerTable = 9
 
+const (
+	ratedShardMinEntrants = 33
+	ratedShardMaxEntrants = 64
+)
+
 var (
 	errContextRequired       = errors.New("context is required")
 	errWaveNotOpen           = errors.New("wave is not registration_open")
@@ -375,7 +380,7 @@ func (s *Service) persistSnapshots(ctx context.Context, stage string) error {
 
 func classifyShard(entrants int) (model.ArenaMode, bool) {
 	switch {
-	case entrants >= 56 && entrants <= 64:
+	case entrants >= ratedShardMinEntrants && entrants <= ratedShardMaxEntrants:
 		return model.RatedMode, false
 	case entrants >= 48:
 		return model.PracticeMode, true

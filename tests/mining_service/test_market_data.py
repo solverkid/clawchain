@@ -50,6 +50,37 @@ def test_hybrid_market_data_provider_falls_back_to_synthetic():
     assert task["degraded_reason"] == "live_market_data_unavailable"
 
 
+def test_hybrid_market_data_provider_times_out_to_synthetic_fallback():
+    class SlowLiveProvider:
+        async def build_fast_task(self, now, settings, asset, *, publish_at=None, generated_at=None):  # noqa: ANN001
+            await asyncio.sleep(0.05)
+            raise AssertionError("timeout should have fired before live task completed")
+
+        async def resolve_fast_task(self, task):  # noqa: ANN001
+            raise RuntimeError("live resolution unavailable")
+
+        async def aclose(self) -> None:
+            return None
+
+    settings = forecast_engine.ForecastSettings(fast_task_live_build_timeout_seconds=0.001)
+    provider = market_data.HybridMarketDataProvider(
+        live=SlowLiveProvider(),
+        fallback=market_data.SyntheticMarketDataProvider(),
+    )
+
+    task = asyncio.run(
+        provider.build_fast_task(
+            datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc),
+            settings,
+            "BTCUSDT",
+        )
+    )
+
+    assert task["snapshot_health"] == "synthetic_fallback"
+    assert task["pack_json"]["snapshot_source"] == "synthetic_fallback"
+    assert task["pack_json"]["fallback_reason"].startswith("fast_task_live_build_timeout:")
+
+
 def test_live_market_data_provider_builds_task_from_market_snapshots():
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path

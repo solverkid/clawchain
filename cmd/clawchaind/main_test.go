@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,15 +44,11 @@ func TestAuthTxCommandsExist(t *testing.T) {
 }
 
 func TestBankSendCommandDoesNotPanic(t *testing.T) {
-	keyringDir, err := filepath.Abs("../../deploy/testnet-artifacts/val1")
-	if err != nil {
-		t.Fatalf("resolve keyring dir: %v", err)
-	}
-
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
+	keyringDir, _ := createTestKeyring(t, repoRoot, "val1")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -89,15 +86,11 @@ func TestBankSendCommandDoesNotPanic(t *testing.T) {
 }
 
 func TestSettlementAnchorBatchGenerateOnlyDoesNotPanic(t *testing.T) {
-	keyringDir, err := filepath.Abs("../../deploy/testnet-artifacts/val1")
-	if err != nil {
-		t.Fatalf("resolve keyring dir: %v", err)
-	}
-
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
+	keyringDir, _ := createTestKeyring(t, repoRoot, "val1")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -106,10 +99,10 @@ func TestSettlementAnchorBatchGenerateOnlyDoesNotPanic(t *testing.T) {
 		"settlement",
 		"anchor-batch",
 		"val1",
-		"sb_test_01",
-		"aj_test_01",
-		"sha256:canonical",
-		"sha256:payload",
+		"sb_2026_04_10_0001",
+		"anchor_job_01",
+		"sha256:"+strings.Repeat("a", 64),
+		"sha256:"+strings.Repeat("b", 64),
 		"--lane",
 		"fast",
 		"--schema-version",
@@ -117,11 +110,11 @@ func TestSettlementAnchorBatchGenerateOnlyDoesNotPanic(t *testing.T) {
 		"--policy-bundle-version",
 		"policy.v1",
 		"--reward-window-ids-root",
-		"sha256:windows",
+		"sha256:"+strings.Repeat("c", 64),
 		"--task-run-ids-root",
-		"sha256:tasks",
+		"sha256:"+strings.Repeat("d", 64),
 		"--miner-reward-rows-root",
-		"sha256:miners",
+		"sha256:"+strings.Repeat("e", 64),
 		"--window-end-at",
 		"2026-04-10T03:15:00Z",
 		"--total-reward-amount",
@@ -161,15 +154,11 @@ func TestSettlementAnchorBatchGenerateOnlyDoesNotPanic(t *testing.T) {
 }
 
 func TestSettlementAnchorBatchGeneratedTxCanBeSigned(t *testing.T) {
-	keyringDir, err := filepath.Abs("../../deploy/testnet-artifacts/val1")
-	if err != nil {
-		t.Fatalf("resolve keyring dir: %v", err)
-	}
-
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
+	keyringDir, _ := createTestKeyring(t, repoRoot, "val1")
 
 	tempDir := t.TempDir()
 	unsignedPath := filepath.Join(tempDir, "unsigned_tx.json")
@@ -182,10 +171,10 @@ func TestSettlementAnchorBatchGeneratedTxCanBeSigned(t *testing.T) {
 		"settlement",
 		"anchor-batch",
 		"val1",
-		"sb_test_sign_01",
-		"aj_test_sign_01",
-		"sha256:canonical",
-		"sha256:payload",
+		"sb_2026_04_10_0002",
+		"anchor_job_02",
+		"sha256:"+strings.Repeat("a", 64),
+		"sha256:"+strings.Repeat("b", 64),
 		"--lane",
 		"fast",
 		"--schema-version",
@@ -193,11 +182,11 @@ func TestSettlementAnchorBatchGeneratedTxCanBeSigned(t *testing.T) {
 		"--policy-bundle-version",
 		"policy.v1",
 		"--reward-window-ids-root",
-		"sha256:windows",
+		"sha256:"+strings.Repeat("c", 64),
 		"--task-run-ids-root",
-		"sha256:tasks",
+		"sha256:"+strings.Repeat("d", 64),
 		"--miner-reward-rows-root",
-		"sha256:miners",
+		"sha256:"+strings.Repeat("e", 64),
 		"--window-end-at",
 		"2026-04-10T03:15:00Z",
 		"--total-reward-amount",
@@ -270,6 +259,47 @@ func TestSettlementAnchorBatchGeneratedTxCanBeSigned(t *testing.T) {
 	if !strings.Contains(string(signedBytes), "/clawchain.settlement.v1.MsgAnchorSettlementBatch") {
 		t.Fatalf("expected signed tx to preserve settlement msg type: %s", string(signedBytes))
 	}
+}
+
+func createTestKeyring(t *testing.T, repoRoot string, keyName string) (string, string) {
+	t.Helper()
+
+	keyringDir := t.TempDir()
+
+	var addStdout bytes.Buffer
+	var addStderr bytes.Buffer
+	addCmd := exec.Command(
+		"go",
+		"run",
+		"./cmd/clawchaind",
+		"keys",
+		"add",
+		keyName,
+		"--keyring-backend",
+		"test",
+		"--keyring-dir",
+		keyringDir,
+		"--output",
+		"json",
+	)
+	addCmd.Dir = repoRoot
+	addCmd.Stdout = &addStdout
+	addCmd.Stderr = &addStderr
+	if err := addCmd.Run(); err != nil {
+		t.Fatalf("keys add failed: %v\nstdout=%s\nstderr=%s", err, addStdout.String(), addStderr.String())
+	}
+
+	var keyPayload struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(addStdout.Bytes(), &keyPayload); err != nil {
+		t.Fatalf("decode keys add output: %v\nstdout=%s", err, addStdout.String())
+	}
+	if keyPayload.Address == "" {
+		t.Fatalf("keys add did not return address: %s", addStdout.String())
+	}
+
+	return keyringDir, keyPayload.Address
 }
 
 func TestStartCommandPreRunLoadsMinimumGasPrices(t *testing.T) {

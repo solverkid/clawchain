@@ -19,6 +19,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import forecast_engine
 import poker_mtt_history
 import server
+import config
 from config import AppSettings
 from setup import generate_wallet
 from eth_keys import keys as eth_keys
@@ -35,14 +36,65 @@ class FrozenClock:
         self.current += timedelta(seconds=seconds)
 
 
+def test_anchor_reconcile_loop_default_matches_runtime_env(monkeypatch):
+    monkeypatch.setenv("CLAWCHAIN_ENV", "local")
+    assert config._anchor_reconcile_loop_default() is False
+    assert config._forecast_progression_loop_default() is True
+
+    monkeypatch.setenv("CLAWCHAIN_ENV", "development")
+    assert config._anchor_reconcile_loop_default() is False
+    assert config._forecast_progression_loop_default() is True
+
+    monkeypatch.setenv("CLAWCHAIN_ENV", "production")
+    assert config._anchor_reconcile_loop_default() is True
+    assert config._forecast_progression_loop_default() is True
+
+
 def _sign(parts: list[str], private_key_hex: str) -> str:
     msg_hash = forecast_engine.build_signature_hash(parts)
     signature = eth_keys.PrivateKey(bytes.fromhex(private_key_hex)).sign_msg_hash(msg_hash)
     return signature.to_bytes().hex()
 
 
+def _build_verified_chain_confirmer(repo):
+    async def fake_confirmer(tx_hash, now, *, settlement_batch_id=None):  # noqa: ANN001
+        batch = await repo.get_settlement_batch(settlement_batch_id)
+        assert batch is not None
+        anchor_job = await repo.get_anchor_job(batch["anchor_job_id"])
+        assert anchor_job is not None
+        payload = batch["anchor_payload_json"]
+        return {
+            "tx_hash": tx_hash,
+            "found": True,
+            "confirmed": True,
+            "confirmation_status": "confirmed",
+            "height": 321,
+            "code": 0,
+            "raw_log": "",
+            "query_response": {
+                "anchor": {
+                    "settlement_batch_id": batch["id"],
+                    "anchor_job_id": anchor_job["id"],
+                    "lane": batch["lane"],
+                    "schema_version": batch["anchor_schema_version"],
+                    "policy_bundle_version": payload["policy_bundle_version"],
+                    "canonical_root": batch["canonical_root"],
+                    "anchor_payload_hash": batch["anchor_payload_hash"],
+                    "reward_window_ids_root": payload["reward_window_ids_root"],
+                    "task_run_ids_root": payload["task_run_ids_root"],
+                    "miner_reward_rows_root": payload["miner_reward_rows_root"],
+                    "window_end_at": batch["window_end_at"],
+                    "total_reward_amount": batch["total_reward_amount"],
+                }
+            },
+        }
+
+    return fake_confirmer
+
+
 def test_register_fetch_commit_reveal_flow():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    repo = server.create_fake_repository()
 
     async def fake_broadcaster(plan, now):  # noqa: ANN001
         return {
@@ -58,9 +110,10 @@ def test_register_fetch_commit_reveal_flow():
 
     app = server.create_app(
         settings=forecast_engine.ForecastSettings(fast_task_seconds=900, commit_window_seconds=3, reveal_window_seconds=13),
-        repository=server.create_fake_repository(),
+        repository=repo,
         now_fn=clock.now,
         chain_broadcaster=fake_broadcaster,
+        chain_tx_confirmer=_build_verified_chain_confirmer(repo),
     )
     wallet = generate_wallet()
     with TestClient(app) as client:
@@ -130,6 +183,8 @@ def test_register_fetch_commit_reveal_flow():
         assert reveal_resp.json()["data"]["reward_eligibility"] == "eligible"
 
         clock.advance(900)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
         miner_status = client.get(f"/v1/miners/{wallet['address']}/status")
         assert miner_status.status_code == 200
         data = miner_status.json()["data"]
@@ -137,6 +192,10 @@ def test_register_fetch_commit_reveal_flow():
         assert data["total_rewards"] >= 0
         assert "score_explanation" in data
         assert "reward_timeline" in data
+        assert data["anti_abuse_discount"] == 1.0
+        assert data["admission_release_ratio"] == 0.2
+        assert data["reward_timeline"]["anti_abuse_discount"] == 1.0
+        assert data["reward_timeline"]["admission_release_ratio"] == 0.2
         assert data["score_explanation"]["latest_fast"]["task_run_id"] == fast_task["task_run_id"]
 
         submissions = client.get(f"/v1/miners/{wallet['address']}/submissions").json()["data"]["items"]
@@ -145,14 +204,20 @@ def test_register_fetch_commit_reveal_flow():
         reward_windows = client.get(f"/v1/miners/{wallet['address']}/reward-windows").json()["data"]["items"]
         settlement_batches = client.get("/admin/settlement-batches").json()["items"]
         reward_window_proof = client.get(f"/v1/replays/reward_window/{reward_windows[0]['id']}/proof").json()["data"]
-        reward_window_artifact = client.get(f"/v1/artifacts/{reward_window_proof['artifact_refs'][0]['artifact_id']}").json()["data"]
+        reward_window_membership_ref = next(
+            ref for ref in reward_window_proof["artifact_refs"] if ref["kind"] == "reward_window_membership"
+        )
+        reward_window_artifact = client.get(
+            f"/v1/artifacts/{reward_window_membership_ref['artifact_id']}"
+        ).json()["data"]
         rebuilt_window = client.post(f"/admin/reward-windows/{reward_windows[0]['id']}/rebuild").json()
         anchored_batch = client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/retry-anchor").json()
         submitted_batch = client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/submit-anchor").json()
         anchor_jobs = client.get("/admin/anchor-jobs").json()["items"]
         chain_tx_plan = client.get(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/chain-tx-plan").json()
         broadcast_receipt = client.post(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/broadcast-fallback").json()
-        anchored_job = client.post(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/mark-anchored").json()
+        anchored_response = client.post(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/mark-anchored")
+        anchored_job = anchored_response.json()
         anchored_proof = client.get(f"/v1/replays/reward_window/{reward_windows[0]['id']}/proof").json()["data"]
         settled_status = client.get(f"/v1/miners/{wallet['address']}/status").json()["data"]
 
@@ -181,7 +246,10 @@ def test_register_fetch_commit_reveal_flow():
         assert broadcast_receipt["account_number"] == 0
         assert broadcast_receipt["sequence"] == 0
         assert broadcast_receipt["attempt_count"] == 1
-        assert anchored_job["state"] == "anchored"
+        assert anchored_response.status_code == 200
+        assert anchored_job["chain_confirmation_status"] == "confirmed"
+        assert anchored_job["anchor_job_state"] == "anchored"
+        assert anchored_job["chain_height"] == 321
         assert any(ref["kind"] == "settlement_anchor_payload" for ref in anchored_proof["artifact_refs"])
         assert settled_status["latest_reward_window"]["id"] == reward_windows[0]["id"]
         assert settled_status["latest_reward_window"]["canonical_root"].startswith("sha256:")
@@ -189,6 +257,97 @@ def test_register_fetch_commit_reveal_flow():
         assert settled_status["latest_settlement_batch"]["state"] == "anchored"
         assert settled_status["latest_anchor_job"]["id"] == anchor_jobs[0]["id"]
         assert settled_status["latest_anchor_job"]["state"] == "anchored"
+
+
+def test_chain_tx_plan_endpoint_does_not_reconcile_implicitly():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    repo = server.create_fake_repository()
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(fast_task_seconds=900, commit_window_seconds=3, reveal_window_seconds=13),
+        repository=repo,
+        now_fn=clock.now,
+    )
+    wallet = generate_wallet()
+    with TestClient(app) as client:
+        register_resp = client.post(
+            "/clawchain/miner/register",
+            json={
+                "address": wallet["address"],
+                "name": "miner-chain-plan",
+                "public_key": wallet["public_key"],
+                "miner_version": "0.4.0",
+            },
+        )
+        assert register_resp.status_code == 200
+
+        active = client.get("/v1/task-runs/active").json()["data"]["items"]
+        fast_task = next(item for item in active if item["lane"] == "forecast_15m")
+        p_yes_bps = 6400
+        reveal_nonce = "salt-chain-plan"
+        commit_hash = forecast_engine.compute_commit_hash(
+            task_run_id=fast_task["task_run_id"],
+            miner_address=wallet["address"],
+            p_yes_bps=p_yes_bps,
+            reveal_nonce=reveal_nonce,
+        )
+
+        commit_request_id = "req-commit-chain-plan"
+        commit_sig = _sign(
+            [fast_task["task_run_id"], commit_hash, reveal_nonce, wallet["address"], commit_request_id],
+            wallet["private_key"],
+        )
+        commit_resp = client.post(
+            f"/v1/task-runs/{fast_task['task_run_id']}/commit",
+            json={
+                "request_id": commit_request_id,
+                "task_run_id": fast_task["task_run_id"],
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "commit_hash": commit_hash,
+                "nonce": reveal_nonce,
+                "client_version": "skill-v0.4.0",
+                "signature": commit_sig,
+            },
+        )
+        assert commit_resp.status_code == 200
+
+        clock.advance(5)
+        reveal_request_id = "req-reveal-chain-plan"
+        reveal_sig = _sign(
+            [fast_task["task_run_id"], str(p_yes_bps), reveal_nonce, wallet["address"], reveal_request_id],
+            wallet["private_key"],
+        )
+        reveal_resp = client.post(
+            f"/v1/task-runs/{fast_task['task_run_id']}/reveal",
+            json={
+                "request_id": reveal_request_id,
+                "task_run_id": fast_task["task_run_id"],
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "p_yes_bps": p_yes_bps,
+                "nonce": reveal_nonce,
+                "schema_version": "v1",
+                "signature": reveal_sig,
+            },
+        )
+        assert reveal_resp.status_code == 200
+
+        clock.advance(900)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
+        settlement_batches = client.get("/admin/settlement-batches").json()["items"]
+        client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/retry-anchor")
+        client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/submit-anchor")
+        anchor_jobs = client.get("/admin/anchor-jobs").json()["items"]
+
+        async def fail_reconcile(now=None):  # noqa: ANN001
+            raise AssertionError("chain-tx-plan endpoint should not call reconcile")
+
+        app.state.service.reconcile = fail_reconcile
+        chain_tx_plan = client.get(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/chain-tx-plan")
+
+        assert chain_tx_plan.status_code == 200
+        assert chain_tx_plan.json()["future_msg"]["value"]["settlement_batch_id"] == settlement_batches[0]["id"]
 
 
 def test_task_detail_exposes_frozen_snapshot_metadata():
@@ -209,6 +368,21 @@ def test_task_detail_exposes_frozen_snapshot_metadata():
         assert pack_json["snapshot_source"] == "synthetic"
         assert pack_json["snapshot_frozen_at"] == detail.json()["data"]["created_at"]
         assert pack_json["snapshot_freshness_seconds"] == {"binance": None, "polymarket": None}
+
+
+def test_active_tasks_hide_fast_tasks_after_commit_deadline():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 6, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=15),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+
+    with TestClient(app) as client:
+        active = client.get("/v1/task-runs/active").json()["data"]["items"]
+
+        assert all(item["lane"] != "forecast_15m" for item in active)
+        assert len([item for item in active if item["lane"] == "daily_anchor"]) == 2
 
 
 def test_typed_broadcast_endpoint_uses_typed_chain_broadcaster():
@@ -313,6 +487,8 @@ def test_typed_broadcast_endpoint_uses_typed_chain_broadcaster():
         assert reveal_resp.status_code == 200
 
         clock.advance(900)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
         settlement_batches = client.get("/admin/settlement-batches").json()["items"]
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/retry-anchor")
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/submit-anchor")
@@ -327,6 +503,7 @@ def test_typed_broadcast_endpoint_uses_typed_chain_broadcaster():
 
 def test_confirm_chain_endpoint_marks_anchor_job_anchored():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    repo = server.create_fake_repository()
 
     async def fake_typed_broadcaster(plan, now):  # noqa: ANN001
         return {
@@ -341,23 +518,12 @@ def test_confirm_chain_endpoint_marks_anchor_job_anchored():
             "broadcast_method": "typed_msg",
         }
 
-    async def fake_confirmer(tx_hash, now):  # noqa: ANN001
-        return {
-            "tx_hash": tx_hash,
-            "found": True,
-            "confirmed": True,
-            "confirmation_status": "confirmed",
-            "height": 321,
-            "code": 0,
-            "raw_log": "",
-        }
-
     app = server.create_app(
         settings=forecast_engine.ForecastSettings(fast_task_seconds=900, commit_window_seconds=3, reveal_window_seconds=13),
-        repository=server.create_fake_repository(),
+        repository=repo,
         now_fn=clock.now,
         chain_typed_broadcaster=fake_typed_broadcaster,
-        chain_tx_confirmer=fake_confirmer,
+        chain_tx_confirmer=_build_verified_chain_confirmer(repo),
     )
     wallet = generate_wallet()
     with TestClient(app) as client:
@@ -425,6 +591,8 @@ def test_confirm_chain_endpoint_marks_anchor_job_anchored():
         assert reveal_resp.status_code == 200
 
         clock.advance(900)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
         settlement_batches = client.get("/admin/settlement-batches").json()["items"]
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/retry-anchor")
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/submit-anchor")
@@ -440,8 +608,129 @@ def test_confirm_chain_endpoint_marks_anchor_job_anchored():
         assert anchor_jobs_after[0]["state"] == "anchored"
 
 
+def test_mark_anchored_endpoint_rejects_unconfirmed_anchor_job():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+
+    async def fake_typed_broadcaster(plan, now):  # noqa: ANN001
+        return {
+            "tx_hash": "TYPEDPENDINGTX",
+            "code": 0,
+            "raw_log": "",
+            "memo": plan["fallback_memo"],
+            "broadcast_at": forecast_engine.isoformat_z(now),
+            "account_number": 0,
+            "sequence": 1,
+            "attempt_count": 1,
+            "broadcast_method": "typed_msg",
+        }
+
+    async def fake_confirmer(tx_hash, now):  # noqa: ANN001
+        return {
+            "tx_hash": tx_hash,
+            "found": False,
+            "confirmed": False,
+            "confirmation_status": "pending",
+            "height": None,
+            "code": None,
+            "raw_log": "",
+        }
+
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(fast_task_seconds=900, commit_window_seconds=3, reveal_window_seconds=13),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+        chain_typed_broadcaster=fake_typed_broadcaster,
+        chain_tx_confirmer=fake_confirmer,
+    )
+    wallet = generate_wallet()
+    with TestClient(app) as client:
+        register_resp = client.post(
+            "/clawchain/miner/register",
+            json={
+                "address": wallet["address"],
+                "name": "miner-mark-pending",
+                "public_key": wallet["public_key"],
+                "miner_version": "0.4.0",
+            },
+        )
+        assert register_resp.status_code == 200
+
+        active = client.get("/v1/task-runs/active").json()["data"]["items"]
+        fast_task = next(item for item in active if item["lane"] == "forecast_15m")
+
+        p_yes_bps = 6400
+        reveal_nonce = "salt-mark-pending"
+        commit_hash = forecast_engine.compute_commit_hash(
+            task_run_id=fast_task["task_run_id"],
+            miner_address=wallet["address"],
+            p_yes_bps=p_yes_bps,
+            reveal_nonce=reveal_nonce,
+        )
+        commit_request_id = "req-commit-mark-pending"
+        commit_sig = _sign(
+            [fast_task["task_run_id"], commit_hash, reveal_nonce, wallet["address"], commit_request_id],
+            wallet["private_key"],
+        )
+        commit_resp = client.post(
+            f"/v1/task-runs/{fast_task['task_run_id']}/commit",
+            json={
+                "request_id": commit_request_id,
+                "task_run_id": fast_task["task_run_id"],
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "commit_hash": commit_hash,
+                "nonce": reveal_nonce,
+                "client_version": "skill-v0.4.0",
+                "signature": commit_sig,
+            },
+        )
+        assert commit_resp.status_code == 200
+
+        clock.advance(5)
+        reveal_request_id = "req-reveal-mark-pending"
+        reveal_sig = _sign(
+            [fast_task["task_run_id"], str(p_yes_bps), reveal_nonce, wallet["address"], reveal_request_id],
+            wallet["private_key"],
+        )
+        reveal_resp = client.post(
+            f"/v1/task-runs/{fast_task['task_run_id']}/reveal",
+            json={
+                "request_id": reveal_request_id,
+                "task_run_id": fast_task["task_run_id"],
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "p_yes_bps": p_yes_bps,
+                "nonce": reveal_nonce,
+                "schema_version": "v1",
+                "signature": reveal_sig,
+            },
+        )
+        assert reveal_resp.status_code == 200
+
+        clock.advance(900)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
+        settlement_batches = client.get("/admin/settlement-batches").json()["items"]
+        client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/retry-anchor")
+        client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/submit-anchor")
+        anchor_jobs = client.get("/admin/anchor-jobs").json()["items"]
+        client.post(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/broadcast-typed")
+
+        mark_response = client.post(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/mark-anchored")
+        confirm_response = client.post(f"/admin/anchor-jobs/{anchor_jobs[0]['id']}/confirm-chain")
+        anchor_jobs_after = client.get("/admin/anchor-jobs").json()["items"]
+
+        assert mark_response.status_code == 409
+        assert mark_response.json()["detail"] == "anchor job not verified: pending"
+        assert confirm_response.status_code == 200
+        assert confirm_response.json()["chain_confirmation_status"] == "pending"
+        assert confirm_response.json()["anchor_job_state"] == "anchor_submitted"
+        assert anchor_jobs_after[0]["state"] == "anchor_submitted"
+
+
 def test_reconcile_chain_endpoint_confirms_pending_anchor_jobs():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    repo = server.create_fake_repository()
 
     async def fake_typed_broadcaster(plan, now):  # noqa: ANN001
         return {
@@ -456,23 +745,12 @@ def test_reconcile_chain_endpoint_confirms_pending_anchor_jobs():
             "broadcast_method": "typed_msg",
         }
 
-    async def fake_confirmer(tx_hash, now):  # noqa: ANN001
-        return {
-            "tx_hash": tx_hash,
-            "found": True,
-            "confirmed": True,
-            "confirmation_status": "confirmed",
-            "height": 654,
-            "code": 0,
-            "raw_log": "",
-        }
-
     app = server.create_app(
         settings=forecast_engine.ForecastSettings(fast_task_seconds=900, commit_window_seconds=3, reveal_window_seconds=13),
-        repository=server.create_fake_repository(),
+        repository=repo,
         now_fn=clock.now,
         chain_typed_broadcaster=fake_typed_broadcaster,
-        chain_tx_confirmer=fake_confirmer,
+        chain_tx_confirmer=_build_verified_chain_confirmer(repo),
     )
     wallet = generate_wallet()
     with TestClient(app) as client:
@@ -540,6 +818,8 @@ def test_reconcile_chain_endpoint_confirms_pending_anchor_jobs():
         assert reveal_resp.status_code == 200
 
         clock.advance(900)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
         settlement_batches = client.get("/admin/settlement-batches").json()["items"]
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/retry-anchor")
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/submit-anchor")
@@ -602,6 +882,55 @@ def test_anchor_reconcile_loop_runs_pending_confirmation_once(monkeypatch):
     assert metrics["run_count"] == 1
     assert metrics["success_count"] == 1
     assert metrics["last_result_count"] == 0
+    assert metrics["last_error"] is None
+
+
+def test_forecast_progression_loop_runs_once(monkeypatch):
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+
+    class DummyService:
+        def __init__(self):
+            self.calls: list[datetime] = []
+
+        async def reconcile(self, now=None):
+            self.calls.append(now)
+
+    service = DummyService()
+    metrics = {
+        "enabled": True,
+        "interval_seconds": 5.0,
+        "active": True,
+        "run_count": 0,
+        "success_count": 0,
+        "error_count": 0,
+        "consecutive_error_count": 0,
+        "last_started_at": None,
+        "last_completed_at": None,
+        "last_result_count": 0,
+        "last_error": None,
+    }
+
+    async def fake_sleep(seconds):  # noqa: ANN001
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    async def scenario():
+        with pytest.raises(asyncio.CancelledError):
+            await server._run_forecast_progression_loop(
+                service=service,
+                now_fn=clock.now,
+                interval_seconds=5.0,
+                metrics=metrics,
+            )
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+    assert service.calls == [clock.now()]
+    assert metrics["run_count"] == 1
+    assert metrics["success_count"] == 1
     assert metrics["last_error"] is None
 
 
@@ -704,6 +1033,151 @@ def test_chain_health_endpoint_reports_alert_thresholds():
         codes = {item["code"] for item in data["alerts"]}
         assert "stale_pending_confirmation" in codes
         assert "anchor_reconcile_loop_errors" in codes
+
+
+def test_forecast_health_endpoint_reports_loop_metrics_and_overdue_tasks():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 20, 0, tzinfo=timezone.utc))
+
+    app = server.create_app(
+        settings=AppSettings(
+            forecast_progression_loop_enabled=False,
+            forecast_progression_loop_error_alert_threshold=2,
+            anchor_reconcile_loop_enabled=False,
+        ),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+    with TestClient(app) as client:
+        repo = app.state.repository
+        repo._tasks["forecast_overdue"] = {
+            "task_run_id": "forecast_overdue",
+            "lane": "forecast_15m",
+            "asset": "BTCUSDT",
+            "state": "awaiting_resolution",
+            "publish_at": "2026-04-09T09:00:00Z",
+            "resolve_at": "2026-04-09T09:05:00Z",
+        }
+        repo._settlement_batches["sb_open"] = {
+            "id": "sb_open",
+            "lane": "forecast_15m",
+            "state": "open",
+            "reward_window_ids": [],
+            "task_count": 0,
+            "miner_count": 0,
+            "total_reward_amount": 0,
+            "window_start_at": "2026-04-09T09:00:00Z",
+            "window_end_at": "2026-04-09T10:00:00Z",
+            "created_at": "2026-04-09T09:00:00Z",
+            "updated_at": "2026-04-09T09:00:00Z",
+        }
+        app.state.forecast_progression_metrics.update(
+            {
+                "active": True,
+                "run_count": 5,
+                "success_count": 3,
+                "error_count": 2,
+                "consecutive_error_count": 2,
+                "last_error": "progression failed",
+            }
+        )
+
+        data = client.get("/admin/forecast/health").json()
+
+        assert data["status"] == "critical"
+        assert data["forecast"]["overdue_fast_task_count"] == 1
+        assert data["forecast"]["open_settlement_batch_count"] == 1
+        codes = {item["code"] for item in data["alerts"]}
+        assert "forecast_progression_loop_errors" in codes
+        assert "overdue_forecast_tasks" in codes
+
+
+def test_public_reads_do_not_progress_without_admin_reconcile():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    repo = server.create_fake_repository()
+    app = server.create_app(
+        settings=AppSettings(
+            forecast_progression_loop_enabled=False,
+            anchor_reconcile_loop_enabled=False,
+        ),
+        repository=repo,
+        now_fn=clock.now,
+    )
+    wallet = generate_wallet()
+    with TestClient(app) as client:
+        register_resp = client.post(
+            "/clawchain/miner/register",
+            json={
+                "address": wallet["address"],
+                "name": "miner-progression",
+                "public_key": wallet["public_key"],
+                "miner_version": "0.4.0",
+            },
+        )
+        assert register_resp.status_code == 200
+
+        active = client.get("/v1/task-runs/active").json()["data"]["items"]
+        fast_task = next(item for item in active if item["lane"] == "forecast_15m")
+        p_yes_bps = 6400
+        reveal_nonce = "salt-progression"
+        commit_hash = forecast_engine.compute_commit_hash(
+            task_run_id=fast_task["task_run_id"],
+            miner_address=wallet["address"],
+            p_yes_bps=p_yes_bps,
+            reveal_nonce=reveal_nonce,
+        )
+
+        commit_request_id = "req-progression-commit"
+        commit_sig = _sign(
+            [fast_task["task_run_id"], commit_hash, reveal_nonce, wallet["address"], commit_request_id],
+            wallet["private_key"],
+        )
+        commit_resp = client.post(
+            f"/v1/task-runs/{fast_task['task_run_id']}/commit",
+            json={
+                "request_id": commit_request_id,
+                "task_run_id": fast_task["task_run_id"],
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "commit_hash": commit_hash,
+                "nonce": reveal_nonce,
+                "client_version": "skill-v0.4.0",
+                "signature": commit_sig,
+            },
+        )
+        assert commit_resp.status_code == 200
+
+        clock.advance(5)
+        reveal_request_id = "req-progression-reveal"
+        reveal_sig = _sign(
+            [fast_task["task_run_id"], str(p_yes_bps), reveal_nonce, wallet["address"], reveal_request_id],
+            wallet["private_key"],
+        )
+        reveal_resp = client.post(
+            f"/v1/task-runs/{fast_task['task_run_id']}/reveal",
+            json={
+                "request_id": reveal_request_id,
+                "task_run_id": fast_task["task_run_id"],
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "p_yes_bps": p_yes_bps,
+                "nonce": reveal_nonce,
+                "schema_version": "v1",
+                "signature": reveal_sig,
+            },
+        )
+        assert reveal_resp.status_code == 200
+
+        clock.advance(900)
+        before = client.get(f"/v1/miners/{wallet['address']}/status").json()["data"]
+        assert before["settled_tasks"] == 0
+        assert before["latest_reward_window"] is None
+
+        reconcile = client.post("/admin/reconcile")
+        assert reconcile.status_code == 200
+
+        after = client.get(f"/v1/miners/{wallet['address']}/status").json()["data"]
+        assert after["settled_tasks"] == 1
+        assert after["latest_reward_window"] is not None
 
 
 def test_anchor_action_queue_endpoint_returns_failed_and_stale_jobs():
@@ -862,6 +1336,8 @@ def test_retry_broadcast_typed_endpoint_reissues_failed_anchor_job():
         assert reveal_resp.status_code == 200
 
         clock.advance(900)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
         settlement_batches = client.get("/admin/settlement-batches").json()["items"]
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/retry-anchor")
         client.post(f"/admin/settlement-batches/{settlement_batches[0]['id']}/submit-anchor")
@@ -960,6 +1436,8 @@ def test_settlement_batch_refreshes_open_batch_for_later_same_hour_tasks():
             assert reveal_resp.status_code == 200
 
         clock.advance(65)
+        reconcile_resp = client.post("/admin/reconcile")
+        assert reconcile_resp.status_code == 200
 
     with TestClient(app) as client:
         register_resp = client.post(
@@ -992,6 +1470,108 @@ def test_settlement_batch_refreshes_open_batch_for_later_same_hour_tasks():
         assert refreshed_batch["task_count"] == 4
         assert refreshed_batch["miner_count"] == 1
         assert refreshed_batch["total_reward_amount"] == reward_window["total_reward_amount"]
+
+
+def test_prewarmed_fast_task_stays_hidden_until_publish_and_rejects_early_commit():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 55, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=AppSettings(
+            live_market_data_enabled=False,
+            fast_task_seconds=60,
+            fast_task_prewarm_seconds=10,
+            commit_window_seconds=5,
+            reveal_window_seconds=15,
+        ),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+    wallet = generate_wallet()
+    prewarmed_task_id = "tr_fast_202604090901_btcusdt"
+
+    with TestClient(app) as client:
+        register_resp = client.post(
+            "/clawchain/miner/register",
+            json={
+                "address": wallet["address"],
+                "name": "prewarm-miner",
+                "public_key": wallet["public_key"],
+                "miner_version": "0.4.0",
+            },
+        )
+        assert register_resp.status_code == 200
+
+        detail_before = client.get(f"/v1/forecast/task-runs/{prewarmed_task_id}")
+        assert detail_before.status_code == 404
+
+        upcoming_before = client.get("/v1/forecast/task-runs/upcoming").json()["data"]["items"]
+        assert len(upcoming_before) == 2
+        preview_item = next(item for item in upcoming_before if item["task_run_id"] == prewarmed_task_id)
+        assert preview_item["availability_state"] == "prewarmed"
+        assert preview_item["commit_open"] is False
+        assert preview_item["seconds_until_publish"] == 5.0
+
+        active_before = client.get("/v1/task-runs/active").json()["data"]["items"]
+        assert prewarmed_task_id not in {item["task_run_id"] for item in active_before}
+
+        p_yes_bps = 5100
+        reveal_nonce = "prewarm-early"
+        commit_hash = forecast_engine.compute_commit_hash(
+            task_run_id=prewarmed_task_id,
+            miner_address=wallet["address"],
+            p_yes_bps=p_yes_bps,
+            reveal_nonce=reveal_nonce,
+        )
+        early_request_id = "prewarm-early-commit"
+        early_sig = _sign(
+            [prewarmed_task_id, commit_hash, reveal_nonce, wallet["address"], early_request_id],
+            wallet["private_key"],
+        )
+        early_commit = client.post(
+            f"/v1/task-runs/{prewarmed_task_id}/commit",
+            json={
+                "request_id": early_request_id,
+                "task_run_id": prewarmed_task_id,
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "commit_hash": commit_hash,
+                "nonce": reveal_nonce,
+                "client_version": "skill-v0.4.0",
+                "signature": early_sig,
+            },
+        )
+        assert early_commit.status_code == 400
+        assert early_commit.json()["detail"] == "task not yet published"
+
+        clock.advance(5)
+
+        detail_after = client.get(f"/v1/forecast/task-runs/{prewarmed_task_id}")
+        assert detail_after.status_code == 200
+        assert detail_after.json()["data"]["publish_at"] == "2026-04-09T09:01:00Z"
+
+        active_after = client.get("/v1/task-runs/active").json()["data"]["items"]
+        assert prewarmed_task_id in {item["task_run_id"] for item in active_after}
+
+        live_request_id = "prewarm-live-commit"
+        live_sig = _sign(
+            [prewarmed_task_id, commit_hash, reveal_nonce, wallet["address"], live_request_id],
+            wallet["private_key"],
+        )
+        publish_commit = client.post(
+            f"/v1/task-runs/{prewarmed_task_id}/commit",
+            json={
+                "request_id": live_request_id,
+                "task_run_id": prewarmed_task_id,
+                "miner_id": wallet["address"],
+                "economic_unit_id": f"eu:{wallet['address']}",
+                "commit_hash": commit_hash,
+                "nonce": reveal_nonce,
+                "client_version": "skill-v0.4.0",
+                "signature": live_sig,
+            },
+        )
+        assert publish_commit.status_code == 200
+        assert publish_commit.json()["object_id"] == f"sub:{prewarmed_task_id}:{wallet['address']}"
+        assert publish_commit.json()["data"]["validation_status"] == "accepted"
 
 
 def test_stats_endpoint_reports_forecast_state():
@@ -1384,7 +1964,7 @@ def test_admin_risk_override_closes_case_and_returns_operator_metadata():
 def test_admin_apply_arena_results_updates_multiplier():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(
-        settings=forecast_engine.ForecastSettings(),
+        settings=forecast_engine.ForecastSettings(legacy_arena_apply_enabled=True),
         repository=server.create_fake_repository(),
         now_fn=clock.now,
     )
@@ -1423,10 +2003,49 @@ def test_admin_apply_arena_results_updates_multiplier():
         assert miner_status.json()["data"]["arena_multiplier"] > 1.0
 
 
-def test_admin_apply_arena_results_returns_404_for_missing_miner():
+def test_admin_apply_arena_results_disabled_by_default():
     clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
     app = server.create_app(
         settings=forecast_engine.ForecastSettings(),
+        repository=server.create_fake_repository(),
+        now_fn=clock.now,
+    )
+    wallet = generate_wallet()
+    with TestClient(app) as client:
+        register_resp = client.post(
+            "/clawchain/miner/register",
+            json={
+                "address": wallet["address"],
+                "name": "arena-disabled",
+                "public_key": wallet["public_key"],
+                "miner_version": "0.4.0",
+            },
+        )
+        assert register_resp.status_code == 200
+
+        resp = client.post(
+            "/admin/arena/results/apply",
+            json={
+                "tournament_id": "arena-disabled-1",
+                "rated_or_practice": "rated",
+                "human_only": True,
+                "results": [
+                    {
+                        "miner_id": wallet["address"],
+                        "arena_score": 0.9,
+                    }
+                ],
+            },
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "legacy_arena_apply_disabled"
+
+
+def test_admin_apply_arena_results_returns_404_for_missing_miner():
+    clock = FrozenClock(datetime(2026, 4, 9, 9, 0, 1, tzinfo=timezone.utc))
+    app = server.create_app(
+        settings=forecast_engine.ForecastSettings(legacy_arena_apply_enabled=True),
         repository=server.create_fake_repository(),
         now_fn=clock.now,
     )

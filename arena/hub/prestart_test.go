@@ -11,26 +11,28 @@ import (
 	"github.com/clawchain/clawchain/arena/testutil"
 )
 
-func TestRatedShardStartsOnlyAt56To64(t *testing.T) {
-	h, _ := newHubForTest(t, 64)
+func TestRatedShardStartsAt33To64(t *testing.T) {
+	for _, entrants := range []int{33, 52, 64} {
+		h, _ := newHubForTest(t, entrants)
 
-	result, err := h.LockAndPack(context.Background())
-	require.NoError(t, err)
-	require.Len(t, result.Tournaments, 1)
-	require.Equal(t, string(model.RatedMode), result.Tournaments[0].RatedOrPractice)
-	require.False(t, result.Tournaments[0].NoMultiplier)
-	require.Len(t, result.Tournaments[0].EntrantIDs, 64)
+		result, err := h.LockAndPack(context.Background())
+		require.NoError(t, err)
+		require.Len(t, result.Tournaments, 1)
+		require.Equal(t, string(model.RatedMode), result.Tournaments[0].RatedOrPractice)
+		require.False(t, result.Tournaments[0].NoMultiplier)
+		require.Len(t, result.Tournaments[0].EntrantIDs, entrants)
+	}
 }
 
-func TestRatedUnderfillDowngrades48To55ToPractice(t *testing.T) {
-	h, _ := newHubForTest(t, 52)
+func TestRatedUnderfillDowngradesBelow33ToPractice(t *testing.T) {
+	h, _ := newHubForTest(t, 32)
 
 	result, err := h.LockAndPack(context.Background())
 	require.NoError(t, err)
 	require.Len(t, result.Tournaments, 1)
 	require.Equal(t, string(model.PracticeMode), result.Tournaments[0].RatedOrPractice)
 	require.True(t, result.Tournaments[0].NoMultiplier)
-	require.Len(t, result.Tournaments[0].EntrantIDs, 52)
+	require.Len(t, result.Tournaments[0].EntrantIDs, 32)
 }
 
 func TestSeatsPublishedAllowsSingleShardLocalRepublish(t *testing.T) {

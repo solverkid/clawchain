@@ -122,8 +122,8 @@ func (r *Runner) StepDetailed(ctx context.Context) (StepResult, error) {
 	}
 	result.Decision = decision
 
-	requestID := fmt.Sprintf(
-		"arena-bot-%s-%06d-%d",
+	requestID := actionRequestID(
+		r.client.tournamentID,
 		r.client.minerID,
 		atomic.AddInt64(&r.requestSeq, 1),
 		assignment.StateSeq,
@@ -138,4 +138,14 @@ func (r *Runner) StepDetailed(ctx context.Context) (StepResult, error) {
 	result.Status = "submitted"
 	result.Acted = true
 	return result, nil
+}
+
+func actionRequestID(tournamentID, minerID string, requestSeq, stateSeq int64) string {
+	return fmt.Sprintf(
+		"arena-bot-%s-%s-%06d-%d",
+		tournamentID,
+		minerID,
+		requestSeq,
+		stateSeq,
+	)
 }

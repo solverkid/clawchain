@@ -10,6 +10,47 @@ It answers three questions:
 2. What is still legacy drift or partial implementation?
 3. What are the next major protocol/data workstreams, ordered by miner user flow value and chain value?
 
+## Update: 2026-04-22 Hardening Delta
+
+Landed since this checkpoint:
+
+- forecast reward windows no longer rely only on bare submission `reward_amount`; the service now materializes per-miner reward-component rows, persists additive component fields on forecast submissions, and carries `miner_reward_rows_root` through reward-window membership and settlement-anchor payloads
+- forecast fast settlement now derives `anti_abuse_discount` from open risk cases, applies it inside `quality_envelope`, and exposes real `anti_abuse_discount` separately from `admission_release_ratio` on miner status/timeline surfaces
+- reward-window replay proof is no longer just membership; forecast windows now also materialize `reward_window_replay_bundle`, carrying `reward_component_rows_root`, `anti_abuse_input_rows_root`, and explicit `daily/arena overlay = deferred` state
+- loopback IPs and generic transport UAs (`python-requests`, `curl`, `python-urllib`, `httpx`, `aiohttp`, `wget`) are now ignored as cluster signals, so local/dev miners do not get auto-grouped just for using a default HTTP client
+- reveal duplicate gating now uses refreshed service-side `economic_unit_id` truth in the reveal path instead of the stale API-passed value
+- the real Postgres Poker MTT reward-window loader now honors `include_provisional=True` and has a live Postgres regression test
+- local/dev/test runtime now defaults the anchor reconcile loop to disabled unless explicitly enabled, which removes the default local-RPC connection-failure loop during service startup
+- forecast progression now has a dedicated in-process loop plus an explicit `POST /admin/reconcile` operator surface; public miner/task/history reads are snapshot-oriented and no longer drive settlement/window/batch progression
+- `GET /admin/anchor-jobs/{id}/chain-tx-plan` is now snapshot-only as well; it no longer hides a `reconcile()` side effect before building the typed tx plan
+- a real Arena -> shared DB -> `mining-service` bridge verification now exists: the Go arena runtime can write a non-default shared `arena_multiplier`, and `ForecastMiningService.get_miner_status()` consumes that same value from the shared Postgres database
+
+Still not finished:
+
+- forecast still does not perform the broader daily/arena overlay merge described by the architecture prose; the landed `quality_envelope` is forecast-side only
+- a local runtime with old pending anchor jobs in Postgres can still show degraded chain health until those jobs are cleared or a real RPC node is configured
+
+## Update: 2026-04-23 Three-Lane Local Acceptance
+
+Validated on local Postgres + local FastAPI + local arena runtime with a shared 33-miner manifest:
+
+- `scripts/three_lane/run_local_acceptance.py` now drives forecast swarm using `33` submit workers per task by default; with two fast tasks this produces `66` concurrent submit workers, matching the 33-miner local acceptance target instead of under-driving the 3 second commit window
+- `scripts/three_lane/run_forecast_swarm.py` now scales submit workers by `task_count`, so the local 33-miner swarm no longer collapses to a single global worker cap when two fast tasks publish together
+- forecast swarm now treats `400 commit window closed` as a reveal-compensation case and still attempts reveal; this closes the edge race where the commit landed server-side but the client classified the response as a terminal failure
+- local acceptance proof is now clean for the main three-lane path:
+  - Poker MTT: `33` miners, reward window built, total reward `3300`
+  - Arena: `33` results, `20` non-default multipliers written back to shared miner state
+  - Forecast: `05:25` bucket reached `66 committed / 66 revealed / 33 miners / 2 tasks`, then resolved through Polymarket Gamma and finalized reward window `rw_2026042305` with total reward `343104`
+- `build/three-lane/status.json` reached `all_ready=true`, `forecast.ready=true`, `poker.ready=true`, and `arena.ready=true`
+
+Important runtime truth from this acceptance:
+
+- the forecast hot path is now locally launchable with the 33-miner shared identity set
+- Polymarket-backed fast-task resolution is not instantaneous; the `05:25` bucket had `resolve_at=05:30:00Z` but the reward window finalized at `05:32:13Z`
+- the correct operator expectation is therefore:
+  - `forecast_capture_ready=true` appears first when the bucket is fully revealed
+  - `forecast_ready=true` follows only after the reconcile loop sees Gamma resolution and builds the reward window
+
 ## 1. Current Product Reality
 
 The active default path is no longer challenge mining.
@@ -422,6 +463,7 @@ Current artifact kinds:
 
 - `task_pack`
 - `reward_window_membership`
+- `reward_window_replay_bundle`
 - `settlement_anchor_payload`
 - `chain_tx_plan`
 - `chain_broadcast_receipt`
@@ -438,7 +480,7 @@ Important limitation:
 
 - artifacts are stored in Postgres, not object storage
 - no large snapshot/feature/noise archival yet
-- replay proof is still lightweight and deterministic, not a full replay bundle
+- replay proof is still lightweight and deterministic, not a full object-storage replay bundle; current richness is reward composition lineage, not full event-log archival
 
 ## 4. Codebase Reality: Active Path vs Legacy Drift
 
@@ -630,7 +672,7 @@ What is weakest today:
 
 - daily lane is still synthetic
 - reward windows exist only as a minimal hourly fast-lane skeleton
-- replay proofs exist, but they are still minimal and operator-facing
+- replay proofs now cover reward composition lineage, but they still stop short of a full large-artifact replay bundle
 - chain anchoring is real, but payout execution and background reconciliation are not
 - some docs still describe larger target architecture rather than the forecast-first shipped slice
 

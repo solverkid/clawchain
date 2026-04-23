@@ -62,6 +62,9 @@ func TestLiveCodexMinersProduceIsolatedModelLogs(t *testing.T) {
 		Now:           func() time.Time { return time.Date(2026, time.April, 10, 20, 0, 0, 0, time.UTC) },
 	})
 	require.NoError(t, err)
+	db = openHarnessTestDB(t)
+	seedHarnessSharedMiners(t, db, []string{formatMinerID(1), formatMinerID(2)}, service.cfg.Now())
+	require.NoError(t, db.Close())
 
 	createReq := httpapi.CreateWaveRequest{
 		WaveID:              service.cfg.WaveID,

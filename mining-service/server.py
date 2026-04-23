@@ -43,6 +43,7 @@ from chain_adapter import (
     broadcast_anchor_tx_via_cli,
     broadcast_anchor_tx_via_typed_cli,
     inspect_broadcast_tx_confirmation_async,
+    inspect_broadcast_settlement_confirmation_async,
     inspect_cli_broadcast_readiness,
 )
 
@@ -171,6 +172,8 @@ def _envelope(*, object_id: str, object_type: str, lane: str, settings: AppSetti
 def _forecast_settings(settings: AppSettings) -> ForecastSettings:
     return ForecastSettings(
         fast_task_seconds=settings.fast_task_seconds,
+        fast_task_prewarm_seconds=getattr(settings, "fast_task_prewarm_seconds", 10),
+        fast_task_live_build_timeout_seconds=getattr(settings, "fast_task_live_build_timeout_seconds", 2.0),
         commit_window_seconds=settings.commit_window_seconds,
         reveal_window_seconds=settings.reveal_window_seconds,
         daily_cutoff_hour_utc=settings.daily_cutoff_hour_utc,
@@ -187,6 +190,7 @@ def _forecast_settings(settings: AppSettings) -> ForecastSettings:
             "poker_mtt_reward_window_reconcile_lookback_days",
             35,
         ),
+        legacy_arena_apply_enabled=getattr(settings, "legacy_arena_apply_enabled", False),
         baseline_pm_weight=settings.baseline_pm_weight,
         baseline_bin_weight=settings.baseline_bin_weight,
         max_binance_snapshot_freshness_seconds=settings.max_binance_snapshot_freshness_seconds,
@@ -213,7 +217,7 @@ def _build_default_market_data_provider(settings) -> SyntheticMarketDataProvider
     return SyntheticMarketDataProvider()
 
 
-def _new_anchor_reconcile_metrics(*, enabled: bool, interval_seconds: float) -> dict:
+def _new_loop_metrics(*, enabled: bool, interval_seconds: float) -> dict:
     return {
         "enabled": enabled,
         "interval_seconds": interval_seconds,
@@ -227,6 +231,14 @@ def _new_anchor_reconcile_metrics(*, enabled: bool, interval_seconds: float) -> 
         "last_result_count": 0,
         "last_error": None,
     }
+
+
+def _new_anchor_reconcile_metrics(*, enabled: bool, interval_seconds: float) -> dict:
+    return _new_loop_metrics(enabled=enabled, interval_seconds=interval_seconds)
+
+
+def _new_forecast_progression_metrics(*, enabled: bool, interval_seconds: float) -> dict:
+    return _new_loop_metrics(enabled=enabled, interval_seconds=interval_seconds)
 
 
 async def _run_anchor_reconcile_loop(*, service: ForecastMiningService, now_fn, interval_seconds: float, metrics: dict | None = None) -> None:
@@ -252,6 +264,43 @@ async def _run_anchor_reconcile_loop(*, service: ForecastMiningService, now_fn, 
                 metrics["last_completed_at"] = _iso_datetime(now_fn())
                 metrics["last_result_count"] = len(items)
                 metrics["last_error"] = None
+        await asyncio.sleep(interval_seconds)
+
+
+async def _run_forecast_progression_once(*, service: ForecastMiningService, now_fn, metrics: dict | None = None) -> None:
+    started_at = now_fn()
+    if metrics is not None:
+        metrics["last_started_at"] = _iso_datetime(started_at)
+    try:
+        await service.reconcile(started_at)
+    except Exception as exc:
+        if metrics is not None:
+            metrics["run_count"] += 1
+            metrics["error_count"] += 1
+            metrics["consecutive_error_count"] += 1
+            metrics["last_completed_at"] = _iso_datetime(now_fn())
+            metrics["last_result_count"] = 0
+            metrics["last_error"] = str(exc)
+        logger.exception("forecast progression loop iteration failed")
+    else:
+        if metrics is not None:
+            metrics["run_count"] += 1
+            metrics["success_count"] += 1
+            metrics["consecutive_error_count"] = 0
+            metrics["last_completed_at"] = _iso_datetime(now_fn())
+            metrics["last_result_count"] = 0
+            metrics["last_error"] = None
+
+
+async def _run_forecast_progression_loop(
+    *,
+    service: ForecastMiningService,
+    now_fn,
+    interval_seconds: float,
+    metrics: dict | None = None,
+) -> None:
+    while True:
+        await _run_forecast_progression_once(service=service, now_fn=now_fn, metrics=metrics)
         await asyncio.sleep(interval_seconds)
 
 
@@ -358,6 +407,87 @@ def _build_chain_health_snapshot(*, anchor_jobs: list[dict], metrics: dict, sett
     }
 
 
+def _build_forecast_progression_health_snapshot(
+    *,
+    tasks: list[dict],
+    settlement_batches: list[dict],
+    metrics: dict,
+    settings: AppSettings,
+    current_time: datetime,
+) -> dict:
+    active_fast_task_count = 0
+    overdue_fast_task_count = 0
+    unresolved_daily_task_count = 0
+    open_settlement_batch_count = 0
+    anchor_ready_batch_count = 0
+    pending_anchor_batch_count = 0
+    alerts = []
+    loop_error_threshold = int(getattr(settings, "forecast_progression_loop_error_alert_threshold", 3))
+
+    for task in tasks:
+        lane = str(task.get("lane") or "")
+        state = str(task.get("state") or "")
+        publish_at = _parse_datetime(task.get("publish_at"))
+        resolve_at = _parse_datetime(task.get("resolve_at"))
+
+        if lane == "forecast_15m":
+            if publish_at and resolve_at and publish_at <= current_time < resolve_at and state not in {"settled", "resolved"}:
+                active_fast_task_count += 1
+            if resolve_at and resolve_at <= current_time and state not in {"settled", "resolved"}:
+                overdue_fast_task_count += 1
+        elif lane == "daily_anchor":
+            if resolve_at and resolve_at <= current_time and state not in {"settled", "resolved"}:
+                unresolved_daily_task_count += 1
+
+    for batch in settlement_batches:
+        state = str(batch.get("state") or "open")
+        if state == "open":
+            open_settlement_batch_count += 1
+        elif state == "anchor_ready":
+            anchor_ready_batch_count += 1
+        elif state == "anchor_submitted":
+            pending_anchor_batch_count += 1
+
+    if int(metrics.get("consecutive_error_count", 0) or 0) >= loop_error_threshold:
+        alerts.append(
+            {
+                "code": "forecast_progression_loop_errors",
+                "severity": "critical",
+                "message": "forecast progression loop consecutive errors exceeded threshold",
+            }
+        )
+    if overdue_fast_task_count > 0:
+        alerts.append(
+            {
+                "code": "overdue_forecast_tasks",
+                "severity": "warning",
+                "message": "one or more fast forecast tasks are past resolve time and still unresolved",
+            }
+        )
+
+    status = "ok"
+    if any(item["severity"] == "critical" for item in alerts):
+        status = "critical"
+    elif alerts:
+        status = "degraded"
+
+    return {
+        "status": status,
+        "loop": dict(metrics),
+        "forecast": {
+            "task_count": len(tasks),
+            "active_fast_task_count": active_fast_task_count,
+            "overdue_fast_task_count": overdue_fast_task_count,
+            "unresolved_daily_task_count": unresolved_daily_task_count,
+            "settlement_batch_count": len(settlement_batches),
+            "open_settlement_batch_count": open_settlement_batch_count,
+            "anchor_ready_batch_count": anchor_ready_batch_count,
+            "pending_anchor_batch_count": pending_anchor_batch_count,
+        },
+        "alerts": alerts,
+    }
+
+
 def _build_anchor_action_queue(*, anchor_jobs: list[dict], settings: AppSettings, current_time: datetime) -> list[dict]:
     items = []
     pending_warning_seconds = float(getattr(settings, "anchor_pending_confirmation_warning_seconds", 120.0))
@@ -431,8 +561,11 @@ def create_app(
     async def lifespan(app: FastAPI):
         nonlocal repo, provider
         anchor_reconcile_task = None
+        forecast_progression_task = None
         loop_enabled = bool(getattr(app_settings, "anchor_reconcile_loop_enabled", True))
         loop_interval_seconds = float(getattr(app_settings, "anchor_reconcile_loop_interval_seconds", 15.0))
+        forecast_loop_enabled = bool(getattr(app_settings, "forecast_progression_loop_enabled", True))
+        forecast_loop_interval_seconds = float(getattr(app_settings, "forecast_progression_loop_interval_seconds", 5.0))
         if repo is None:
             if not app_settings.database_url:
                 raise RuntimeError("CLAWCHAIN_DATABASE_URL is required for runtime Postgres repository")
@@ -453,7 +586,22 @@ def create_app(
                 now=_iso_now(lambda: at_time),
             )
 
-        async def default_chain_tx_confirmer(tx_hash, at_time):  # noqa: ANN001
+        async def default_chain_tx_confirmer(tx_hash, at_time, *, settlement_batch_id=None):  # noqa: ANN001
+            resolved_batch_id = settlement_batch_id
+            if not resolved_batch_id and repo is not None:
+                normalized_tx_hash = str(tx_hash or "").strip()
+                for anchor_job in await repo.list_anchor_jobs():
+                    if (anchor_job.get("broadcast_tx_hash") or "").strip() != normalized_tx_hash:
+                        continue
+                    resolved_batch_id = anchor_job.get("settlement_batch_id")
+                    if resolved_batch_id:
+                        break
+            if resolved_batch_id:
+                return await inspect_broadcast_settlement_confirmation_async(
+                    settings=app_settings,
+                    tx_hash=tx_hash,
+                    settlement_batch_id=resolved_batch_id,
+                )
             return await inspect_broadcast_tx_confirmation_async(
                 settings=app_settings,
                 tx_hash=tx_hash,
@@ -469,10 +617,29 @@ def create_app(
         )
         app.state.settings = app_settings
         app.state.now_fn = clock
+        app.state.forecast_progression_metrics = _new_forecast_progression_metrics(
+            enabled=forecast_loop_enabled,
+            interval_seconds=forecast_loop_interval_seconds,
+        )
         app.state.anchor_reconcile_metrics = _new_anchor_reconcile_metrics(
             enabled=loop_enabled,
             interval_seconds=loop_interval_seconds,
         )
+        await _run_forecast_progression_once(
+            service=app.state.service,
+            now_fn=clock,
+            metrics=app.state.forecast_progression_metrics,
+        )
+        if repository is None and forecast_loop_enabled:
+            app.state.forecast_progression_metrics["active"] = True
+            forecast_progression_task = asyncio.create_task(
+                _run_forecast_progression_loop(
+                    service=app.state.service,
+                    now_fn=clock,
+                    interval_seconds=forecast_loop_interval_seconds,
+                    metrics=app.state.forecast_progression_metrics,
+                )
+            )
         if repository is None and loop_enabled:
             app.state.anchor_reconcile_metrics["active"] = True
             anchor_reconcile_task = asyncio.create_task(
@@ -484,6 +651,11 @@ def create_app(
                 )
             )
         yield
+        if forecast_progression_task is not None:
+            app.state.forecast_progression_metrics["active"] = False
+            forecast_progression_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await forecast_progression_task
         if anchor_reconcile_task is not None:
             app.state.anchor_reconcile_metrics["active"] = False
             anchor_reconcile_task.cancel()
@@ -612,6 +784,19 @@ def create_app(
             settings=settings_obj(),
             now_fn=now,
             data={"items": items},
+        )
+
+    @app.get("/v1/forecast/task-runs/upcoming")
+    async def get_upcoming_forecast_tasks(limit: int = 10):
+        bounded_limit = max(1, min(limit, 20))
+        items = await service().get_upcoming_fast_task_details(now=now(), limit=bounded_limit)
+        return _envelope(
+            object_id="upcoming-forecast-task-runs",
+            object_type="forecast_task_run_preview_list",
+            lane="forecast_15m",
+            settings=settings_obj(),
+            now_fn=now,
+            data={"items": items, "limit": bounded_limit},
         )
 
     @app.get("/v1/forecast/task-runs/{task_run_id}")
@@ -778,9 +963,23 @@ def create_app(
 
     @app.get("/admin/settlement-batches")
     async def get_settlement_batches():
-        await service().reconcile(now())
         items = await app.state.repository.list_settlement_batches()
         return {"items": [_summarize_settlement_batch_response(item) for item in items]}
+
+    @app.post("/admin/reconcile")
+    async def run_admin_reconcile():
+        current = now()
+        await service().reconcile(current)
+        tasks = await app.state.repository.list_tasks()
+        reward_windows = await app.state.repository.list_reward_windows()
+        settlement_batches = await app.state.repository.list_settlement_batches()
+        return {
+            "success": True,
+            "reconciled_at": _isoformat_z(current),
+            "task_count": len(tasks),
+            "reward_window_count": len(reward_windows),
+            "settlement_batch_count": len(settlement_batches),
+        }
 
     @app.get("/admin/anchor-jobs")
     async def get_anchor_jobs():
@@ -801,6 +1000,16 @@ def create_app(
         return _build_chain_health_snapshot(
             anchor_jobs=items,
             metrics=app.state.anchor_reconcile_metrics,
+            settings=settings_obj(),
+            current_time=now(),
+        )
+
+    @app.get("/admin/forecast/health")
+    async def get_forecast_health():
+        return _build_forecast_progression_health_snapshot(
+            tasks=await app.state.repository.list_tasks(),
+            settlement_batches=await app.state.repository.list_settlement_batches(),
+            metrics=app.state.forecast_progression_metrics,
             settings=settings_obj(),
             current_time=now(),
         )
@@ -914,12 +1123,17 @@ def create_app(
     @app.post("/admin/anchor-jobs/{anchor_job_id}/mark-anchored")
     async def mark_anchor_job_anchored(anchor_job_id: str):
         try:
-            anchor_job = await service().mark_anchor_job_anchored(anchor_job_id, now=now())
+            receipt = await service().confirm_anchor_job_on_chain(anchor_job_id, now=now())
         except ValueError as exc:
             detail = str(exc)
             status = 404 if "not found" in detail else 400
             raise HTTPException(status_code=status, detail=detail)
-        return anchor_job
+        if receipt.get("chain_confirmation_status") != "confirmed":
+            raise HTTPException(
+                status_code=409,
+                detail=f"anchor job not verified: {receipt.get('chain_confirmation_status')}",
+            )
+        return receipt
 
     @app.post("/admin/anchor-jobs/{anchor_job_id}/mark-failed")
     async def mark_anchor_job_failed(anchor_job_id: str, request: Request):
@@ -948,7 +1162,10 @@ def create_app(
             )
         except ValueError as exc:
             detail = str(exc)
-            status = 404 if "miner not found" in detail else 400
+            if detail == "legacy_arena_apply_disabled":
+                status = 409
+            else:
+                status = 404 if "miner not found" in detail else 400
             raise HTTPException(status_code=status, detail=detail)
         return result
 

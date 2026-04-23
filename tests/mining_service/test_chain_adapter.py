@@ -638,6 +638,56 @@ def test_inspect_broadcast_tx_confirmation_returns_pending_when_not_found(monkey
     assert receipt["found"] is False
 
 
+def test_inspect_broadcast_settlement_confirmation_async_returns_combined_receipt(monkeypatch):
+    def fake_inspect_broadcast_tx_confirmation(*, settings, tx_hash):  # noqa: ANN001
+        assert settings is not None
+        return {
+            "tx_hash": tx_hash,
+            "found": True,
+            "confirmation_status": "confirmed",
+            "height": 123,
+            "code": 0,
+            "raw_log": "",
+        }
+
+    def fake_inspect_settlement_anchor(*, settings, settlement_batch_id):  # noqa: ANN001
+        assert settings is not None
+        assert settlement_batch_id == "sb_2026_04_10_0001"
+        return {
+            "found": True,
+            "settlement_batch_id": settlement_batch_id,
+            "query_height": 124,
+            "anchor": {
+                "settlement_batch_id": settlement_batch_id,
+                "canonical_root": sha256_ref("a"),
+                "anchor_payload_hash": sha256_ref("b"),
+            },
+        }
+
+    monkeypatch.setattr(
+        chain_adapter,
+        "inspect_broadcast_tx_confirmation",
+        fake_inspect_broadcast_tx_confirmation,
+    )
+    monkeypatch.setattr(
+        chain_adapter,
+        "inspect_settlement_anchor",
+        fake_inspect_settlement_anchor,
+    )
+
+    receipt = asyncio.run(
+        chain_adapter.inspect_broadcast_settlement_confirmation_async(
+            settings=DummySettings(),
+            tx_hash="ABC123TX",
+            settlement_batch_id="sb_2026_04_10_0001",
+        )
+    )
+
+    assert receipt["tx_hash"] == "ABC123TX"
+    assert receipt["confirmation_status"] == "confirmed"
+    assert receipt["query_response"]["anchor"]["settlement_batch_id"] == "sb_2026_04_10_0001"
+
+
 def test_inspect_settlement_anchor_returns_decoded_anchor(monkeypatch):
     anchor_payload = {
         "settlement_batch_id": "sb_2026_04_10_0001",
@@ -783,3 +833,72 @@ def test_chain_adapter_rejects_confirmed_anchor_with_metadata_drift():
     assert result["confirmed"] is False
     assert result["confirmation_status"] == "anchor_metadata_mismatch"
     assert result["metadata_mismatches"] == ["policy_bundle_version", "total_reward_amount"]
+
+
+def test_inspect_broadcast_settlement_confirmation_combines_tx_and_anchor(monkeypatch):
+    monkeypatch.setattr(
+        chain_adapter,
+        "inspect_broadcast_tx_confirmation",
+        lambda *, settings, tx_hash: {
+            "tx_hash": tx_hash,
+            "found": True,
+            "confirmed": True,
+            "confirmation_status": "confirmed",
+            "height": 123,
+            "code": 0,
+            "raw_log": "",
+        },
+    )
+    monkeypatch.setattr(
+        chain_adapter,
+        "inspect_settlement_anchor",
+        lambda *, settings, settlement_batch_id: {
+            "found": True,
+            "settlement_batch_id": settlement_batch_id,
+            "query_height": 456,
+            "anchor": {
+                "settlement_batch_id": settlement_batch_id,
+                "canonical_root": sha256_ref("a"),
+                "anchor_payload_hash": sha256_ref("b"),
+            },
+        },
+    )
+
+    receipt = chain_adapter.inspect_broadcast_settlement_confirmation(
+        settings=DummySettings(),
+        tx_hash="ABC123",
+        settlement_batch_id="sb_123",
+    )
+
+    assert receipt["confirmation_status"] == "confirmed"
+    assert receipt["confirmed"] is True
+    assert receipt["query_response"]["settlement_batch_id"] == "sb_123"
+
+
+def test_inspect_broadcast_settlement_confirmation_skips_anchor_query_when_tx_pending(monkeypatch):
+    monkeypatch.setattr(
+        chain_adapter,
+        "inspect_broadcast_tx_confirmation",
+        lambda *, settings, tx_hash: {
+            "tx_hash": tx_hash,
+            "found": False,
+            "confirmation_status": "pending",
+            "height": None,
+            "code": None,
+            "raw_log": "",
+        },
+    )
+
+    def _unexpected_query(*, settings, settlement_batch_id):  # noqa: ANN001
+        raise AssertionError("anchor query should not run for pending tx")
+
+    monkeypatch.setattr(chain_adapter, "inspect_settlement_anchor", _unexpected_query)
+
+    receipt = chain_adapter.inspect_broadcast_settlement_confirmation(
+        settings=DummySettings(),
+        tx_hash="PENDING123",
+        settlement_batch_id="sb_123",
+    )
+
+    assert receipt["confirmation_status"] == "pending"
+    assert "query_response" not in receipt

@@ -541,7 +541,7 @@ func (s *runtimeService) CreateWave(ctx context.Context, req httpapi.CreateWaveR
 		RegistrationCloseAt: req.RegistrationCloseAt.UTC(),
 		ScheduledStartAt:    req.ScheduledStartAt.UTC(),
 		TargetShardSize:     64,
-		SoftMinEntrants:     56,
+		SoftMinEntrants:     33,
 		SoftMaxEntrants:     64,
 		HardMaxEntrants:     64,
 		TruthMetadata:       truthMetadata(req.WaveID),

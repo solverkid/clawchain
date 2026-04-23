@@ -15,7 +15,10 @@ import (
 
 	"github.com/clawchain/clawchain/arena/app"
 	"github.com/clawchain/clawchain/arena/config"
+	"github.com/clawchain/clawchain/arena/testutil"
 )
+
+const harnessTestSchema = "arena_harness_test"
 
 func TestNewUsesDynamicClockByDefault(t *testing.T) {
 	service, err := New(Config{
@@ -42,10 +45,30 @@ func TestNewRejectsCodexModeWithoutBinary(t *testing.T) {
 	require.Contains(t, err.Error(), "codex binary")
 }
 
+func TestNewUsesExplicitMinerIDsWhenProvided(t *testing.T) {
+	service, err := New(Config{
+		BaseURL:    "http://127.0.0.1:18117",
+		MinerCount: 2,
+		MinerIDs: []string{
+			" claw1miner01 ",
+			"claw1miner02",
+			"claw1miner01",
+		},
+		PolicyMode: PolicyModeHeuristic,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"claw1miner01", "claw1miner02"}, service.cfg.MinerIDs)
+	require.Equal(t, 2, service.cfg.MinerCount)
+	require.Equal(t, "claw1miner01", service.minerID(1))
+	require.Equal(t, "claw1miner02", service.minerID(2))
+}
+
 func TestServiceRunsTournamentToCompletionAndWritesJSONL(t *testing.T) {
 	db := openHarnessTestDB(t)
 	resetHarnessSchema(t, db)
-	require.NoError(t, db.Close())
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
 
 	application, err := app.New(config.Config{
 		DatabaseURL:     harnessTestDatabaseURL(),
@@ -74,6 +97,7 @@ func TestServiceRunsTournamentToCompletionAndWritesJSONL(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	seedHarnessSharedMiners(t, db, []string{service.minerID(1), service.minerID(2)}, service.cfg.Now())
 
 	result, err := service.Run(context.Background())
 	require.NoError(t, err)
@@ -104,31 +128,21 @@ func TestServiceRunsTournamentToCompletionAndWritesJSONL(t *testing.T) {
 	require.Contains(t, eventTypes, "completed")
 }
 
+func seedHarnessSharedMiners(t *testing.T, db *sql.DB, minerIDs []string, at time.Time) {
+	t.Helper()
+	testutil.SeedSharedMiners(t, db, minerIDs, at)
+}
+
 func harnessTestDatabaseURL() string {
-	if value := os.Getenv("ARENA_TEST_DATABASE_URL"); value != "" {
-		return value
-	}
-	return "postgres://clawchain:clawchain_dev_pw@127.0.0.1:55432/arena_runtime_test?sslmode=disable"
+	return testutil.DatabaseURLForSchema(harnessTestSchema)
 }
 
 func openHarnessTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-
-	db, err := sql.Open("postgres", harnessTestDatabaseURL())
-	require.NoError(t, err)
-	require.NoError(t, db.Ping())
-	return db
+	return testutil.OpenArenaTestDB(t, harnessTestSchema)
 }
 
 func resetHarnessSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	for _, stmt := range []string{
-		"DROP SCHEMA IF EXISTS public CASCADE",
-		"CREATE SCHEMA IF NOT EXISTS public",
-		"GRANT ALL ON SCHEMA public TO public",
-	} {
-		_, err := db.Exec(stmt)
-		require.NoError(t, err)
-	}
+	testutil.ResetArenaSchema(t, db, harnessTestSchema)
 }

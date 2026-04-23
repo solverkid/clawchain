@@ -30,6 +30,14 @@ def _admin_auth_default() -> bool:
     return os.getenv("CLAWCHAIN_ENV", "local").lower() not in {"local", "dev", "development", "test"}
 
 
+def _anchor_reconcile_loop_default() -> bool:
+    return os.getenv("CLAWCHAIN_ENV", "local").lower() not in {"local", "dev", "development", "test"}
+
+
+def _forecast_progression_loop_default() -> bool:
+    return True
+
+
 @dataclass(slots=True)
 class AppSettings:
     runtime_env: str | None = os.getenv("CLAWCHAIN_ENV")
@@ -37,10 +45,14 @@ class AppSettings:
     database_url: str | None = os.getenv("CLAWCHAIN_DATABASE_URL")
     live_market_data_enabled: bool = os.getenv("CLAWCHAIN_LIVE_MARKET_DATA_ENABLED", "1") not in {"0", "false", "False"}
     market_data_timeout_seconds: float = float(os.getenv("CLAWCHAIN_MARKET_DATA_TIMEOUT_SECONDS", "8.0"))
+    fast_task_live_build_timeout_seconds: float = float(
+        os.getenv("CLAWCHAIN_FAST_TASK_LIVE_BUILD_TIMEOUT_SECONDS", "2.0")
+    )
     binance_base_url: str = os.getenv("CLAWCHAIN_BINANCE_BASE_URL", "https://api.binance.com")
     polymarket_gamma_url: str = os.getenv("CLAWCHAIN_POLYMARKET_GAMMA_URL", "https://gamma-api.polymarket.com")
     polymarket_clob_url: str = os.getenv("CLAWCHAIN_POLYMARKET_CLOB_URL", "https://clob.polymarket.com")
     fast_task_seconds: int = int(os.getenv("CLAWCHAIN_FAST_TASK_SECONDS", "900"))
+    fast_task_prewarm_seconds: int = int(os.getenv("CLAWCHAIN_FAST_TASK_PREWARM_SECONDS", "10"))
     commit_window_seconds: int = int(os.getenv("CLAWCHAIN_COMMIT_WINDOW_SECONDS", "3"))
     reveal_window_seconds: int = int(os.getenv("CLAWCHAIN_REVEAL_WINDOW_SECONDS", "13"))
     daily_cutoff_hour_utc: int = int(os.getenv("CLAWCHAIN_DAILY_CUTOFF_HOUR_UTC", "0"))
@@ -68,6 +80,7 @@ class AppSettings:
     poker_mtt_reward_window_reconcile_lookback_days: int = int(
         os.getenv("CLAWCHAIN_POKER_MTT_REWARD_WINDOW_RECONCILE_LOOKBACK_DAYS", "35")
     )
+    legacy_arena_apply_enabled: bool = _bool_env("CLAWCHAIN_LEGACY_ARENA_APPLY_ENABLED", False)
     baseline_pm_weight: float = float(os.getenv("CLAWCHAIN_BASELINE_PM_WEIGHT", "0.85"))
     baseline_bin_weight: float = float(os.getenv("CLAWCHAIN_BASELINE_BIN_WEIGHT", "0.15"))
     max_binance_snapshot_freshness_seconds: int = int(
@@ -94,12 +107,25 @@ class AppSettings:
     anchor_offline_signing: bool = _bool_env("CLAWCHAIN_ANCHOR_OFFLINE_SIGNING", True)
     anchor_account_number: int | None = _optional_int_env("CLAWCHAIN_ANCHOR_ACCOUNT_NUMBER")
     anchor_sequence_override: int | None = _optional_int_env("CLAWCHAIN_ANCHOR_SEQUENCE_OVERRIDE")
-    anchor_reconcile_loop_enabled: bool = _bool_env("CLAWCHAIN_ANCHOR_RECONCILE_LOOP_ENABLED", True)
+    anchor_reconcile_loop_enabled: bool = _bool_env(
+        "CLAWCHAIN_ANCHOR_RECONCILE_LOOP_ENABLED",
+        _anchor_reconcile_loop_default(),
+    )
     anchor_reconcile_loop_interval_seconds: float = float(
         os.getenv("CLAWCHAIN_ANCHOR_RECONCILE_LOOP_INTERVAL_SECONDS", "15.0")
     )
     anchor_reconcile_loop_error_alert_threshold: int = int(
         os.getenv("CLAWCHAIN_ANCHOR_RECONCILE_LOOP_ERROR_ALERT_THRESHOLD", "3")
+    )
+    forecast_progression_loop_enabled: bool = _bool_env(
+        "CLAWCHAIN_FORECAST_PROGRESSION_LOOP_ENABLED",
+        _forecast_progression_loop_default(),
+    )
+    forecast_progression_loop_interval_seconds: float = float(
+        os.getenv("CLAWCHAIN_FORECAST_PROGRESSION_LOOP_INTERVAL_SECONDS", "5.0")
+    )
+    forecast_progression_loop_error_alert_threshold: int = int(
+        os.getenv("CLAWCHAIN_FORECAST_PROGRESSION_LOOP_ERROR_ALERT_THRESHOLD", "3")
     )
     anchor_pending_confirmation_warning_seconds: float = float(
         os.getenv("CLAWCHAIN_ANCHOR_PENDING_CONFIRMATION_WARNING_SECONDS", "120.0")

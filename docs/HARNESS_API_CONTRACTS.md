@@ -216,11 +216,13 @@ Alpha 最小矿工状态视图合并：
   "model_reliability": 1.01,
   "ops_reliability": 0.99,
   "arena_multiplier": 1.00,
-  "anti_abuse_discount": 0.20,
+  "anti_abuse_discount": 0.25,
+  "admission_release_ratio": 0.20,
   "admission_state": "probation",
   "maturity_state": "pending_resolution",
   "risk_review_state": "review_required",
   "open_risk_case_count": 1,
+  "open_risk_case_types": ["economic_unit_cluster"],
   "held_rewards": 12345,
   "reward_eligibility_status": "eligible",
   "score_explanation": {
@@ -255,7 +257,9 @@ Alpha 最小矿工状态视图合并：
     "released_rewards": 8600,
     "held_rewards": 34400,
     "admission_state": "probation",
-    "anti_abuse_discount": 0.20,
+    "anti_abuse_discount": 0.25,
+    "admission_release_ratio": 0.20,
+    "open_risk_case_count": 1,
     "open_hold_entry_count": 1,
     "pending_resolution_count": 0,
     "latest_fast_reward_amount": 43000,
@@ -264,6 +268,10 @@ Alpha 最小矿工状态视图合并：
   }
 }
 ```
+
+说明：
+- `anti_abuse_discount` 反映当前 open risk cases 对 forecast payout 的实时折扣
+- `admission_release_ratio` 只控制 probation miner 的 released/held 拆分，不再复用为 anti-abuse 字段
 
 ## 4.7 `GET /v1/miners/{miner_id}/submissions`
 
@@ -338,7 +346,10 @@ Alpha 当前最小 miner reward-window history。
 
 - 当前 runtime 只为 `forecast_15m` 生成最小 `reward_window`
 - `reward_window` 为按小时聚合的 finalized fast-task 窗口
-- 还不是链锚定对象，也不承担 replay-proof 最终语义
+- `reward_window` 还不是链锚定对象，但当前已经产出：
+  - `reward_window_membership`
+  - `reward_window_replay_bundle`
+  两份 artifact；后者专门承载 replay-proof 的 reward composition lineage
 
 ## 4.10 `GET /v1/miners/{miner_id}/tasks/history`
 
@@ -423,6 +434,17 @@ Alpha 当前最小 public network read-model。
   - `task_run_ids`
   - `miner_addresses`
   - `settlement_batch_id`
+- `reward_window` proof 还会返回 `reward_composition`：
+  - `reward_window_membership_payload_hash`
+  - `reward_component_rows_root`
+  - `reward_component_rows_count`
+  - `anti_abuse_input_rows_root`
+  - `anti_abuse_input_rows_count`
+  - `overlay_merge_state`
+  当前 `overlay_merge_state` 会显式标注：
+  - `daily_snapshot_merge = deferred`
+  - `arena_snapshot_merge = deferred`
+  也就是说 proof 会承认当前 pass 只 materialize 了 forecast-side component payout，而没有假装 daily / arena overlay 已完成合并
 
 ## 4.13 `GET /v1/artifacts/{artifact_id}`
 
@@ -432,6 +454,7 @@ Alpha 当前最小 public network read-model。
 
 - `task_pack`
 - `reward_window_membership`
+- `reward_window_replay_bundle`
 - `settlement_anchor_payload`
 - `chain_tx_plan`
 - `chain_broadcast_receipt`
@@ -488,6 +511,7 @@ Alpha 当前最小 operator 查询面。
 说明：
 
 - Alpha 当前实现为 `reward_window -> settlement_batch` 一对一映射
+- 该 endpoint 当前是 pure read，不再隐式触发 forecast progression `reconcile()`
 - 这是链前 skeleton，但已开始按链兼容 payload 收口
 - `anchor_payload_json/hash` 只有在触发 retry-anchor 后才出现
 - 当前 `anchor_payload_json` 已包含：
@@ -499,6 +523,25 @@ Alpha 当前最小 operator 查询面。
   - `canonical_root`
   - `miner_reward_rows[]`
 - 当前 `miner_reward_rows[]` 是按 miner 聚合的 `gross_reward_amount` 行，不代表最终 payout execution 语义
+
+## 4.15A `POST /admin/reconcile`
+
+当前 runtime 的最小 forecast progression / operator recovery 写面。
+
+返回：
+
+- `success`
+- `reconciled_at`
+- `task_count`
+- `reward_window_count`
+- `settlement_batch_count`
+
+说明：
+
+- 该接口显式触发 `ForecastMiningService.reconcile()`
+- 负责 task publication、task settlement、hold release、reward-window build 和 settlement-batch preparation
+- public miner/task/history reads 不再承担这条 progression 责任
+- 本地调试、operator 恢复和无后台 loop 场景下，应通过这个 endpoint 显式推进
 
 ## 4.16 `POST /admin/arena/results/apply`
 
@@ -548,6 +591,7 @@ Alpha 当前最小 operator 查询面。
 说明：
 
 - 当前仅支持 `build_only`
+- 该 endpoint 当前是 pure read；不会再隐式触发 forecast progression `reconcile()`
 - `future_msg` 是为后续链模块预留的 canonical message shape
 - `typed_tx_intent` 是当前最小 typed Msg adapter surface：
   - 将来接真实链模块时，优先消费这份结构
@@ -739,6 +783,52 @@ Poker MTT Evidence Phase 2 的目标语义更严格：
 - 当前阈值来自环境变量：
   - `CLAWCHAIN_ANCHOR_RECONCILE_LOOP_ERROR_ALERT_THRESHOLD`
   - `CLAWCHAIN_ANCHOR_PENDING_CONFIRMATION_WARNING_SECONDS`
+
+## 4.22A `GET /admin/forecast/health`
+
+当前 runtime 的最小 forecast progression 健康读面。
+
+返回：
+
+- `status`
+  - `ok`
+  - `degraded`
+  - `critical`
+- `loop`
+  - `enabled`
+  - `interval_seconds`
+  - `active`
+  - `run_count`
+  - `success_count`
+  - `error_count`
+  - `consecutive_error_count`
+  - `last_started_at`
+  - `last_completed_at`
+  - `last_result_count`
+  - `last_error`
+- `forecast`
+  - `task_count`
+  - `active_fast_task_count`
+  - `overdue_fast_task_count`
+  - `unresolved_daily_task_count`
+  - `settlement_batch_count`
+  - `open_settlement_batch_count`
+  - `anchor_ready_batch_count`
+  - `pending_anchor_batch_count`
+- `alerts[]`
+  - `code`
+  - `severity`
+  - `message`
+
+说明：
+
+- `loop` 反映当前进程内 forecast progression loop 的运行状态
+- runtime 启动时会先执行一次 startup progression pass，然后在启用时进入后台 loop
+- 当前最小 alert 规则：
+  - `forecast_progression_loop_errors`
+  - `overdue_forecast_tasks`
+- 当前阈值来自环境变量：
+  - `CLAWCHAIN_FORECAST_PROGRESSION_LOOP_ERROR_ALERT_THRESHOLD`
 
 ## 4.23 `GET /admin/anchor-jobs/action-queue`
 

@@ -125,6 +125,12 @@ def test_build_release_review_bundle_accepts_complete_phase3_artifacts_and_metad
     assert bundle["runtime_summary"]["joined_users"] == 30
     assert bundle["runtime_summary"]["finished"] is True
     assert bundle["settlement_query_summary"]["settlement_batch_id"] == "sb-phase3-1"
+    assert bundle["lineage_roots"]["release_pack_payload_hash"] == "sha256:" + "f" * 64
+    assert bundle["lineage_roots"]["canonical_root"] == "sha256:" + "a" * 64
+    assert bundle["lineage_roots"]["anchor_payload_hash"] == "sha256:" + "b" * 64
+    assert bundle["lineage_roots"]["reward_window_ids_root"] == "sha256:" + "c" * 64
+    assert bundle["lineage_roots"]["task_run_ids_root"] == "sha256:" + "d" * 64
+    assert bundle["lineage_roots"]["miner_reward_rows_root"] == "sha256:" + "e" * 64
     assert bundle["payload_hash"].startswith("sha256:")
 
 

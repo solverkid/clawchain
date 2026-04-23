@@ -78,6 +78,11 @@ def _hold_entry_values(hold_entry: dict) -> dict:
 
 def _reward_window_values(reward_window: dict) -> dict:
     values = deepcopy(reward_window)
+    values.pop("miner_reward_rows", None)
+    values.pop("miner_reward_rows_root", None)
+    values.pop("miner_reward_rows_count", None)
+    values.pop("artifact_page_count", None)
+    values.pop("artifact_pages", None)
     for field in ("window_start_at", "window_end_at", "created_at", "updated_at"):
         if field in values and values[field] is not None:
             values[field] = _maybe_dt(values[field])
@@ -606,6 +611,51 @@ class PostgresRepository:
                 text("ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS reward_window_id VARCHAR NULL")
             )
             await conn.execute(
+                text("ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS fast_direct_score INTEGER NOT NULL DEFAULT 0")
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS model_reliability_component "
+                    "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS ops_reliability_component "
+                    "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS arena_multiplier_component "
+                    "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS anti_abuse_discount "
+                    "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS quality_envelope "
+                    "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS released_reward_amount "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE forecast_submissions ADD COLUMN IF NOT EXISTS held_reward_amount "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+            await conn.execute(
                 text("ALTER TABLE reward_windows ADD COLUMN IF NOT EXISTS settlement_batch_id VARCHAR NULL")
             )
             await conn.execute(
@@ -1034,20 +1084,20 @@ class PostgresRepository:
             return _submission_row_to_dict(row.first())
 
     async def save_submission(self, submission: dict) -> dict:
-        existing = await self.get_submission(submission["task_run_id"], submission["miner_address"])
         values = _submission_values(submission)
+        update_values = {
+            key: value
+            for key, value in values.items()
+            if key != "id"
+        }
         async with self.engine.begin() as conn:
-            if existing:
-                await conn.execute(
-                    update(forecast_submissions)
-                    .where(
-                        forecast_submissions.c.task_run_id == submission["task_run_id"],
-                        forecast_submissions.c.miner_address == submission["miner_address"],
-                    )
-                    .values(**values)
+            insert_stmt = postgres_insert(forecast_submissions).values(**values)
+            await conn.execute(
+                insert_stmt.on_conflict_do_update(
+                    index_elements=[forecast_submissions.c.id],
+                    set_=update_values,
                 )
-            else:
-                await conn.execute(insert(forecast_submissions).values(**values))
+            )
         saved = await self.get_submission(submission["task_run_id"], submission["miner_address"])
         return saved or values
 
@@ -2217,7 +2267,11 @@ class PostgresRepository:
             .where(poker_mtt_result_entries.c.locked_at < window_end)
             .where(poker_mtt_result_entries.c.rated_or_practice == "rated")
             .where(poker_mtt_result_entries.c.human_only.is_(True))
-            .where(poker_mtt_result_entries.c.evaluation_state == "final")
+            .where(
+                poker_mtt_result_entries.c.evaluation_state.in_(
+                    ("final", "provisional") if include_provisional else ("final",)
+                )
+            )
             .where(poker_mtt_result_entries.c.evaluation_version.in_(compatible_policy_versions))
             .where(poker_mtt_result_entries.c.evidence_state.in_(sorted(poker_mtt_results.REWARD_READY_EVIDENCE_STATES)))
             .where(poker_mtt_result_entries.c.final_ranking_id.is_not(None))

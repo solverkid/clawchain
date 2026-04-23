@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
+import ipaddress
 import math
 from copy import deepcopy
 from dataclasses import dataclass
@@ -21,6 +23,8 @@ FAST_ASSETS = ("BTCUSDT", "ETHUSDT")
 DAILY_ASSETS = ("BTC", "ETH")
 POLICY_BUNDLE_VERSION = "pb_2026_04_09_a"
 ANCHOR_PAYLOAD_SCHEMA_VERSION = "clawchain.anchor_payload.v1"
+FORECAST_REWARD_COMPONENT_SCHEMA_VERSION = "clawchain.forecast_reward_components.v1"
+REWARD_WINDOW_REPLAY_SCHEMA_VERSION = "clawchain.reward_window_replay.v1"
 POKER_MTT_REPUTATION_DELTA_POLICY_VERSION = "poker_mtt_reputation_delta_v1"
 POKER_MTT_PROJECTION_ROOT_FIELDS = (
     "policy_bundle_version",
@@ -77,11 +81,29 @@ POKER_MTT_EVIDENCE_DEGRADED_ALLOWLIST = {
     poker_mtt_hud.SHORT_TERM_HUD_MANIFEST_KIND,
     poker_mtt_hud.LONG_TERM_HUD_MANIFEST_KIND,
 }
+FORECAST_REWARD_COMPONENT_FIELDS = (
+    "miner_address",
+    "submission_count",
+    "fast_direct_score",
+    "slow_direct_score",
+    "base_score",
+    "final_mining_score",
+    "released_reward_amount",
+    "held_reward_amount",
+    "gross_reward_amount",
+    "model_reliability",
+    "ops_reliability",
+    "arena_multiplier",
+    "anti_abuse_discount",
+    "quality_envelope",
+)
 
 
 @dataclass(slots=True)
 class ForecastSettings:
     fast_task_seconds: int = 900
+    fast_task_prewarm_seconds: int = 10
+    fast_task_live_build_timeout_seconds: float = 2.0
     commit_window_seconds: int = 3
     reveal_window_seconds: int = 13
     daily_cutoff_hour_utc: int = 0
@@ -99,6 +121,7 @@ class ForecastSettings:
     poker_mtt_emission_epoch_id: str | None = None
     poker_mtt_emission_epoch_budget_amount: int = 0
     poker_mtt_reward_aggregation_policy_version: str = "capped_top3_mean_v1"
+    legacy_arena_apply_enabled: bool = False
     baseline_pm_weight: float = 0.85
     baseline_bin_weight: float = 0.15
     min_p_yes_bps: int = 1500
@@ -151,18 +174,54 @@ def compute_commit_hash(task_run_id: str, miner_address: str, p_yes_bps: int, re
 
 
 def derive_economic_unit_id(*, address: str, public_key: str, ip_address: str | None) -> str:
-    if ip_address:
-        basis = f"ip:{ip_address.strip().lower()}"
+    normalized_ip = normalize_ip_signal(ip_address)
+    if normalized_ip:
+        basis = f"ip:{normalized_ip}"
     else:
         basis = f"pk:{public_key.removeprefix('0x').lower()}"
     digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:20]
     return f"eu:{digest}"
 
 
-def hash_user_agent(user_agent: str | None) -> str | None:
+def normalize_ip_signal(ip_address: str | None) -> str | None:
+    if not ip_address:
+        return None
+    normalized = ip_address.strip().lower()
+    if not normalized or normalized == "localhost":
+        return None
+    if normalized.startswith("::ffff:"):
+        normalized = normalized.removeprefix("::ffff:")
+    try:
+        parsed = ipaddress.ip_address(normalized)
+    except ValueError:
+        return normalized
+    if parsed.is_loopback:
+        return None
+    return parsed.compressed.lower()
+
+
+def normalize_user_agent_signal(user_agent: str | None) -> str | None:
     if not user_agent:
         return None
-    normalized = user_agent.strip().lower()
+    normalized = " ".join(user_agent.strip().lower().split())
+    if not normalized:
+        return None
+    generic_prefixes = (
+        "python-requests/",
+        "python-urllib/",
+        "python-httpx/",
+        "curl/",
+        "go-http-client/",
+        "aiohttp/",
+        "wget/",
+    )
+    if normalized.startswith(generic_prefixes):
+        return None
+    return normalized
+
+
+def hash_user_agent(user_agent: str | None) -> str | None:
+    normalized = normalize_user_agent_signal(user_agent)
     if not normalized:
         return None
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
@@ -401,8 +460,16 @@ def snapshot_metadata(
     }
 
 
-def build_fast_task(now: datetime, settings: ForecastSettings, asset: str = "BTCUSDT") -> dict:
-    publish_at = _bucket_start(now, settings.fast_task_seconds)
+def build_fast_task(
+    now: datetime,
+    settings: ForecastSettings,
+    asset: str = "BTCUSDT",
+    *,
+    publish_at: datetime | None = None,
+    generated_at: datetime | None = None,
+) -> dict:
+    publish_at = (publish_at or _bucket_start(now, settings.fast_task_seconds)).astimezone(timezone.utc)
+    generated_at = (generated_at or now).astimezone(timezone.utc)
     resolve_at = publish_at + timedelta(seconds=settings.fast_task_seconds)
     commit_deadline = publish_at + timedelta(seconds=settings.commit_window_seconds)
     reveal_deadline = publish_at + timedelta(seconds=settings.reveal_window_seconds)
@@ -414,7 +481,7 @@ def build_fast_task(now: datetime, settings: ForecastSettings, asset: str = "BTC
         "lane": "forecast_15m",
         **snapshot_metadata(
             snapshot_source="synthetic",
-            frozen_at=now,
+            frozen_at=generated_at,
             binance_freshness_seconds=None,
             polymarket_freshness_seconds=None,
         ),
@@ -454,8 +521,8 @@ def build_fast_task(now: datetime, settings: ForecastSettings, asset: str = "BTC
         "pack_hash": pack_hash,
         "pack_json": pack,
         "state": "published",
-        "created_at": isoformat_z(now),
-        "updated_at": isoformat_z(now),
+        "created_at": isoformat_z(generated_at),
+        "updated_at": isoformat_z(generated_at),
     }
 
 
@@ -564,6 +631,288 @@ def score_probability(p_yes_bps: int, baseline_q_bps: int, outcome: int) -> floa
 
 def _reward_from_score(score: float) -> int:
     return max(0, int(round(score * 1_000_000)))
+
+
+def _quality_envelope(
+    *,
+    model_reliability: float,
+    ops_reliability: float,
+    arena_multiplier: float,
+    anti_abuse_discount: float,
+) -> float:
+    return round(
+        max(
+            0.0,
+            float(model_reliability) * float(ops_reliability) * float(arena_multiplier) * float(anti_abuse_discount),
+        ),
+        6,
+    )
+
+
+def _anti_abuse_discount_for_cases(*, eligibility_status: str | None, open_cases: list[dict]) -> float:
+    if eligibility_status and eligibility_status != "eligible":
+        return 0.0
+    if not open_cases:
+        return 1.0
+
+    severity_discounts = {
+        "critical": 0.0,
+        "high": 0.0,
+        "medium": 0.25,
+        "low": 0.5,
+    }
+    discount = 1.0
+    for case in open_cases:
+        severity = str(case.get("severity") or "").lower()
+        discount = min(discount, severity_discounts.get(severity, 0.25))
+    return round(discount, 6)
+
+
+def _submission_component_int(submission: dict, field: str, default: int = 0) -> int:
+    value = submission.get(field)
+    if value is None:
+        return default
+    return int(value)
+
+
+def _submission_component_float(submission: dict, field: str, default: float = 0.0) -> float:
+    value = submission.get(field)
+    if value is None:
+        return default
+    return float(value)
+
+
+def _forecast_submission_component_snapshot(submission: dict) -> dict:
+    fast_direct_score = _submission_component_int(
+        submission,
+        "fast_direct_score",
+        default=int(submission.get("reward_amount", 0) or 0),
+    )
+    final_mining_score = int(submission.get("reward_amount", 0) or 0)
+    released_reward_amount = _submission_component_int(
+        submission,
+        "released_reward_amount",
+        default=final_mining_score,
+    )
+    held_reward_amount = _submission_component_int(submission, "held_reward_amount", default=0)
+    model_reliability = _submission_component_float(submission, "model_reliability_component", default=1.0)
+    ops_reliability = _submission_component_float(submission, "ops_reliability_component", default=1.0)
+    arena_multiplier = _submission_component_float(submission, "arena_multiplier_component", default=1.0)
+    anti_abuse_discount = _submission_component_float(submission, "anti_abuse_discount", default=1.0)
+    quality_envelope = _submission_component_float(
+        submission,
+        "quality_envelope",
+        default=(
+            round(final_mining_score / fast_direct_score, 6)
+            if fast_direct_score > 0
+            else _quality_envelope(
+                model_reliability=model_reliability,
+                ops_reliability=ops_reliability,
+                arena_multiplier=arena_multiplier,
+                anti_abuse_discount=anti_abuse_discount,
+            )
+        ),
+    )
+    return {
+        "fast_direct_score": fast_direct_score,
+        "slow_direct_score": 0,
+        "base_score": fast_direct_score,
+        "model_reliability": round(model_reliability, 6),
+        "ops_reliability": round(ops_reliability, 6),
+        "arena_multiplier": round(arena_multiplier, 6),
+        "anti_abuse_discount": round(anti_abuse_discount, 6),
+        "quality_envelope": round(quality_envelope, 6),
+        "final_mining_score": final_mining_score,
+        "released_reward_amount": released_reward_amount,
+        "held_reward_amount": held_reward_amount,
+    }
+
+
+def build_forecast_reward_component_rows(submissions: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for submission in submissions:
+        miner_address = submission.get("miner_address")
+        if not miner_address or submission.get("p_yes_bps") is None:
+            continue
+        snapshot = _forecast_submission_component_snapshot(submission)
+        weight = max(snapshot["fast_direct_score"], 0)
+        current = grouped.setdefault(
+            miner_address,
+            {
+                "miner_address": miner_address,
+                "submission_count": 0,
+                "fast_direct_score": 0,
+                "slow_direct_score": 0,
+                "base_score": 0,
+                "final_mining_score": 0,
+                "released_reward_amount": 0,
+                "held_reward_amount": 0,
+                "gross_reward_amount": 0,
+                "_weight_total": 0,
+                "_weighted_model_reliability": 0.0,
+                "_weighted_ops_reliability": 0.0,
+                "_weighted_arena_multiplier": 0.0,
+                "_weighted_anti_abuse_discount": 0.0,
+            },
+        )
+        current["submission_count"] += 1
+        current["fast_direct_score"] += snapshot["fast_direct_score"]
+        current["base_score"] += snapshot["base_score"]
+        current["final_mining_score"] += snapshot["final_mining_score"]
+        current["released_reward_amount"] += snapshot["released_reward_amount"]
+        current["held_reward_amount"] += snapshot["held_reward_amount"]
+        current["gross_reward_amount"] += snapshot["final_mining_score"]
+        current["_weight_total"] += weight
+        current["_weighted_model_reliability"] += snapshot["model_reliability"] * weight
+        current["_weighted_ops_reliability"] += snapshot["ops_reliability"] * weight
+        current["_weighted_arena_multiplier"] += snapshot["arena_multiplier"] * weight
+        current["_weighted_anti_abuse_discount"] += snapshot["anti_abuse_discount"] * weight
+
+    rows = []
+    for miner_address in sorted(grouped):
+        item = grouped[miner_address]
+        weight_total = item.pop("_weight_total")
+        weighted_model_reliability = item.pop("_weighted_model_reliability")
+        weighted_ops_reliability = item.pop("_weighted_ops_reliability")
+        weighted_arena_multiplier = item.pop("_weighted_arena_multiplier")
+        weighted_anti_abuse_discount = item.pop("_weighted_anti_abuse_discount")
+        if weight_total > 0:
+            model_reliability = round(weighted_model_reliability / weight_total, 6)
+            ops_reliability = round(weighted_ops_reliability / weight_total, 6)
+            arena_multiplier = round(weighted_arena_multiplier / weight_total, 6)
+            anti_abuse_discount = round(weighted_anti_abuse_discount / weight_total, 6)
+        else:
+            model_reliability = 1.0
+            ops_reliability = 1.0
+            arena_multiplier = 1.0
+            anti_abuse_discount = 1.0
+        if item["base_score"] > 0:
+            quality_envelope = round(item["final_mining_score"] / item["base_score"], 6)
+        else:
+            quality_envelope = _quality_envelope(
+                model_reliability=model_reliability,
+                ops_reliability=ops_reliability,
+                arena_multiplier=arena_multiplier,
+                anti_abuse_discount=anti_abuse_discount,
+            )
+        rows.append(
+            {
+                **item,
+                "model_reliability": model_reliability,
+                "ops_reliability": ops_reliability,
+                "arena_multiplier": arena_multiplier,
+                "anti_abuse_discount": anti_abuse_discount,
+                "quality_envelope": quality_envelope,
+            }
+        )
+    return rows
+
+
+def merge_reward_component_rows(rows: list[dict]) -> list[dict]:
+    component_field_names = {
+        "fast_direct_score",
+        "slow_direct_score",
+        "base_score",
+        "final_mining_score",
+        "released_reward_amount",
+        "held_reward_amount",
+        "model_reliability",
+        "ops_reliability",
+        "arena_multiplier",
+        "anti_abuse_discount",
+        "quality_envelope",
+    }
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        miner_address = row.get("miner_address")
+        if not miner_address:
+            continue
+        weight = int(row.get("base_score", 0) or 0)
+        has_component_fields = any(field_name in row for field_name in component_field_names)
+        current = grouped.setdefault(
+            miner_address,
+            {
+                "miner_address": miner_address,
+                "submission_count": 0,
+                "fast_direct_score": 0,
+                "slow_direct_score": 0,
+                "base_score": 0,
+                "final_mining_score": 0,
+                "released_reward_amount": 0,
+                "held_reward_amount": 0,
+                "gross_reward_amount": 0,
+                "_weight_total": 0,
+                "_weighted_model_reliability": 0.0,
+                "_weighted_ops_reliability": 0.0,
+                "_weighted_arena_multiplier": 0.0,
+                "_weighted_anti_abuse_discount": 0.0,
+                "_has_component_fields": False,
+            },
+        )
+        current["_has_component_fields"] = current["_has_component_fields"] or has_component_fields
+        current["submission_count"] += int(row.get("submission_count", 0) or 0)
+        current["fast_direct_score"] += int(row.get("fast_direct_score", 0) or 0)
+        current["slow_direct_score"] += int(row.get("slow_direct_score", 0) or 0)
+        current["base_score"] += int(row.get("base_score", 0) or 0)
+        current["final_mining_score"] += int(row.get("final_mining_score", row.get("gross_reward_amount", 0)) or 0)
+        current["released_reward_amount"] += int(row.get("released_reward_amount", 0) or 0)
+        current["held_reward_amount"] += int(row.get("held_reward_amount", 0) or 0)
+        current["gross_reward_amount"] += int(row.get("gross_reward_amount", row.get("final_mining_score", 0)) or 0)
+        current["_weight_total"] += weight
+        current["_weighted_model_reliability"] += float(row.get("model_reliability", 1.0) or 1.0) * weight
+        current["_weighted_ops_reliability"] += float(row.get("ops_reliability", 1.0) or 1.0) * weight
+        current["_weighted_arena_multiplier"] += float(row.get("arena_multiplier", 1.0) or 1.0) * weight
+        current["_weighted_anti_abuse_discount"] += float(row.get("anti_abuse_discount", 1.0) or 1.0) * weight
+
+    merged = []
+    for miner_address in sorted(grouped):
+        item = grouped[miner_address]
+        weight_total = item.pop("_weight_total")
+        weighted_model_reliability = item.pop("_weighted_model_reliability")
+        weighted_ops_reliability = item.pop("_weighted_ops_reliability")
+        weighted_arena_multiplier = item.pop("_weighted_arena_multiplier")
+        weighted_anti_abuse_discount = item.pop("_weighted_anti_abuse_discount")
+        has_component_fields = item.pop("_has_component_fields")
+        if not has_component_fields:
+            merged.append(
+                {
+                    "miner_address": miner_address,
+                    "submission_count": item["submission_count"],
+                    "gross_reward_amount": item["gross_reward_amount"],
+                }
+            )
+            continue
+        if weight_total > 0:
+            model_reliability = round(weighted_model_reliability / weight_total, 6)
+            ops_reliability = round(weighted_ops_reliability / weight_total, 6)
+            arena_multiplier = round(weighted_arena_multiplier / weight_total, 6)
+            anti_abuse_discount = round(weighted_anti_abuse_discount / weight_total, 6)
+        else:
+            model_reliability = 1.0
+            ops_reliability = 1.0
+            arena_multiplier = 1.0
+            anti_abuse_discount = 1.0
+        quality_envelope = (
+            round(item["final_mining_score"] / item["base_score"], 6)
+            if item["base_score"] > 0
+            else _quality_envelope(
+                model_reliability=model_reliability,
+                ops_reliability=ops_reliability,
+                arena_multiplier=arena_multiplier,
+                anti_abuse_discount=anti_abuse_discount,
+            )
+        )
+        merged.append(
+            {
+                **item,
+                "model_reliability": model_reliability,
+                "ops_reliability": ops_reliability,
+                "arena_multiplier": arena_multiplier,
+                "anti_abuse_discount": anti_abuse_discount,
+                "quality_envelope": quality_envelope,
+            }
+        )
+    return merged
 
 
 def _allocate_integer_pool_by_weights(weighted_items: list[tuple[str, float]], total_amount: int) -> dict[str, int]:
@@ -702,8 +1051,17 @@ def resolve_settlement_anchor_reward_rows(payload: dict, artifacts: list[dict]) 
     )
 
 
+def resolve_reward_window_membership_rows(payload: dict, artifacts: list[dict]) -> list[dict]:
+    return _resolve_miner_reward_rows_from_artifacts(
+        payload,
+        artifacts,
+        page_kind="reward_window_membership_page",
+        error_prefix="reward window membership",
+    )
+
+
 def _reward_window_payload(reward_window: dict) -> dict:
-    return {
+    payload = {
         "reward_window_id": reward_window["id"],
         "lane": reward_window["lane"],
         "policy_bundle_version": reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
@@ -715,6 +1073,12 @@ def _reward_window_payload(reward_window: dict) -> dict:
         "total_reward_amount": int(reward_window.get("total_reward_amount", 0) or 0),
         "settlement_batch_id": reward_window.get("settlement_batch_id"),
     }
+    miner_reward_rows = list(reward_window.get("miner_reward_rows") or [])
+    if miner_reward_rows:
+        payload["miner_reward_rows"] = miner_reward_rows
+        payload["miner_reward_rows_root"] = _hash_sequence(miner_reward_rows)
+        payload["miner_reward_rows_count"] = len(miner_reward_rows)
+    return payload
 
 
 def _materialize_reward_window(reward_window: dict) -> tuple[dict, dict]:
@@ -728,9 +1092,58 @@ def _materialize_reward_window(reward_window: dict) -> tuple[dict, dict]:
         "submission_count": payload["submission_count"],
         "miner_count": payload["miner_count"],
         "total_reward_amount": payload["total_reward_amount"],
+        "miner_reward_rows": list(payload.get("miner_reward_rows") or []),
         "canonical_root": _hash_payload(payload),
     }
     return materialized, payload
+
+
+def _forecast_overlay_merge_state() -> dict:
+    return {
+        "daily_snapshot_merge": {
+            "state": "deferred",
+            "reason": "daily lane carry-forward is not merged into forecast_15m reward windows in v1",
+        },
+        "arena_snapshot_merge": {
+            "state": "deferred",
+            "reason": "arena contributes only arena_multiplier components; no separate arena overlay rows are merged into forecast_15m reward windows in v1",
+        },
+    }
+
+
+def _forecast_reward_window_replay_payload(
+    reward_window: dict,
+    *,
+    anti_abuse_input_rows: list[dict],
+) -> dict:
+    membership = {
+        "task_run_ids": sorted(list(reward_window.get("task_run_ids", []))),
+        "miner_addresses": sorted(list(reward_window.get("miner_addresses", []))),
+        "settlement_batch_id": reward_window.get("settlement_batch_id"),
+        "task_count": int(reward_window.get("task_count", 0) or 0),
+        "submission_count": int(reward_window.get("submission_count", 0) or 0),
+        "miner_count": int(reward_window.get("miner_count", 0) or 0),
+    }
+    reward_component_rows = list(reward_window.get("miner_reward_rows") or [])
+    return {
+        "schema_version": REWARD_WINDOW_REPLAY_SCHEMA_VERSION,
+        "reward_component_schema_version": FORECAST_REWARD_COMPONENT_SCHEMA_VERSION,
+        "reward_window_id": reward_window["id"],
+        "lane": reward_window.get("lane"),
+        "policy_bundle_version": reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
+        "window_start_at": reward_window.get("window_start_at"),
+        "window_end_at": reward_window.get("window_end_at"),
+        "total_reward_amount": int(reward_window.get("total_reward_amount", 0) or 0),
+        "membership": membership,
+        "reward_window_membership_payload_hash": reward_window.get("canonical_root"),
+        "reward_component_rows_root": _hash_sequence(reward_component_rows),
+        "reward_component_rows_count": len(reward_component_rows),
+        "reward_component_fields": list(FORECAST_REWARD_COMPONENT_FIELDS),
+        "anti_abuse_input_rows_root": _hash_sequence(anti_abuse_input_rows),
+        "anti_abuse_input_rows_count": len(anti_abuse_input_rows),
+        "anti_abuse_input_rows": anti_abuse_input_rows,
+        "overlay_merge_state": _forecast_overlay_merge_state(),
+    }
 
 
 def _poker_mtt_reward_window_input_root(
@@ -1329,17 +1742,75 @@ class ForecastMiningService:
         self.chain_typed_broadcaster = chain_typed_broadcaster
         self.chain_tx_confirmer = chain_tx_confirmer
 
+    def _fast_task_publish_slots(self, current: datetime) -> list[tuple[datetime, datetime]]:
+        current_publish_at = _bucket_start(current, self.settings.fast_task_seconds)
+        slots = [(current_publish_at, current)]
+        next_publish_at = current_publish_at + timedelta(seconds=self.settings.fast_task_seconds)
+        seconds_until_next = (next_publish_at - current).total_seconds()
+        if 0 < seconds_until_next <= max(0, self.settings.fast_task_prewarm_seconds):
+            slots.append((next_publish_at, current))
+        return slots
+
+    async def _build_fast_task_for_schedule(
+        self,
+        *,
+        asset: str,
+        publish_at: datetime,
+        generated_at: datetime,
+    ) -> dict:
+        legacy_current_bucket = _bucket_start(generated_at, self.settings.fast_task_seconds)
+        if not self.task_provider:
+            return build_fast_task(
+                generated_at,
+                self.settings,
+                asset=asset,
+                publish_at=publish_at,
+                generated_at=generated_at,
+            )
+
+        build_fast = self.task_provider.build_fast_task
+        signature = inspect.signature(build_fast)
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+        )
+        accepts_publish_at = accepts_var_kwargs or "publish_at" in signature.parameters
+        accepts_generated_at = accepts_var_kwargs or "generated_at" in signature.parameters
+        if accepts_publish_at or accepts_generated_at:
+            kwargs = {}
+            if accepts_publish_at:
+                kwargs["publish_at"] = publish_at
+            if accepts_generated_at:
+                kwargs["generated_at"] = generated_at
+            return await build_fast(generated_at, self.settings, asset, **kwargs)
+        if publish_at == legacy_current_bucket:
+            return await build_fast(generated_at, self.settings, asset)
+        return build_fast_task(
+            generated_at,
+            self.settings,
+            asset=asset,
+            publish_at=publish_at,
+            generated_at=generated_at,
+        )
+
     async def reconcile(self, now: datetime | None = None) -> None:
         current = now or utc_now()
-        for asset in FAST_ASSETS:
-            task_id = build_fast_task(current, self.settings, asset=asset)["task_run_id"]
-            existing = await self.repo.get_task(task_id)
-            if not existing:
-                if self.task_provider:
-                    task = await self.task_provider.build_fast_task(current, self.settings, asset)
-                else:
-                    task = build_fast_task(current, self.settings, asset=asset)
-                await self.repo.upsert_task(task)
+        for publish_at, generated_at in self._fast_task_publish_slots(current):
+            for asset in FAST_ASSETS:
+                task_id = build_fast_task(
+                    generated_at,
+                    self.settings,
+                    asset=asset,
+                    publish_at=publish_at,
+                    generated_at=generated_at,
+                )["task_run_id"]
+                existing = await self.repo.get_task(task_id)
+                if not existing:
+                    task = await self._build_fast_task_for_schedule(
+                        asset=asset,
+                        publish_at=publish_at,
+                        generated_at=generated_at,
+                    )
+                    await self.repo.upsert_task(task)
         for asset in DAILY_ASSETS:
             task = build_daily_anchor_task(current, asset=asset, settings=self.settings)
             existing = await self.repo.get_task(task["task_run_id"])
@@ -1370,6 +1841,7 @@ class ForecastMiningService:
             raise ValueError("miner version below minimum")
         now = utc_now()
         existing_miners = await self.repo.list_miners()
+        normalized_ip = normalize_ip_signal(ip_address)
         user_agent_hash = hash_user_agent(user_agent)
         miner = {
             "address": address,
@@ -1378,7 +1850,7 @@ class ForecastMiningService:
             "status": "active",
             "public_key": public_key,
             "economic_unit_id": economic_unit_id or f"eu:{address}",
-            "ip_address": ip_address,
+            "ip_address": normalized_ip,
             "user_agent_hash": user_agent_hash,
             "total_rewards": 0,
             "held_rewards": 0,
@@ -1423,14 +1895,13 @@ class ForecastMiningService:
         return saved
 
     async def get_active_tasks(self, now: datetime | None = None) -> list[dict]:
-        await self.reconcile(now)
         current = now or utc_now()
         active = []
         for task in await self.repo.list_tasks():
             if task["lane"] == "forecast_15m":
                 publish_at = parse_time(task["publish_at"])
-                resolve_at = parse_time(task["resolve_at"])
-                if publish_at <= current < resolve_at:
+                commit_deadline = parse_time(task["commit_deadline"])
+                if publish_at <= current < commit_deadline:
                     active.append(self._task_card(task))
             elif task["lane"] == "daily_anchor":
                 publish_at = parse_time(task["publish_at"])
@@ -1442,10 +1913,35 @@ class ForecastMiningService:
         active.sort(key=lambda item: (item["lane"], item["asset"]))
         return active
 
+    async def get_upcoming_fast_task_details(self, *, now: datetime | None = None, limit: int = 10) -> list[dict]:
+        current = now or utc_now()
+        prewarm_horizon = max(0, int(getattr(self.settings, "fast_task_prewarm_seconds", 0)))
+        if prewarm_horizon <= 0:
+            return []
+
+        upper_bound = current + timedelta(seconds=prewarm_horizon)
+        upcoming: list[dict] = []
+        for task in await self.repo.list_tasks():
+            if task["lane"] != "forecast_15m":
+                continue
+            publish_at = parse_time(task["publish_at"])
+            if not current < publish_at <= upper_bound:
+                continue
+            detail = dict(task)
+            detail["availability_state"] = "prewarmed"
+            detail["commit_open"] = False
+            detail["seconds_until_publish"] = max(0.0, round((publish_at - current).total_seconds(), 3))
+            upcoming.append(detail)
+
+        upcoming.sort(key=lambda item: (item["publish_at"], item["asset"]))
+        return upcoming[: max(1, limit)]
+
     async def get_task_detail(self, task_run_id: str, now: datetime | None = None) -> dict:
-        await self.reconcile(now)
         task = await self.repo.get_task(task_run_id)
         if not task:
+            raise ValueError("task not found")
+        current = now or utc_now()
+        if task["lane"] == "forecast_15m" and parse_time(task["publish_at"]) > current:
             raise ValueError("task not found")
         return task
 
@@ -1465,6 +1961,8 @@ class ForecastMiningService:
         task = await self.repo.get_task(task_run_id)
         if not task:
             raise ValueError("task not found")
+        if parse_time(task["publish_at"]) > accepted_at:
+            raise ValueError("task not yet published")
         if parse_time(task["commit_deadline"]) < accepted_at:
             raise ValueError("commit window closed")
         miner = await self.repo.get_miner(miner_address)
@@ -1525,6 +2023,8 @@ class ForecastMiningService:
         task = await self.repo.get_task(task_run_id)
         if not task:
             raise ValueError("task not found")
+        if parse_time(task["publish_at"]) > accepted_at:
+            raise ValueError("task not yet published")
         if parse_time(task["reveal_deadline"]) < accepted_at:
             raise ValueError("reveal window closed")
         p_yes_bps = clamp_bps(p_yes_bps, self.settings)
@@ -1538,6 +2038,7 @@ class ForecastMiningService:
             user_agent=user_agent,
             now=accepted_at,
         )
+        refreshed_economic_unit_id = miner["economic_unit_id"]
         submission = await self.repo.get_submission(task_run_id, miner_address)
         if not submission or not submission.get("commit_hash"):
             raise ValueError("commit required before reveal")
@@ -1553,7 +2054,7 @@ class ForecastMiningService:
         for other in await self.repo.list_submissions_for_task(task_run_id):
             if other["miner_address"] == miner_address:
                 continue
-            if other["economic_unit_id"] == economic_unit_id and other.get("p_yes_bps") is not None:
+            if other["economic_unit_id"] == refreshed_economic_unit_id and other.get("p_yes_bps") is not None:
                 eligibility = "audit_only"
                 duplicate_miners.append(other["miner_address"])
                 break
@@ -1561,7 +2062,7 @@ class ForecastMiningService:
         saved = await self.repo.save_submission(
             {
                 **submission,
-                "economic_unit_id": miner["economic_unit_id"],
+                "economic_unit_id": refreshed_economic_unit_id,
                 "reveal_request_id": request_id,
                 "p_yes_bps": p_yes_bps,
                 "eligibility_status": eligibility,
@@ -1574,7 +2075,7 @@ class ForecastMiningService:
             await self._open_duplicate_reveal_case(
                 task_run_id=task_run_id,
                 submission_id=saved["id"],
-                economic_unit_id=economic_unit_id,
+                economic_unit_id=refreshed_economic_unit_id,
                 miner_addresses=sorted(set(duplicate_miners)),
                 now=accepted_at,
                 miner_address=miner_address,
@@ -1591,14 +2092,12 @@ class ForecastMiningService:
         return saved
 
     async def get_miner_status(self, miner_address: str, now: datetime | None = None) -> dict:
-        await self.reconcile(now)
         miner = await self.repo.get_miner(miner_address)
         if not miner:
             raise ValueError("miner not found")
         current = now or utc_now()
         maturity_state = "open"
         reward_eligibility_status = "eligible"
-        open_risk_case_count = await self._open_risk_case_count(miner)
         tasks = await self.repo.list_tasks()
         for task in tasks:
             if task["lane"] != "forecast_15m":
@@ -1612,8 +2111,15 @@ class ForecastMiningService:
                 maturity_state = "pending_resolution"
                 reward_eligibility_status = submission.get("eligibility_status", "eligible")
                 break
+        anti_abuse_state = await self._anti_abuse_state(miner=miner)
         score_explanation = await self._build_score_explanation(miner_address, tasks)
-        reward_timeline = await self._build_reward_timeline(miner, tasks, current, score_explanation)
+        reward_timeline = await self._build_reward_timeline(
+            miner,
+            tasks,
+            current,
+            score_explanation,
+            anti_abuse_state=anti_abuse_state,
+        )
         latest_reward_window, latest_settlement_batch, latest_anchor_job = await self._latest_settlement_snapshot(
             miner_address
         )
@@ -1625,12 +2131,14 @@ class ForecastMiningService:
             "ops_reliability": round(miner["ops_reliability"], 4),
             "arena_multiplier": round(miner["arena_multiplier"], 4),
             "poker_mtt_multiplier": round(miner.get("poker_mtt_multiplier", 1.0), 4),
-            "anti_abuse_discount": round(self._admission_release_ratio(miner, current), 4),
+            "anti_abuse_discount": anti_abuse_state["anti_abuse_discount"],
+            "admission_release_ratio": round(self._admission_release_ratio(miner, current), 4),
             "admission_state": self._admission_state(miner, current),
             "maturity_state": maturity_state,
             "reward_eligibility_status": reward_eligibility_status,
-            "risk_review_state": "review_required" if open_risk_case_count > 0 else "clear",
-            "open_risk_case_count": open_risk_case_count,
+            "risk_review_state": anti_abuse_state["risk_review_state"],
+            "open_risk_case_count": anti_abuse_state["open_risk_case_count"],
+            "open_risk_case_types": anti_abuse_state["open_risk_case_types"],
             "score_explanation": score_explanation,
             "reward_timeline": reward_timeline,
             "latest_reward_window": latest_reward_window,
@@ -1692,7 +2200,6 @@ class ForecastMiningService:
         }
 
     async def get_stats(self, now: datetime | None = None) -> dict:
-        await self.reconcile(now)
         current = now or utc_now()
         tasks = await self.repo.list_tasks()
         active_fast = 0
@@ -1773,7 +2280,6 @@ class ForecastMiningService:
         limit: int = 20,
         now: datetime | None = None,
     ) -> list[dict]:
-        await self.reconcile(now)
         miner = await self.repo.get_miner(miner_address)
         if not miner:
             raise ValueError("miner not found")
@@ -1786,7 +2292,6 @@ class ForecastMiningService:
         limit: int = 20,
         now: datetime | None = None,
     ) -> list[dict]:
-        await self.reconcile(now)
         miner = await self.repo.get_miner(miner_address)
         if not miner:
             raise ValueError("miner not found")
@@ -1808,7 +2313,6 @@ class ForecastMiningService:
         limit: int = 20,
         now: datetime | None = None,
     ) -> list[dict]:
-        await self.reconcile(now)
         miner = await self.repo.get_miner(miner_address)
         if not miner:
             raise ValueError("miner not found")
@@ -1829,7 +2333,6 @@ class ForecastMiningService:
         limit: int = 20,
         now: datetime | None = None,
     ) -> list[dict]:
-        await self.reconcile(now)
         miner = await self.repo.get_miner(miner_address)
         if not miner:
             raise ValueError("miner not found")
@@ -1876,6 +2379,132 @@ class ForecastMiningService:
         )
         return items[:limit]
 
+    async def _build_forecast_anti_abuse_input_rows(
+        self,
+        submissions: list[dict],
+        *,
+        preserved_rows: list[dict] | None = None,
+    ) -> list[dict]:
+        preserved_by_submission_id = {
+            str(row.get("submission_id")): deepcopy(row)
+            for row in list(preserved_rows or [])
+            if row.get("submission_id")
+        }
+        risk_case_cache: dict[str, list[dict]] = {}
+        economic_unit_cache: dict[str, str] = {}
+        rows: list[dict] = []
+        for submission in sorted(
+            submissions,
+            key=lambda item: (
+                str(item.get("task_run_id") or ""),
+                str(item.get("miner_address") or ""),
+                str(item.get("id") or ""),
+            ),
+        ):
+            if submission.get("p_yes_bps") is None:
+                continue
+            submission_id = str(submission.get("id") or "")
+            preserved = preserved_by_submission_id.get(submission_id)
+            if preserved is not None:
+                row = deepcopy(preserved)
+            else:
+                miner_address = str(submission.get("miner_address") or "")
+                economic_unit_id = economic_unit_cache.get(miner_address, "")
+                if not economic_unit_id:
+                    miner = await self.repo.get_miner(miner_address) if miner_address else None
+                    economic_unit_id = str(
+                        (miner or {}).get("economic_unit_id")
+                        or submission.get("economic_unit_id")
+                        or ""
+                    )
+                    if miner_address:
+                        economic_unit_cache[miner_address] = economic_unit_id
+                open_cases = risk_case_cache.get(economic_unit_id)
+                if open_cases is None:
+                    listed_cases = (
+                        await self.repo.list_risk_cases(state="open", economic_unit_id=economic_unit_id)
+                        if economic_unit_id
+                        else []
+                    )
+                    open_cases = [
+                        {
+                            "id": str(case.get("id") or ""),
+                            "case_type": str(case.get("case_type") or "unknown"),
+                            "severity": str(case.get("severity") or "").lower(),
+                        }
+                        for case in listed_cases
+                    ]
+                    open_cases.sort(key=lambda case: (case["id"], case["case_type"], case["severity"]))
+                    risk_case_cache[economic_unit_id] = open_cases
+                eligibility_status = str(submission.get("eligibility_status") or "eligible")
+                row = {
+                    "submission_id": submission_id,
+                    "task_run_id": submission.get("task_run_id"),
+                    "miner_address": submission.get("miner_address"),
+                    "economic_unit_id": economic_unit_id,
+                    "eligibility_status": eligibility_status,
+                    "open_risk_case_count": len(open_cases),
+                    "open_risk_case_ids": [case["id"] for case in open_cases],
+                    "open_risk_case_types": sorted({case["case_type"] for case in open_cases}),
+                    "anti_abuse_discount": _anti_abuse_discount_for_cases(
+                        eligibility_status=eligibility_status,
+                        open_cases=open_cases,
+                    ),
+                }
+            row["anti_abuse_discount"] = round(
+                float(
+                    submission.get(
+                        "anti_abuse_discount",
+                        row.get("anti_abuse_discount", 1.0),
+                    )
+                    or 1.0
+                ),
+                6,
+            )
+            rows.append(row)
+        return rows
+
+    async def _upsert_forecast_reward_window_replay_artifact(
+        self,
+        *,
+        reward_window: dict,
+        submissions: list[dict],
+        now: datetime,
+    ) -> dict:
+        existing_artifacts = await self.repo.list_artifacts_for_entity("reward_window", reward_window["id"])
+        existing_replay_artifact = next(
+            (
+                artifact
+                for artifact in existing_artifacts
+                if artifact.get("kind") == "reward_window_replay_bundle"
+            ),
+            None,
+        )
+        preserved_rows = ((existing_replay_artifact or {}).get("payload_json") or {}).get("anti_abuse_input_rows") or []
+        anti_abuse_input_rows = await self._build_forecast_anti_abuse_input_rows(
+            submissions,
+            preserved_rows=preserved_rows,
+        )
+        payload = _forecast_reward_window_replay_payload(
+            reward_window,
+            anti_abuse_input_rows=anti_abuse_input_rows,
+        )
+        rows = await self.repo.save_artifacts_bulk(
+            [
+                {
+                    "id": f"art:reward_window:{reward_window['id']}:replay-bundle",
+                    "kind": "reward_window_replay_bundle",
+                    "entity_type": "reward_window",
+                    "entity_id": reward_window["id"],
+                    "payload_json": payload,
+                    "payload_hash": _hash_payload(payload),
+                    "created_at": isoformat_z(now),
+                    "updated_at": isoformat_z(now),
+                }
+            ]
+        )
+        return rows[0]
+
     async def get_replay_proof(
         self,
         entity_type: str,
@@ -1883,13 +2512,20 @@ class ForecastMiningService:
         *,
         now: datetime | None = None,
     ) -> dict:
-        await self.reconcile(now)
         current = now or utc_now()
         if entity_type == "reward_window":
             reward_window = await self.repo.get_reward_window(entity_id)
             if not reward_window:
                 raise ValueError("reward window not found")
-            artifact_refs = await self._artifact_refs_for_entity("reward_window", entity_id)
+            reward_window_artifacts = await self.repo.list_artifacts_for_entity("reward_window", entity_id)
+            artifact_refs = [
+                {
+                    "artifact_id": artifact["id"],
+                    "kind": artifact["kind"],
+                    "payload_hash": artifact["payload_hash"],
+                }
+                for artifact in reward_window_artifacts
+            ]
             settlement_batch_id = reward_window.get("settlement_batch_id")
             if settlement_batch_id:
                 artifact_refs.extend(await self._artifact_refs_for_entity("settlement_batch", settlement_batch_id))
@@ -1898,6 +2534,38 @@ class ForecastMiningService:
                 "miner_addresses": list(reward_window.get("miner_addresses", [])),
                 "settlement_batch_id": settlement_batch_id,
             }
+            reward_composition = None
+            if reward_window.get("lane") == "forecast_15m":
+                replay_artifact = next(
+                    (
+                        artifact
+                        for artifact in reward_window_artifacts
+                        if artifact.get("kind") == "reward_window_replay_bundle"
+                    ),
+                    None,
+                )
+                replay_payload = (replay_artifact or {}).get("payload_json") or {}
+                reward_component_rows = list(reward_window.get("miner_reward_rows") or [])
+                reward_composition = {
+                    "schema_version": replay_payload.get("schema_version") or REWARD_WINDOW_REPLAY_SCHEMA_VERSION,
+                    "reward_component_schema_version": replay_payload.get("reward_component_schema_version")
+                    or FORECAST_REWARD_COMPONENT_SCHEMA_VERSION,
+                    "reward_window_membership_payload_hash": replay_payload.get("reward_window_membership_payload_hash")
+                    or reward_window.get("canonical_root"),
+                    "reward_component_rows_root": replay_payload.get("reward_component_rows_root")
+                    or _hash_sequence(reward_component_rows),
+                    "reward_component_rows_count": int(
+                        replay_payload.get("reward_component_rows_count") or len(reward_component_rows)
+                    ),
+                    "reward_component_fields": list(
+                        replay_payload.get("reward_component_fields") or FORECAST_REWARD_COMPONENT_FIELDS
+                    ),
+                    "anti_abuse_input_rows_root": replay_payload.get("anti_abuse_input_rows_root"),
+                    "anti_abuse_input_rows_count": int(replay_payload.get("anti_abuse_input_rows_count") or 0),
+                    "overlay_merge_state": deepcopy(
+                        replay_payload.get("overlay_merge_state") or _forecast_overlay_merge_state()
+                    ),
+                }
             payload = {
                 "entity_type": entity_type,
                 "entity_id": entity_id,
@@ -1906,8 +2574,10 @@ class ForecastMiningService:
                 "total_reward_amount": reward_window.get("total_reward_amount", 0),
                 "window_end_at": reward_window.get("window_end_at"),
             }
+            if reward_composition is not None:
+                payload["reward_composition"] = reward_composition
             replay_hash = _hash_payload(payload)
-            return {
+            response = {
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "lane": reward_window.get("lane"),
@@ -1919,6 +2589,9 @@ class ForecastMiningService:
                 "membership": membership,
                 "generated_at": isoformat_z(current),
             }
+            if reward_composition is not None:
+                response["reward_composition"] = reward_composition
+            return response
         if entity_type == "task_run":
             task = await self.repo.get_task(entity_id)
             if not task:
@@ -1965,32 +2638,39 @@ class ForecastMiningService:
         ]
         task_run_ids = sorted(task["task_run_id"] for task in tasks)
         miner_addresses: set[str] = set()
-        submission_count = 0
-        total_reward_amount = 0
+        window_submissions: list[dict] = []
         for task in tasks:
             submissions = await self.repo.list_submissions_for_task(task["task_run_id"])
             for submission in submissions:
                 if submission.get("p_yes_bps") is None:
                     continue
                 miner_addresses.add(submission["miner_address"])
-                submission_count += 1
-                total_reward_amount += int(submission.get("reward_amount", 0) or 0)
+                window_submissions.append(submission)
+        miner_reward_rows = build_forecast_reward_component_rows(window_submissions)
+        total_reward_amount = sum(int(row.get("gross_reward_amount", 0) or 0) for row in miner_reward_rows)
 
         saved = await self.repo.save_reward_window(
             _materialize_reward_window(
                 {
                     **reward_window,
                     "task_count": len(task_run_ids),
-                    "submission_count": submission_count,
+                    "submission_count": len(window_submissions),
                     "miner_count": len(miner_addresses),
                     "total_reward_amount": total_reward_amount,
                     "task_run_ids": task_run_ids,
                     "miner_addresses": sorted(miner_addresses),
+                    "miner_reward_rows": miner_reward_rows,
                     "updated_at": isoformat_z(current),
                 }
             )[0]
         )
-        await self._upsert_reward_window_artifact(saved, current)
+        await self._upsert_reward_window_artifact({**saved, "miner_reward_rows": miner_reward_rows}, current)
+        if saved.get("lane") == "forecast_15m":
+            await self._upsert_forecast_reward_window_replay_artifact(
+                reward_window={**saved, "miner_reward_rows": miner_reward_rows},
+                submissions=window_submissions,
+                now=current,
+            )
         return saved
 
     async def retry_anchor_settlement_batch(
@@ -2011,7 +2691,7 @@ class ForecastMiningService:
         current = now or utc_now()
         reward_window_ids = list(batch.get("reward_window_ids", []))
         task_run_ids: list[str] = []
-        miner_totals: dict[str, dict] = {}
+        miner_reward_rows: list[dict] = []
         poker_projection_roots: list[dict] = []
         reputation_delta_window_roots: list[dict] = []
         for reward_window_id in reward_window_ids:
@@ -2039,37 +2719,33 @@ class ForecastMiningService:
                             "reputation_delta_rows_root": projection_roots["reputation_delta_rows_root"],
                         }
                     )
-                    for reward_row in resolve_poker_mtt_projection_reward_rows(projection_payload, projection_artifacts):
-                        current_total = miner_totals.setdefault(
-                            reward_row["miner_address"],
-                            {
-                                "miner_address": reward_row["miner_address"],
-                                "gross_reward_amount": 0,
-                                "submission_count": 0,
-                            },
-                        )
-                        current_total["gross_reward_amount"] += int(reward_row.get("gross_reward_amount", 0) or 0)
-                        current_total["submission_count"] += int(reward_row.get("submission_count", 0) or 0)
+                    miner_reward_rows.extend(resolve_poker_mtt_projection_reward_rows(projection_payload, projection_artifacts))
                 else:
+                    reward_window_artifacts = await self.repo.list_artifacts_for_entity("reward_window", reward_window_id)
+                    membership_artifact = next(
+                        (
+                            artifact
+                            for artifact in reward_window_artifacts
+                            if artifact.get("kind") == "reward_window_membership"
+                        ),
+                        None,
+                    )
+                    if membership_artifact:
+                        membership_payload = membership_artifact.get("payload_json") or {}
+                        membership_rows = resolve_reward_window_membership_rows(
+                            membership_payload,
+                            reward_window_artifacts,
+                        )
+                        if membership_rows:
+                            miner_reward_rows.extend(membership_rows)
+                            continue
+                    submissions: list[dict] = []
                     for task_run_id in reward_window.get("task_run_ids", []):
-                        submissions = await self.repo.list_submissions_for_task(task_run_id)
-                        for submission in submissions:
-                            reward_amount = int(submission.get("reward_amount", 0) or 0)
-                            if reward_amount <= 0:
-                                continue
-                            current_total = miner_totals.setdefault(
-                                submission["miner_address"],
-                                {
-                                    "miner_address": submission["miner_address"],
-                                    "gross_reward_amount": 0,
-                                    "submission_count": 0,
-                                },
-                            )
-                            current_total["gross_reward_amount"] += reward_amount
-                            current_total["submission_count"] += 1
+                        submissions.extend(await self.repo.list_submissions_for_task(task_run_id))
+                    miner_reward_rows.extend(build_forecast_reward_component_rows(submissions))
 
         sorted_task_run_ids = sorted(set(task_run_ids))
-        miner_reward_rows = sorted(miner_totals.values(), key=lambda item: item["miner_address"])
+        miner_reward_rows = merge_reward_component_rows(miner_reward_rows)
         reward_window_ids_root = _hash_sequence(sorted(reward_window_ids))
         task_run_ids_root = _hash_sequence(sorted_task_run_ids)
         miner_reward_rows_root = _hash_sequence(miner_reward_rows)
@@ -2147,7 +2823,6 @@ class ForecastMiningService:
         return _summarize_settlement_batch_response(saved)
 
     async def list_anchor_jobs(self, *, now: datetime | None = None) -> list[dict]:
-        await self.reconcile(now)
         return await self.repo.list_anchor_jobs()
 
     async def build_chain_tx_plan(
@@ -2156,7 +2831,6 @@ class ForecastMiningService:
         *,
         now: datetime | None = None,
     ) -> dict:
-        await self.reconcile(now)
         anchor_job = await self.repo.get_anchor_job(anchor_job_id)
         if not anchor_job:
             raise ValueError("anchor job not found")
@@ -2403,10 +3077,21 @@ class ForecastMiningService:
             raise ValueError("chain tx confirmer not configured")
 
         current = now or utc_now()
-        receipt = await confirmer(tx_hash, current)
         settlement_batch = await self.repo.get_settlement_batch(anchor_job["settlement_batch_id"])
         if not settlement_batch:
             raise ValueError("settlement batch not found")
+        confirmation_parameters = {}
+        try:
+            confirmer_signature = inspect.signature(confirmer)
+        except (TypeError, ValueError):
+            confirmer_signature = None
+        if confirmer_signature is not None:
+            parameters = confirmer_signature.parameters
+            if "settlement_batch_id" in parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+            ):
+                confirmation_parameters["settlement_batch_id"] = settlement_batch["id"]
+        receipt = await confirmer(tx_hash, current, **confirmation_parameters)
         if receipt.get("confirmation_status") == "confirmed":
             if receipt.get("query_response") is not None:
                 try:
@@ -2475,7 +3160,11 @@ class ForecastMiningService:
         )
 
         if chain_confirmation_status == "confirmed":
-            saved_job = await self.mark_anchor_job_anchored(resolved_anchor_job_id, now=current)
+            saved_job = await self.mark_anchor_job_anchored(
+                resolved_anchor_job_id,
+                now=current,
+                verified=True,
+            )
         elif chain_confirmation_status in TERMINAL_CHAIN_CONFIRMATION_STATES:
             failure_reason = receipt.get("raw_log") or f"chain anchor confirmation {raw_confirmation_status}"
             saved_job = await self.mark_anchor_job_failed(
@@ -2565,7 +3254,10 @@ class ForecastMiningService:
         anchor_job_id: str,
         *,
         now: datetime | None = None,
+        verified: bool = False,
     ) -> dict:
+        if not verified:
+            raise ValueError("manual mark-anchored disabled; use confirm-chain")
         await self.reconcile(now)
         anchor_job = await self.repo.get_anchor_job(anchor_job_id)
         if not anchor_job:
@@ -2695,7 +3387,15 @@ class ForecastMiningService:
             "latest_arena": latest_arena,
         }
 
-    async def _build_reward_timeline(self, miner: dict, tasks: list[dict], current: datetime, score_explanation: dict) -> dict:
+    async def _build_reward_timeline(
+        self,
+        miner: dict,
+        tasks: list[dict],
+        current: datetime,
+        score_explanation: dict,
+        *,
+        anti_abuse_state: dict | None = None,
+    ) -> dict:
         holds = await self.repo.list_hold_entries_for_miner(miner["address"])
         open_hold_entries = [hold for hold in holds if hold.get("state") == "held"]
         pending_resolution_count = 0
@@ -2704,6 +3404,7 @@ class ForecastMiningService:
             if submission and submission.get("state") == "pending_resolution":
                 pending_resolution_count += 1
 
+        anti_abuse_state = anti_abuse_state or await self._anti_abuse_state(miner=miner)
         latest_fast = score_explanation.get("latest_fast") or {}
         latest_daily = score_explanation.get("latest_daily") or {}
         latest_arena = score_explanation.get("latest_arena") or {}
@@ -2711,7 +3412,9 @@ class ForecastMiningService:
             "released_rewards": miner["total_rewards"],
             "held_rewards": miner.get("held_rewards", 0),
             "admission_state": self._admission_state(miner, current),
-            "anti_abuse_discount": round(self._admission_release_ratio(miner, current), 4),
+            "anti_abuse_discount": anti_abuse_state["anti_abuse_discount"],
+            "admission_release_ratio": round(self._admission_release_ratio(miner, current), 4),
+            "open_risk_case_count": anti_abuse_state["open_risk_case_count"],
             "open_hold_entry_count": len(open_hold_entries),
             "pending_resolution_count": pending_resolution_count,
             "latest_fast_reward_amount": latest_fast.get("reward_amount", 0),
@@ -4016,7 +4719,7 @@ class ForecastMiningService:
             or not existing_window
             or not existing_window.get("settlement_batch_id")
         ):
-            await self._build_settlement_batches(current)
+            saved = await self._sync_single_reward_window_settlement_batch(saved, now=current)
         returned = await self.repo.get_reward_window(saved["id"]) or saved
         if budget_ledger is not None and returned.get("settlement_batch_id") != budget_ledger.get("settlement_batch_id"):
             budget_ledger = await self.repo.save_poker_mtt_budget_ledger(
@@ -4027,6 +4730,51 @@ class ForecastMiningService:
                 }
             )
         return _summarize_reward_window_response(returned, projection_artifact)
+
+    async def _sync_single_reward_window_settlement_batch(self, reward_window: dict, *, now: datetime) -> dict:
+        settlement_batch_id = reward_window.get("settlement_batch_id") or "sb_" + reward_window["id"].removeprefix("rw_")
+        existing_batch = await self.repo.get_settlement_batch(settlement_batch_id)
+
+        if existing_batch:
+            batch = existing_batch
+            if existing_batch.get("state") == "open":
+                batch = await self.repo.sync_open_settlement_batch(
+                    settlement_batch_id=existing_batch["id"],
+                    lane=reward_window["lane"],
+                    window_start_at=reward_window["window_start_at"],
+                    window_end_at=reward_window["window_end_at"],
+                    reward_window_ids=[reward_window["id"]],
+                    policy_bundle_version=reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
+                    task_count=reward_window.get("task_count", 0),
+                    miner_count=reward_window.get("miner_count", 0),
+                    total_reward_amount=reward_window.get("total_reward_amount", 0),
+                    updated_at=isoformat_z(now),
+                )
+        else:
+            batch = await self.repo.sync_open_settlement_batch(
+                settlement_batch_id=settlement_batch_id,
+                lane=reward_window["lane"],
+                window_start_at=reward_window["window_start_at"],
+                window_end_at=reward_window["window_end_at"],
+                reward_window_ids=[reward_window["id"]],
+                policy_bundle_version=reward_window.get("policy_bundle_version") or POLICY_BUNDLE_VERSION,
+                task_count=reward_window.get("task_count", 0),
+                miner_count=reward_window.get("miner_count", 0),
+                total_reward_amount=reward_window.get("total_reward_amount", 0),
+                created_at=isoformat_z(now),
+                updated_at=isoformat_z(now),
+            )
+
+        if reward_window.get("settlement_batch_id") == batch["id"]:
+            return reward_window
+
+        saved_reward_window = await self.repo.link_reward_window_settlement_batch(
+            reward_window["id"],
+            settlement_batch_id=batch["id"],
+            updated_at=isoformat_z(now),
+        )
+        await self._upsert_reward_window_artifact(saved_reward_window, now)
+        return saved_reward_window
 
     async def record_poker_mtt_correction(
         self,
@@ -4073,6 +4821,8 @@ class ForecastMiningService:
         results: list[dict],
         completed_at: datetime,
     ) -> dict:
+        if not getattr(self.settings, "legacy_arena_apply_enabled", False):
+            raise ValueError("legacy_arena_apply_disabled")
         if rated_or_practice not in {"rated", "practice"}:
             raise ValueError("invalid rated_or_practice")
         items = []
@@ -4147,6 +4897,7 @@ class ForecastMiningService:
         }
 
     async def _settle_due_tasks(self, now: datetime) -> None:
+        anti_abuse_state_cache: dict[tuple[str, str], dict] = {}
         for task in await self.repo.list_due_unsettled_fast_tasks(isoformat_z(now)):
             if self.task_provider:
                 resolution = await self.task_provider.resolve_fast_task(task)
@@ -4191,22 +4942,51 @@ class ForecastMiningService:
                     baseline_q_bps=task["baseline_q_bps"],
                     outcome=resolution["outcome"],
                 )
-                reward_amount = _reward_from_score(score) if submission.get("eligibility_status") == "eligible" else 0
+                direct_reward_amount = _reward_from_score(score) if submission.get("eligibility_status") == "eligible" else 0
                 direction_correct = int((p_yes_bps >= 5000) == bool(resolution["outcome"]))
+                miner = await self.repo.get_miner(submission["miner_address"])
+                settled_tasks = miner["settled_tasks"] + 1
+                edge_score_total = miner["edge_score_total"] + score
+                model_reliability = clamp(1.0 + (edge_score_total / settled_tasks) * 0.25, 0.97, 1.03)
+                ops_reliability = round(float(miner.get("ops_reliability", 1.0) or 1.0), 6)
+                arena_multiplier = round(float(miner.get("arena_multiplier", 1.0) or 1.0), 6)
+                anti_abuse_key = (
+                    str(miner.get("economic_unit_id") or miner["address"]),
+                    str(submission.get("eligibility_status") or "eligible"),
+                )
+                anti_abuse_state = anti_abuse_state_cache.get(anti_abuse_key)
+                if anti_abuse_state is None:
+                    anti_abuse_state = await self._anti_abuse_state(
+                        miner=miner,
+                        eligibility_status=str(submission.get("eligibility_status") or "eligible"),
+                    )
+                    anti_abuse_state_cache[anti_abuse_key] = anti_abuse_state
+                anti_abuse_discount = anti_abuse_state["anti_abuse_discount"]
+                quality_envelope = _quality_envelope(
+                    model_reliability=model_reliability,
+                    ops_reliability=ops_reliability,
+                    arena_multiplier=arena_multiplier,
+                    anti_abuse_discount=anti_abuse_discount,
+                )
+                reward_amount = max(0, int(round(direct_reward_amount * quality_envelope)))
+                released_reward, held_reward, admission_state = self._split_reward_by_admission(miner, reward_amount, now)
                 await self.repo.save_submission(
                     {
                         **submission,
                         "state": "resolved",
                         "score": score,
+                        "fast_direct_score": direct_reward_amount,
+                        "model_reliability_component": model_reliability,
+                        "ops_reliability_component": ops_reliability,
+                        "arena_multiplier_component": arena_multiplier,
+                        "anti_abuse_discount": anti_abuse_discount,
+                        "quality_envelope": quality_envelope,
                         "reward_amount": reward_amount,
+                        "released_reward_amount": released_reward,
+                        "held_reward_amount": held_reward,
                         "updated_at": isoformat_z(now),
                     }
                 )
-                miner = await self.repo.get_miner(submission["miner_address"])
-                settled_tasks = miner["settled_tasks"] + 1
-                edge_score_total = miner["edge_score_total"] + score
-                model_reliability = clamp(1.0 + (edge_score_total / settled_tasks) * 0.25, 0.97, 1.03)
-                released_reward, held_reward, admission_state = self._split_reward_by_admission(miner, reward_amount, now)
                 if held_reward > 0:
                     await self.repo.save_hold_entry(
                         {
@@ -4358,8 +5138,9 @@ class ForecastMiningService:
                 )
 
     async def _build_reward_windows(self, now: datetime) -> None:
+        all_tasks = await self.repo.list_tasks()
         grouped_tasks: dict[str, list[dict]] = {}
-        for task in await self.repo.list_tasks():
+        for task in all_tasks:
             if task["lane"] != "forecast_15m":
                 continue
             if task.get("state") != "resolved":
@@ -4369,41 +5150,46 @@ class ForecastMiningService:
             bucket = _hour_bucket_start(parse_time(task["resolve_at"]))
             reward_window_id = f"rw_{bucket.strftime('%Y%m%d%H')}"
             grouped_tasks.setdefault(reward_window_id, []).append(task)
+        tasks_by_id = {task["task_run_id"]: task for task in all_tasks}
 
         for reward_window_id, tasks in grouped_tasks.items():
             window_start = _hour_bucket_start(parse_time(tasks[0]["resolve_at"]))
             window_end = window_start + timedelta(hours=1)
             existing_window = await self.repo.get_reward_window(reward_window_id)
             existing_task_ids = list(existing_window.get("task_run_ids", [])) if existing_window else []
-            existing_miner_addresses = list(existing_window.get("miner_addresses", [])) if existing_window else []
-            task_run_ids = set(existing_task_ids)
-            miner_addresses = set(existing_miner_addresses)
-            submission_count = int(existing_window.get("submission_count", 0)) if existing_window else 0
-            total_reward_amount = int(existing_window.get("total_reward_amount", 0)) if existing_window else 0
+            task_run_ids = sorted(set(existing_task_ids) | {task["task_run_id"] for task in tasks})
+            miner_addresses = set()
+            window_submissions: list[dict] = []
 
-            for task in tasks:
-                submissions = await self.repo.list_submissions_for_task(task["task_run_id"])
-                task_run_ids.add(task["task_run_id"])
+            for task_run_id in task_run_ids:
+                task = tasks_by_id.get(task_run_id)
+                if not task:
+                    continue
+                submissions = await self.repo.list_submissions_for_task(task_run_id)
                 for submission in submissions:
                     if submission.get("p_yes_bps") is None:
                         continue
                     miner_addresses.add(submission["miner_address"])
-                    submission_count += 1
-                    total_reward_amount += int(submission.get("reward_amount", 0) or 0)
-                    await self.repo.save_submission(
+                    window_submissions.append(submission)
+                    if submission.get("reward_window_id") != reward_window_id:
+                        await self.repo.save_submission(
+                            {
+                                **submission,
+                                "reward_window_id": reward_window_id,
+                                "updated_at": submission.get("updated_at") or isoformat_z(now),
+                            }
+                        )
+                if task.get("reward_window_id") != reward_window_id:
+                    await self.repo.upsert_task(
                         {
-                            **submission,
+                            **task,
                             "reward_window_id": reward_window_id,
-                            "updated_at": submission.get("updated_at") or isoformat_z(now),
+                            "updated_at": isoformat_z(now),
                         }
                     )
-                await self.repo.upsert_task(
-                    {
-                        **task,
-                        "reward_window_id": reward_window_id,
-                        "updated_at": isoformat_z(now),
-                    }
-                )
+
+            miner_reward_rows = build_forecast_reward_component_rows(window_submissions)
+            total_reward_amount = sum(int(row.get("gross_reward_amount", 0) or 0) for row in miner_reward_rows)
 
             saved = await self.repo.save_reward_window(
                 _materialize_reward_window(
@@ -4414,19 +5200,25 @@ class ForecastMiningService:
                         "window_start_at": isoformat_z(window_start),
                         "window_end_at": isoformat_z(window_end),
                         "task_count": len(task_run_ids),
-                        "submission_count": submission_count,
+                        "submission_count": len(window_submissions),
                         "miner_count": len(miner_addresses),
                         "total_reward_amount": total_reward_amount,
                         "settlement_batch_id": existing_window.get("settlement_batch_id") if existing_window else None,
-                        "task_run_ids": sorted(task_run_ids),
+                        "task_run_ids": task_run_ids,
                         "miner_addresses": sorted(miner_addresses),
+                        "miner_reward_rows": miner_reward_rows,
                         "policy_bundle_version": existing_window.get("policy_bundle_version") if existing_window else POLICY_BUNDLE_VERSION,
                         "created_at": existing_window.get("created_at", isoformat_z(now)) if existing_window else isoformat_z(now),
                         "updated_at": isoformat_z(now),
                     }
                 )[0]
             )
-            await self._upsert_reward_window_artifact(saved, now)
+            await self._upsert_reward_window_artifact({**saved, "miner_reward_rows": miner_reward_rows}, now)
+            await self._upsert_forecast_reward_window_replay_artifact(
+                reward_window={**saved, "miner_reward_rows": miner_reward_rows},
+                submissions=window_submissions,
+                now=now,
+            )
 
     async def _build_poker_mtt_reward_windows(self, now: datetime) -> None:
         if not getattr(self.settings, "poker_mtt_reward_windows_enabled", False):
@@ -4559,7 +5351,6 @@ class ForecastMiningService:
                 await self._upsert_reward_window_artifact(saved_reward_window, now)
 
     async def get_artifact(self, artifact_id: str, *, now: datetime | None = None) -> dict:
-        await self.reconcile(now)
         artifact = await self.repo.get_artifact(artifact_id)
         if not artifact:
             raise ValueError("artifact not found")
@@ -4750,13 +5541,19 @@ class ForecastMiningService:
         user_agent: str | None,
         now: datetime,
     ) -> dict:
-        miners = await self.repo.list_miners()
-        current = next((miner for miner in miners if miner["address"] == miner_address), None)
+        current = await self.repo.get_miner(miner_address)
         if not current:
             raise ValueError("miner not registered")
 
         updated_signal_hash = hash_user_agent(user_agent) or current.get("user_agent_hash")
-        updated_ip = ip_address or current.get("ip_address")
+        updated_ip = normalize_ip_signal(ip_address) if ip_address is not None else normalize_ip_signal(current.get("ip_address"))
+        if (
+            updated_ip == current.get("ip_address")
+            and updated_signal_hash == current.get("user_agent_hash")
+            and current.get("economic_unit_id")
+        ):
+            return current
+        miners = await self.repo.list_miners()
         candidate_miners = []
         for miner in miners:
             if miner["address"] == miner_address:
@@ -4809,6 +5606,27 @@ class ForecastMiningService:
     async def _open_risk_case_count(self, miner: dict) -> int:
         cases = await self.repo.list_risk_cases(state="open", economic_unit_id=miner["economic_unit_id"])
         return len(cases)
+
+    async def _anti_abuse_state(
+        self,
+        *,
+        miner: dict | None = None,
+        economic_unit_id: str | None = None,
+        eligibility_status: str = "eligible",
+    ) -> dict:
+        resolved_economic_unit_id = economic_unit_id or (miner or {}).get("economic_unit_id")
+        open_cases: list[dict] = []
+        if resolved_economic_unit_id:
+            open_cases = await self.repo.list_risk_cases(state="open", economic_unit_id=resolved_economic_unit_id)
+        return {
+            "anti_abuse_discount": _anti_abuse_discount_for_cases(
+                eligibility_status=eligibility_status,
+                open_cases=open_cases,
+            ),
+            "risk_review_state": "review_required" if open_cases else "clear",
+            "open_risk_case_count": len(open_cases),
+            "open_risk_case_types": sorted({str(case.get("case_type") or "unknown") for case in open_cases}),
+        }
 
     async def _latest_settlement_snapshot(self, miner_address: str) -> tuple[dict | None, dict | None, dict | None]:
         submissions = await self.repo.list_submissions_for_miner(miner_address)

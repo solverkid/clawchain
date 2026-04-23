@@ -76,6 +76,22 @@ func TestFullRatedTournamentFlow(t *testing.T) {
 	assertCompletedTournament(t, app, run.ID)
 }
 
+func TestWarmMultiplierSharedMinerWriteback(t *testing.T) {
+	app := newIntegrationApp(t)
+	run := seedRatedTournament(t, app, 64)
+	seedWarmEligibleHistory(t, app.db, run.ID, app.now.Add(-24*time.Hour))
+	require.NoError(t, app.rating.Bootstrap(context.Background()))
+
+	playTournamentToCompletion(t, app, run.ID)
+	assertCompletedTournament(t, app, run.ID)
+
+	require.Greater(
+		t,
+		countRows(t, app.db, "SELECT COUNT(*) FROM miners WHERE ABS(arena_multiplier - 1.0) > 1e-9"),
+		0,
+	)
+}
+
 func newIntegrationApp(t *testing.T) *integrationApp {
 	t.Helper()
 
@@ -223,7 +239,8 @@ func assertCompletedTournament(t *testing.T, app *integrationApp, tournamentID s
 
 	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM arena_rating_input WHERE tournament_id = $1", tournamentID), 0)
 	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM arena_result_entries WHERE tournament_id = $1", tournamentID), 0)
-	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM miners WHERE public_rank IS NOT NULL"), 0)
+	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM public_ladder_snapshot"), 0)
+	require.Greater(t, countRows(t, app.db, "SELECT COUNT(*) FROM arena_multiplier_snapshot"), 0)
 }
 
 func mustRun(t *testing.T, app *integrationApp, tournamentID string) *integrationRun {
@@ -412,6 +429,73 @@ func seedSharedMiners(t *testing.T, db *sql.DB, assignments []hub.SeatAssignment
 			at,
 		)
 		require.NoError(t, err)
+	}
+}
+
+func seedWarmEligibleHistory(t *testing.T, db *sql.DB, tournamentID string, at time.Time) {
+	t.Helper()
+
+	const eligibleCount = 15
+
+	rows, err := db.Query(`SELECT address FROM miners ORDER BY address`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var addresses []string
+	for rows.Next() {
+		var address string
+		require.NoError(t, rows.Scan(&address))
+		addresses = append(addresses, address)
+	}
+	require.NoError(t, rows.Err())
+
+	for _, address := range addresses {
+		_, err := db.Exec(`
+			INSERT INTO rating_state_current (
+				miner_address,
+				mu,
+				sigma,
+				arena_reliability,
+				public_elo,
+				payload,
+				schema_version,
+				policy_bundle_version,
+				state_hash,
+				payload_hash,
+				artifact_ref,
+				updated_at
+			) VALUES ($1, 25, 8.333333, 1, 1200, '{}'::jsonb, 1, 'v1', $2, $2, '', $3)
+			ON CONFLICT (miner_address) DO UPDATE
+			SET updated_at = EXCLUDED.updated_at
+		`, address, "warm-state:"+address, at)
+		require.NoError(t, err)
+
+		for idx := 0; idx < eligibleCount; idx++ {
+			snapshotID := fmt.Sprintf("warm-mult:%s:%02d", address, idx)
+			_, err = db.Exec(`
+				INSERT INTO arena_multiplier_snapshot (
+					snapshot_id,
+					tournament_id,
+					miner_address,
+					eligible_for_multiplier,
+					tournament_score,
+					confidence_weight,
+					multiplier_before,
+					multiplier_after,
+					payload,
+					schema_version,
+					policy_bundle_version,
+					state_hash,
+					payload_hash,
+					artifact_ref,
+					created_at
+				) VALUES (
+					$1, $2, $3, TRUE, 0.6, 1.0, 1.0, 1.0, '{}'::jsonb, 1, 'v1', $1, $1, '', $4
+				)
+				ON CONFLICT (snapshot_id) DO NOTHING
+			`, snapshotID, tournamentID, address, at)
+			require.NoError(t, err)
+		}
 	}
 }
 

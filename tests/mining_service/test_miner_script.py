@@ -239,6 +239,11 @@ def test_compute_prediction_in_codex_mode_allows_larger_move_when_signals_align(
     assert prediction["aggression_cap_bps"] == 1400
 
 
+def test_resolve_request_timeout_preserves_subsecond_values():
+    assert mine.resolve_request_timeout({"request_timeout_seconds": 0.75}) == pytest.approx(0.75)
+    assert mine.resolve_request_timeout({"request_timeout_seconds": 0.01}) == pytest.approx(0.1)
+
+
 def test_codex_system_prompt_includes_short_horizon_calibration_rules():
     prompt = mine._codex_system_prompt()
 

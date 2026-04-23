@@ -86,11 +86,16 @@ def load_wallet(wallet_path, passphrase=None):
 
 def resolve_request_timeout(config=None):
     config = config or {}
-    return int(
+    raw_timeout = (
         config.get("request_timeout_seconds")
         or os.getenv("CLAWCHAIN_MINER_REQUEST_TIMEOUT_SECONDS")
         or DEFAULT_REQUEST_TIMEOUT_SECONDS
     )
+    try:
+        timeout_seconds = float(raw_timeout)
+    except (TypeError, ValueError):
+        timeout_seconds = float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
+    return max(0.1, timeout_seconds)
 
 
 def resolve_min_commit_time_remaining(config=None):

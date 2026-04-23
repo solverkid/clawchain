@@ -193,3 +193,60 @@ func TestCoordinatorStepsRunnersConcurrently(t *testing.T) {
 	require.Equal(t, int32(2), startedN.Load())
 	require.Len(t, result.Logs, 2)
 }
+
+func TestCoordinatorHonorsConfiguredConcurrencyLimit(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	var startedN atomic.Int32
+
+	first := &barrierRunner{
+		minerID:  "miner_01",
+		started:  started,
+		release:  release,
+		startedN: &startedN,
+	}
+	second := &barrierRunner{
+		minerID:  "miner_02",
+		started:  started,
+		release:  release,
+		startedN: &startedN,
+	}
+	third := &barrierRunner{
+		minerID:  "miner_03",
+		started:  started,
+		release:  release,
+		startedN: &startedN,
+	}
+
+	observer := &stubStandingSource{
+		standings: []bot.Standing{
+			{Status: "running"},
+			{Status: "completed", CompletedReason: "natural_finish", WinnerMinerID: "miner_01"},
+		},
+	}
+	coordinator := NewCoordinator(CoordinatorConfig{
+		Observer:       observer,
+		Runners:        []Runner{first, second, third},
+		MaxSteps:       4,
+		MaxIdleCycles:  1,
+		MaxConcurrency: 1,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	observed := make(chan int32, 1)
+	go func() {
+		<-started
+		time.Sleep(20 * time.Millisecond)
+		observed <- startedN.Load()
+		close(release)
+	}()
+
+	result, err := coordinator.Run(ctx)
+	require.NoError(t, err)
+	require.True(t, result.Completed)
+	require.Equal(t, int32(1), <-observed)
+	require.Equal(t, int32(3), startedN.Load())
+	require.Len(t, result.Logs, 3)
+}

@@ -1245,7 +1245,7 @@ func (r *Repository) AppendActionRecords(ctx context.Context, actions []model.Ac
 			payload_hash = EXCLUDED.payload_hash,
 			artifact_ref = EXCLUDED.artifact_ref,
 			payload = EXCLUDED.payload
-	`
+		`
 
 	for _, action := range actions {
 		receivedAt := action.ReceivedAt
@@ -1282,6 +1282,20 @@ func (r *Repository) AppendActionRecords(ctx context.Context, actions []model.Ac
 			normalizeJSON(action.Payload),
 		)
 		if err != nil {
+			existing, loadErr := r.loadArenaActionLogicalIdentity(
+				ctx,
+				action.HandID,
+				action.SeatID,
+				action.PhaseID,
+				action.ActionSeq,
+			)
+			if loadErr == nil {
+				if conflict := compareArenaActionLogicalIdentity(existing, buildArenaActionLogicalIdentity(action)); conflict == "" {
+					continue
+				} else {
+					return fmt.Errorf("append arena_action %s conflict: %s", action.RequestID, conflict)
+				}
+			}
 			return fmt.Errorf("append arena_action %s: %w", action.RequestID, err)
 		}
 	}
@@ -1557,6 +1571,7 @@ func (r *Repository) AppendEvents(ctx context.Context, events []model.EventLogEn
 			$11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
 			$21, $22, $23, $24, $25, $26, $27, $28, $29
 		)
+		ON CONFLICT (event_id) DO NOTHING
 	`
 
 	for _, event := range events {
@@ -1565,7 +1580,7 @@ func (r *Repository) AppendEvents(ctx context.Context, events []model.EventLogEn
 			occurredAt = nowUTC()
 		}
 
-		_, err := r.db.ExecContext(
+		result, err := r.db.ExecContext(
 			ctx,
 			query,
 			event.EventID,
@@ -1600,6 +1615,20 @@ func (r *Repository) AppendEvents(ctx context.Context, events []model.EventLogEn
 		)
 		if err != nil {
 			return fmt.Errorf("append arena_event_log %s: %w", event.EventID, err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("append arena_event_log %s rows affected: %w", event.EventID, err)
+		}
+		if rowsAffected > 0 {
+			continue
+		}
+		existing, err := r.loadArenaEventLogIdentity(ctx, event.EventID)
+		if err != nil {
+			return fmt.Errorf("load arena_event_log %s: %w", event.EventID, err)
+		}
+		if conflict := compareArenaEventLogIdentity(existing, buildArenaEventLogIdentity(event)); conflict != "" {
+			return fmt.Errorf("append arena_event_log %s conflict: %s", event.EventID, conflict)
 		}
 	}
 
@@ -2418,19 +2447,14 @@ func (r *Repository) AppendCollusionMetrics(ctx context.Context, metrics []model
 
 func (r *Repository) AssertSharedHarnessTables(ctx context.Context) error {
 	for _, table := range []string{"miners", "arena_result_entries"} {
-		var exists bool
+		var regclass sql.NullString
 		err := r.db.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM information_schema.tables
-				WHERE table_schema = 'public'
-				  AND table_name = $1
-			)
-		`, table).Scan(&exists)
+			SELECT to_regclass($1)
+		`, table).Scan(&regclass)
 		if err != nil {
 			return fmt.Errorf("check %s table: %w", table, err)
 		}
-		if !exists {
+		if !regclass.Valid {
 			return fmt.Errorf("%s table missing", table)
 		}
 	}
@@ -3681,13 +3705,10 @@ func (r *Repository) UpsertMinerCompatibility(ctx context.Context, miner model.M
 	const query = `
 		UPDATE miners
 		SET (
-			model_reliability,
 			arena_multiplier,
-			public_rank,
-			public_elo,
 			updated_at
 		) = (
-			$2, $3, $4, $5, $6
+			$2, $3
 		)
 		WHERE address = $1
 	`
@@ -3701,10 +3722,7 @@ func (r *Repository) UpsertMinerCompatibility(ctx context.Context, miner model.M
 		ctx,
 		query,
 		miner.Address,
-		defaultFloat(miner.ModelReliability, 1),
 		defaultFloat(miner.ArenaMultiplier, 1),
-		nullInt(miner.PublicRank),
-		defaultInt(miner.PublicELO, 1200),
 		miner.UpdatedAt,
 	)
 	if err != nil {
@@ -3788,6 +3806,347 @@ func execSnapshot(ctx context.Context, db *sql.DB, query string, args ...any) er
 		return err
 	}
 	return nil
+}
+
+type arenaEventLogIdentity struct {
+	AggregateType       string
+	AggregateID         string
+	StreamKey           string
+	StreamSeq           int64
+	TournamentID        string
+	TableID             string
+	HandID              string
+	PhaseID             string
+	RoundNo             int
+	BarrierID           string
+	EventType           string
+	EventVersion        int
+	SchemaVersion       int
+	PolicyBundleVersion string
+	RNGRootSeed         string
+	SeedTableID         string
+	SeedHandNo          int
+	SeedSeatNo          int
+	SeedStreamName      string
+	StateSeq            int64
+	CausationID         string
+	CorrelationID       string
+	PayloadURI          string
+	PayloadHash         string
+	ArtifactRef         string
+	StateHashAfter      string
+}
+
+type arenaActionLogicalIdentity struct {
+	TournamentID         string
+	TableID              string
+	HandID               string
+	PhaseID              string
+	SeatID               string
+	SeatAlias            string
+	ActionType           string
+	ActionAmountBucket   int64
+	ActionSeq            int
+	ExpectedStateSeq     int64
+	AcceptedStateSeq     int64
+	ValidationStatus     string
+	ResultEventID        string
+	ErrorCode            string
+	DuplicateOfRequestID string
+	SchemaVersion        int
+	PolicyBundleVersion  string
+	StateHash            string
+	PayloadHash          string
+	ArtifactRef          string
+}
+
+func buildArenaEventLogIdentity(event model.EventLogEntry) arenaEventLogIdentity {
+	return arenaEventLogIdentity{
+		AggregateType:       event.AggregateType,
+		AggregateID:         event.AggregateID,
+		StreamKey:           event.StreamKey,
+		StreamSeq:           event.StreamSeq,
+		TournamentID:        event.TournamentID,
+		TableID:             event.TableID,
+		HandID:              event.HandID,
+		PhaseID:             event.PhaseID,
+		RoundNo:             event.RoundNo,
+		BarrierID:           event.BarrierID,
+		EventType:           event.EventType,
+		EventVersion:        defaultInt(event.EventVersion, 1),
+		SchemaVersion:       defaultSchemaVersion(event.SchemaVersion),
+		PolicyBundleVersion: defaultString(event.PolicyBundleVersion, "v1"),
+		RNGRootSeed:         event.RNGRootSeed,
+		SeedTableID:         event.SeedDerivation.TableID,
+		SeedHandNo:          event.SeedDerivation.HandNumber,
+		SeedSeatNo:          event.SeedDerivation.SeatNumber,
+		SeedStreamName:      event.SeedDerivation.StreamName,
+		StateSeq:            event.StateSeq,
+		CausationID:         event.CausationID,
+		CorrelationID:       event.CorrelationID,
+		PayloadURI:          event.PayloadURI,
+		PayloadHash:         defaultString(event.PayloadHash, event.EventID),
+		ArtifactRef:         event.ArtifactRef,
+		StateHashAfter:      defaultString(event.StateHashAfter, event.EventID),
+	}
+}
+
+func buildArenaActionLogicalIdentity(action model.ActionRecord) arenaActionLogicalIdentity {
+	return arenaActionLogicalIdentity{
+		TournamentID:         action.TournamentID,
+		TableID:              action.TableID,
+		HandID:               action.HandID,
+		PhaseID:              action.PhaseID,
+		SeatID:               action.SeatID,
+		SeatAlias:            action.SeatAlias,
+		ActionType:           action.ActionType,
+		ActionAmountBucket:   action.ActionAmountBucket,
+		ActionSeq:            action.ActionSeq,
+		ExpectedStateSeq:     action.ExpectedStateSeq,
+		AcceptedStateSeq:     action.AcceptedStateSeq,
+		ValidationStatus:     action.ValidationStatus,
+		ResultEventID:        action.ResultEventID,
+		ErrorCode:            action.ErrorCode,
+		DuplicateOfRequestID: action.DuplicateOfRequestID,
+		SchemaVersion:        defaultSchemaVersion(action.SchemaVersion),
+		PolicyBundleVersion:  defaultString(action.PolicyBundleVersion, "v1"),
+		StateHash:            defaultString(action.StateHash, action.RequestID),
+		PayloadHash:          defaultString(action.PayloadHash, action.RequestID),
+		ArtifactRef:          action.ArtifactRef,
+	}
+}
+
+func (r *Repository) loadArenaEventLogIdentity(ctx context.Context, eventID string) (arenaEventLogIdentity, error) {
+	const query = `
+		SELECT
+			aggregate_type,
+			aggregate_id,
+			stream_key,
+			stream_seq,
+			tournament_id,
+			table_id,
+			hand_id,
+			phase_id,
+			round_no,
+			barrier_id,
+			event_type,
+			event_version,
+			schema_version,
+			policy_bundle_version,
+			rng_root_seed,
+			seed_table_id,
+			seed_hand_no,
+			seed_seat_no,
+			seed_stream_name,
+			state_seq,
+			causation_id,
+			correlation_id,
+			payload_uri,
+			payload_hash,
+			artifact_ref,
+			state_hash_after
+		FROM arena_event_log
+		WHERE event_id = $1
+	`
+
+	var identity arenaEventLogIdentity
+	err := r.db.QueryRowContext(ctx, query, eventID).Scan(
+		&identity.AggregateType,
+		&identity.AggregateID,
+		&identity.StreamKey,
+		&identity.StreamSeq,
+		&identity.TournamentID,
+		&identity.TableID,
+		&identity.HandID,
+		&identity.PhaseID,
+		&identity.RoundNo,
+		&identity.BarrierID,
+		&identity.EventType,
+		&identity.EventVersion,
+		&identity.SchemaVersion,
+		&identity.PolicyBundleVersion,
+		&identity.RNGRootSeed,
+		&identity.SeedTableID,
+		&identity.SeedHandNo,
+		&identity.SeedSeatNo,
+		&identity.SeedStreamName,
+		&identity.StateSeq,
+		&identity.CausationID,
+		&identity.CorrelationID,
+		&identity.PayloadURI,
+		&identity.PayloadHash,
+		&identity.ArtifactRef,
+		&identity.StateHashAfter,
+	)
+	return identity, err
+}
+
+func (r *Repository) loadArenaActionLogicalIdentity(
+	ctx context.Context,
+	handID string,
+	seatID string,
+	phaseID string,
+	actionSeq int,
+) (arenaActionLogicalIdentity, error) {
+	const query = `
+		SELECT
+			tournament_id,
+			table_id,
+			hand_id,
+			phase_id,
+			seat_id,
+			seat_alias,
+			action_type,
+			action_amount_bucket,
+			action_seq,
+			expected_state_seq,
+			accepted_state_seq,
+			validation_status,
+			result_event_id,
+			error_code,
+			duplicate_of_request_id,
+			schema_version,
+			policy_bundle_version,
+			state_hash,
+			payload_hash,
+			artifact_ref
+		FROM arena_action
+		WHERE hand_id = $1
+		  AND seat_id = $2
+		  AND phase_id = $3
+		  AND action_seq = $4
+	`
+
+	var identity arenaActionLogicalIdentity
+	err := r.db.QueryRowContext(ctx, query, handID, seatID, phaseID, actionSeq).Scan(
+		&identity.TournamentID,
+		&identity.TableID,
+		&identity.HandID,
+		&identity.PhaseID,
+		&identity.SeatID,
+		&identity.SeatAlias,
+		&identity.ActionType,
+		&identity.ActionAmountBucket,
+		&identity.ActionSeq,
+		&identity.ExpectedStateSeq,
+		&identity.AcceptedStateSeq,
+		&identity.ValidationStatus,
+		&identity.ResultEventID,
+		&identity.ErrorCode,
+		&identity.DuplicateOfRequestID,
+		&identity.SchemaVersion,
+		&identity.PolicyBundleVersion,
+		&identity.StateHash,
+		&identity.PayloadHash,
+		&identity.ArtifactRef,
+	)
+	return identity, err
+}
+
+func compareArenaActionLogicalIdentity(existing, expected arenaActionLogicalIdentity) string {
+	switch {
+	case existing.TournamentID != expected.TournamentID:
+		return fmt.Sprintf("tournament_id mismatch: existing=%q expected=%q", existing.TournamentID, expected.TournamentID)
+	case existing.TableID != expected.TableID:
+		return fmt.Sprintf("table_id mismatch: existing=%q expected=%q", existing.TableID, expected.TableID)
+	case existing.HandID != expected.HandID:
+		return fmt.Sprintf("hand_id mismatch: existing=%q expected=%q", existing.HandID, expected.HandID)
+	case existing.PhaseID != expected.PhaseID:
+		return fmt.Sprintf("phase_id mismatch: existing=%q expected=%q", existing.PhaseID, expected.PhaseID)
+	case existing.SeatID != expected.SeatID:
+		return fmt.Sprintf("seat_id mismatch: existing=%q expected=%q", existing.SeatID, expected.SeatID)
+	case existing.SeatAlias != expected.SeatAlias:
+		return fmt.Sprintf("seat_alias mismatch: existing=%q expected=%q", existing.SeatAlias, expected.SeatAlias)
+	case existing.ActionType != expected.ActionType:
+		return fmt.Sprintf("action_type mismatch: existing=%q expected=%q", existing.ActionType, expected.ActionType)
+	case existing.ActionAmountBucket != expected.ActionAmountBucket:
+		return fmt.Sprintf("action_amount_bucket mismatch: existing=%d expected=%d", existing.ActionAmountBucket, expected.ActionAmountBucket)
+	case existing.ActionSeq != expected.ActionSeq:
+		return fmt.Sprintf("action_seq mismatch: existing=%d expected=%d", existing.ActionSeq, expected.ActionSeq)
+	case existing.ExpectedStateSeq != expected.ExpectedStateSeq:
+		return fmt.Sprintf("expected_state_seq mismatch: existing=%d expected=%d", existing.ExpectedStateSeq, expected.ExpectedStateSeq)
+	case existing.AcceptedStateSeq != expected.AcceptedStateSeq:
+		return fmt.Sprintf("accepted_state_seq mismatch: existing=%d expected=%d", existing.AcceptedStateSeq, expected.AcceptedStateSeq)
+	case existing.ValidationStatus != expected.ValidationStatus:
+		return fmt.Sprintf("validation_status mismatch: existing=%q expected=%q", existing.ValidationStatus, expected.ValidationStatus)
+	case existing.ResultEventID != expected.ResultEventID:
+		return fmt.Sprintf("result_event_id mismatch: existing=%q expected=%q", existing.ResultEventID, expected.ResultEventID)
+	case existing.ErrorCode != expected.ErrorCode:
+		return fmt.Sprintf("error_code mismatch: existing=%q expected=%q", existing.ErrorCode, expected.ErrorCode)
+	case existing.DuplicateOfRequestID != expected.DuplicateOfRequestID:
+		return fmt.Sprintf("duplicate_of_request_id mismatch: existing=%q expected=%q", existing.DuplicateOfRequestID, expected.DuplicateOfRequestID)
+	case existing.SchemaVersion != expected.SchemaVersion:
+		return fmt.Sprintf("schema_version mismatch: existing=%d expected=%d", existing.SchemaVersion, expected.SchemaVersion)
+	case existing.PolicyBundleVersion != expected.PolicyBundleVersion:
+		return fmt.Sprintf("policy_bundle_version mismatch: existing=%q expected=%q", existing.PolicyBundleVersion, expected.PolicyBundleVersion)
+	case existing.StateHash != expected.StateHash:
+		return fmt.Sprintf("state_hash mismatch: existing=%q expected=%q", existing.StateHash, expected.StateHash)
+	case existing.PayloadHash != expected.PayloadHash:
+		return fmt.Sprintf("payload_hash mismatch: existing=%q expected=%q", existing.PayloadHash, expected.PayloadHash)
+	case existing.ArtifactRef != expected.ArtifactRef:
+		return fmt.Sprintf("artifact_ref mismatch: existing=%q expected=%q", existing.ArtifactRef, expected.ArtifactRef)
+	default:
+		return ""
+	}
+}
+
+func compareArenaEventLogIdentity(existing, expected arenaEventLogIdentity) string {
+	switch {
+	case existing.AggregateType != expected.AggregateType:
+		return fmt.Sprintf("aggregate_type mismatch: existing=%q expected=%q", existing.AggregateType, expected.AggregateType)
+	case existing.AggregateID != expected.AggregateID:
+		return fmt.Sprintf("aggregate_id mismatch: existing=%q expected=%q", existing.AggregateID, expected.AggregateID)
+	case existing.StreamKey != expected.StreamKey:
+		return fmt.Sprintf("stream_key mismatch: existing=%q expected=%q", existing.StreamKey, expected.StreamKey)
+	case existing.StreamSeq != expected.StreamSeq:
+		return fmt.Sprintf("stream_seq mismatch: existing=%d expected=%d", existing.StreamSeq, expected.StreamSeq)
+	case existing.TournamentID != expected.TournamentID:
+		return fmt.Sprintf("tournament_id mismatch: existing=%q expected=%q", existing.TournamentID, expected.TournamentID)
+	case existing.TableID != expected.TableID:
+		return fmt.Sprintf("table_id mismatch: existing=%q expected=%q", existing.TableID, expected.TableID)
+	case existing.HandID != expected.HandID:
+		return fmt.Sprintf("hand_id mismatch: existing=%q expected=%q", existing.HandID, expected.HandID)
+	case existing.PhaseID != expected.PhaseID:
+		return fmt.Sprintf("phase_id mismatch: existing=%q expected=%q", existing.PhaseID, expected.PhaseID)
+	case existing.RoundNo != expected.RoundNo:
+		return fmt.Sprintf("round_no mismatch: existing=%d expected=%d", existing.RoundNo, expected.RoundNo)
+	case existing.BarrierID != expected.BarrierID:
+		return fmt.Sprintf("barrier_id mismatch: existing=%q expected=%q", existing.BarrierID, expected.BarrierID)
+	case existing.EventType != expected.EventType:
+		return fmt.Sprintf("event_type mismatch: existing=%q expected=%q", existing.EventType, expected.EventType)
+	case existing.EventVersion != expected.EventVersion:
+		return fmt.Sprintf("event_version mismatch: existing=%d expected=%d", existing.EventVersion, expected.EventVersion)
+	case existing.SchemaVersion != expected.SchemaVersion:
+		return fmt.Sprintf("schema_version mismatch: existing=%d expected=%d", existing.SchemaVersion, expected.SchemaVersion)
+	case existing.PolicyBundleVersion != expected.PolicyBundleVersion:
+		return fmt.Sprintf("policy_bundle_version mismatch: existing=%q expected=%q", existing.PolicyBundleVersion, expected.PolicyBundleVersion)
+	case existing.RNGRootSeed != expected.RNGRootSeed:
+		return fmt.Sprintf("rng_root_seed mismatch: existing=%q expected=%q", existing.RNGRootSeed, expected.RNGRootSeed)
+	case existing.SeedTableID != expected.SeedTableID:
+		return fmt.Sprintf("seed_table_id mismatch: existing=%q expected=%q", existing.SeedTableID, expected.SeedTableID)
+	case existing.SeedHandNo != expected.SeedHandNo:
+		return fmt.Sprintf("seed_hand_no mismatch: existing=%d expected=%d", existing.SeedHandNo, expected.SeedHandNo)
+	case existing.SeedSeatNo != expected.SeedSeatNo:
+		return fmt.Sprintf("seed_seat_no mismatch: existing=%d expected=%d", existing.SeedSeatNo, expected.SeedSeatNo)
+	case existing.SeedStreamName != expected.SeedStreamName:
+		return fmt.Sprintf("seed_stream_name mismatch: existing=%q expected=%q", existing.SeedStreamName, expected.SeedStreamName)
+	case existing.StateSeq != expected.StateSeq:
+		return fmt.Sprintf("state_seq mismatch: existing=%d expected=%d", existing.StateSeq, expected.StateSeq)
+	case existing.CausationID != expected.CausationID:
+		return fmt.Sprintf("causation_id mismatch: existing=%q expected=%q", existing.CausationID, expected.CausationID)
+	case existing.CorrelationID != expected.CorrelationID:
+		return fmt.Sprintf("correlation_id mismatch: existing=%q expected=%q", existing.CorrelationID, expected.CorrelationID)
+	case existing.PayloadURI != expected.PayloadURI:
+		return fmt.Sprintf("payload_uri mismatch: existing=%q expected=%q", existing.PayloadURI, expected.PayloadURI)
+	case existing.PayloadHash != expected.PayloadHash:
+		return fmt.Sprintf("payload_hash mismatch: existing=%q expected=%q", existing.PayloadHash, expected.PayloadHash)
+	case existing.ArtifactRef != expected.ArtifactRef:
+		return fmt.Sprintf("artifact_ref mismatch: existing=%q expected=%q", existing.ArtifactRef, expected.ArtifactRef)
+	case existing.StateHashAfter != expected.StateHashAfter:
+		return fmt.Sprintf("state_hash_after mismatch: existing=%q expected=%q", existing.StateHashAfter, expected.StateHashAfter)
+	default:
+		return ""
+	}
 }
 
 func normalizeJSON(payload json.RawMessage) []byte {

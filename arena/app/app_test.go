@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +20,10 @@ import (
 	"github.com/clawchain/clawchain/arena/replay"
 	"github.com/clawchain/clawchain/arena/store/postgres"
 	"github.com/clawchain/clawchain/arena/swarm"
+	"github.com/clawchain/clawchain/arena/testutil"
 )
+
+const arenaAppTestSchema = "arena_app_http_test"
 
 func TestNewAppRequiresDatabaseURL(t *testing.T) {
 	cfg := config.Config{}
@@ -46,6 +48,7 @@ func TestAppWiresAdminLockPublishFlow(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, application.Close(context.Background()))
 	})
+	seedArenaAppMiners(t, 56, time.Date(2026, time.April, 10, 20, 0, 0, 0, time.UTC))
 
 	handler := application.Handler()
 
@@ -1171,33 +1174,17 @@ func requireLiveTableHasCountAndPhase(t *testing.T, handler http.Handler, tourna
 }
 
 func arenaAppTestDatabaseURL() string {
-	if value := os.Getenv("ARENA_TEST_DATABASE_URL"); value != "" {
-		return value
-	}
-
-	return "postgres://clawchain:clawchain_dev_pw@127.0.0.1:55432/arena_runtime_test?sslmode=disable"
+	return testutil.DatabaseURLForSchema(arenaAppTestSchema)
 }
 
 func openArenaAppTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-
-	db, err := sql.Open("postgres", arenaAppTestDatabaseURL())
-	require.NoError(t, err)
-	require.NoError(t, db.Ping())
-	return db
+	return testutil.OpenArenaTestDB(t, arenaAppTestSchema)
 }
 
 func resetArenaAppSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	for _, stmt := range []string{
-		"DROP SCHEMA IF EXISTS public CASCADE",
-		"CREATE SCHEMA IF NOT EXISTS public",
-		"GRANT ALL ON SCHEMA public TO public",
-	} {
-		_, err := db.Exec(stmt)
-		require.NoError(t, err)
-	}
+	testutil.ResetArenaSchema(t, db, arenaAppTestSchema)
 }
 
 func countArenaAppRows(t *testing.T, db *sql.DB, query string, args ...any) int {
@@ -1274,6 +1261,7 @@ func containsString(values []string, target string) bool {
 
 func seedPublishedTournament(t *testing.T, handler http.Handler, waveID string, entrants int) string {
 	t.Helper()
+	seedArenaAppMiners(t, entrants, time.Date(2026, time.April, 10, 20, 0, 0, 0, time.UTC))
 
 	createWaveResp := httptest.NewRecorder()
 	createWaveReq := httptest.NewRequest(http.MethodPost, "/v1/admin/arena/waves", strings.NewReader(fmt.Sprintf(`{
@@ -1308,4 +1296,22 @@ func seedPublishedTournament(t *testing.T, handler http.Handler, waveID string, 
 	require.Equal(t, http.StatusOK, publishResp.Code)
 
 	return tournamentID
+}
+
+func seedArenaAppMiners(t *testing.T, count int, at time.Time) {
+	t.Helper()
+
+	db := openArenaAppTestDB(t)
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
+	testutil.SeedSharedMiners(t, db, sequentialMinerIDs(count), at)
+}
+
+func sequentialMinerIDs(count int) []string {
+	minerIDs := make([]string, 0, count)
+	for i := 1; i <= count; i++ {
+		minerIDs = append(minerIDs, fmt.Sprintf("miner_%02d", i))
+	}
+	return minerIDs
 }

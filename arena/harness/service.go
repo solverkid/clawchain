@@ -30,15 +30,20 @@ const (
 )
 
 type Config struct {
-	BaseURL       string
-	MinerCount    int
-	PolicyMode    PolicyMode
-	WaveID        string
-	LogPath       string
-	MaxSteps      int
-	MaxIdleCycles int
-	HTTPClient    *http.Client
-	Now           func() time.Time
+	BaseURL        string
+	MinerCount     int
+	MinerIDs       []string
+	PolicyMode     PolicyMode
+	WaveID         string
+	LogPath        string
+	MaxSteps       int
+	MaxIdleCycles  int
+	HTTPClient     *http.Client
+	HTTPTimeout    time.Duration
+	ArmTimeCap     bool
+	MaxConcurrency int
+	CycleDelay     time.Duration
+	Now            func() time.Time
 
 	CodexBinary  string
 	CodexModel   string
@@ -118,6 +123,10 @@ func New(cfg Config) (*Service, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("base url is required")
 	}
+	cfg.MinerIDs = normalizeMinerIDs(cfg.MinerIDs)
+	if len(cfg.MinerIDs) > 0 {
+		cfg.MinerCount = len(cfg.MinerIDs)
+	}
 	if cfg.MinerCount <= 0 {
 		return nil, fmt.Errorf("miner count must be positive")
 	}
@@ -129,8 +138,11 @@ func New(cfg Config) (*Service, error) {
 			return time.Now().UTC()
 		}
 	}
+	if cfg.HTTPTimeout <= 0 {
+		cfg.HTTPTimeout = defaultHarnessHTTPTimeout
+	}
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = newHarnessHTTPClient(cfg.MinerCount)
+		cfg.HTTPClient = newHarnessHTTPClient(cfg.MinerCount, cfg.HTTPTimeout)
 	}
 	switch cfg.PolicyMode {
 	case PolicyModeHeuristic:
@@ -160,7 +172,7 @@ func New(cfg Config) (*Service, error) {
 	}, nil
 }
 
-func newHarnessHTTPClient(minerCount int) *http.Client {
+func newHarnessHTTPClient(minerCount int, timeout time.Duration) *http.Client {
 	connBudget := minerCount * 2
 	if connBudget < minHarnessIdleConnsPerHost {
 		connBudget = minHarnessIdleConnsPerHost
@@ -179,7 +191,7 @@ func newHarnessHTTPClient(minerCount int) *http.Client {
 	transport.MaxConnsPerHost = connBudget
 
 	return &http.Client{
-		Timeout:   defaultHarnessHTTPTimeout,
+		Timeout:   timeout,
 		Transport: transport,
 	}
 }
@@ -222,7 +234,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	_ = createResp
 
 	for idx := 1; idx <= s.cfg.MinerCount; idx++ {
-		minerID := formatMinerID(idx)
+		minerID := s.minerID(idx)
 		if err := s.client.RegisterMiner(ctx, waveID, minerID); err != nil {
 			return result, err
 		}
@@ -268,18 +280,34 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}); err != nil {
 		return result, err
 	}
+	if s.cfg.ArmTimeCap {
+		if _, err := s.client.ArmTimeCap(ctx, result.TournamentID); err != nil {
+			return result, err
+		}
+		if err := logs.Write(logEvent{
+			At:           s.cfg.Now(),
+			Event:        "time_cap_armed",
+			WaveID:       waveID,
+			TournamentID: result.TournamentID,
+			PolicyMode:   string(s.cfg.PolicyMode),
+		}); err != nil {
+			return result, err
+		}
+	}
 
 	runners, err := s.buildRunners(result.TournamentID, waveID, logs)
 	if err != nil {
 		return result, err
 	}
 
-	observer := bot.NewClient(s.cfg.BaseURL, result.TournamentID, formatMinerID(1))
+	observer := bot.NewClient(s.cfg.BaseURL, result.TournamentID, s.minerID(1))
 	coordResult, err := swarm.NewCoordinator(swarm.CoordinatorConfig{
-		Observer:      observer,
-		Runners:       runners,
-		MaxSteps:      s.cfg.MaxSteps,
-		MaxIdleCycles: s.cfg.MaxIdleCycles,
+		Observer:       observer,
+		Runners:        runners,
+		MaxSteps:       s.cfg.MaxSteps,
+		MaxIdleCycles:  s.cfg.MaxIdleCycles,
+		MaxConcurrency: s.cfg.MaxConcurrency,
+		CycleDelay:     s.cfg.CycleDelay,
 		OnLog: func(item swarm.ActionLog) {
 			_ = logs.Write(logEvent{
 				At:           s.cfg.Now(),
@@ -336,7 +364,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 func (s *Service) buildRunners(tournamentID, waveID string, logs *jsonlWriter) ([]swarm.Runner, error) {
 	runners := make([]swarm.Runner, 0, s.cfg.MinerCount)
 	for idx := 1; idx <= s.cfg.MinerCount; idx++ {
-		minerID := formatMinerID(idx)
+		minerID := s.minerID(idx)
 		policy, err := s.buildPolicy(minerID, waveID, tournamentID, logs)
 		if err != nil {
 			return nil, err
@@ -410,6 +438,12 @@ func (c *runtimeClient) LockWave(ctx context.Context, waveID string) (httpapi.Wa
 func (c *runtimeClient) PublishSeats(ctx context.Context, waveID string) (httpapi.WaveMutationResponse, error) {
 	var resp httpapi.WaveMutationResponse
 	err := c.postJSON(ctx, fmt.Sprintf("/v1/admin/arena/waves/%s/publish-seats", waveID), nil, &resp)
+	return resp, err
+}
+
+func (c *runtimeClient) ArmTimeCap(ctx context.Context, tournamentID string) (map[string]any, error) {
+	var resp map[string]any
+	err := c.postJSON(ctx, fmt.Sprintf("/v1/admin/arena/tournaments/%s/time-cap", tournamentID), nil, &resp)
 	return resp, err
 }
 
@@ -515,6 +549,33 @@ func newJSONLWriter(path string) (*jsonlWriter, error) {
 		return nil, err
 	}
 	return &jsonlWriter{file: file, encode: json.NewEncoder(file)}, nil
+}
+
+func (s *Service) minerID(idx int) string {
+	if idx > 0 && idx <= len(s.cfg.MinerIDs) {
+		return s.cfg.MinerIDs[idx-1]
+	}
+	return formatMinerID(idx)
+}
+
+func normalizeMinerIDs(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		value := strings.TrimSpace(item)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func (w *jsonlWriter) Write(event logEvent) error {

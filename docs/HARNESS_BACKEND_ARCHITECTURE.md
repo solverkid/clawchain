@@ -384,6 +384,12 @@ Anti-Abuse 必须拆成三层：
    - 应用 `multiplier_clamp`
    - 必要时 `freeze/review`
 
+当前 forecast runtime 的最小 enforcement contract:
+- open `economic_unit_cluster` case -> `anti_abuse_discount = 0.25`
+- open `economic_unit_duplicate` / `high` / `critical` case -> `anti_abuse_discount = 0.0`
+- `admission_release_ratio` 与 `anti_abuse_discount` 分离；前者只决定 released/held split，不再冒充风险折扣
+- loopback IP 与通用 transport UA (`python-requests`, `python-urllib`, `python-httpx`, `curl`, `go-http-client`, `aiohttp`, `wget`) 不进入 cluster evidence graph
+
 ### Reward Window Aggregator
 
 职责：
@@ -411,9 +417,20 @@ Alpha 默认采用 **forecast-led aggregation**：
 - 只实现 `forecast_15m` 的 hourly finalized window
 - window id 采用 `rw_YYYYMMDDHH`
 - membership 先落在 `forecast_task_runs.reward_window_id` 和 `forecast_submissions.reward_window_id`
-- 当前只记录 `task_count / submission_count / miner_count / total_reward_amount`
+- 当前 `reward_window_membership` 已记录：
+  - `task_count / submission_count / miner_count / total_reward_amount`
+  - `miner_reward_rows`
+  - `miner_reward_rows_root`
 - `reward_window -> settlement_batch` link 已通过显式 helper 更新，避免 shared window row 被 generic patch 覆盖
-- 还没有 `daily snapshot merge`、`arena snapshot merge`、链锚定和 replay-proof materialization
+- 当前还没有 `daily snapshot merge`、`arena snapshot merge`
+- 当前已经有最小 replay-proof materialization：
+  - `reward_window_membership`
+  - `reward_window_replay_bundle`
+  其中 `reward_window_replay_bundle` 会显式记录：
+  - `reward_component_rows_root`
+  - `anti_abuse_input_rows_root`
+  - `overlay_merge_state`
+  并把 `daily_snapshot_merge` / `arena_snapshot_merge` 标为 `deferred`
 
 ### Settlement Batch Builder
 
@@ -494,6 +511,13 @@ Alpha 默认采用 **forecast-led aggregation**：
   - 不自动推进到 `anchored`
 - 当前 runtime 还提供 `GET /admin/chain/preflight` 最小 readiness 检查
 - 当前 runtime 还提供 `GET /admin/chain/health` 最小 health 读面
+- 当前 runtime 还提供独立的 forecast progression runtime：
+  - 启动时先执行一次 startup progression pass
+  - 可选启用后台 forecast progression loop，负责 task publication、settlement、hold release、reward-window build、settlement-batch preparation
+  - `GET /admin/forecast/health` 暴露 progression loop metrics 和 overdue task 摘要
+  - `POST /admin/reconcile` 提供显式 operator/manual progression surface
+  - public miner/task/history reads 已改为 snapshot-only，不再承担 progression 责任
+  - `GET /admin/anchor-jobs/{id}/chain-tx-plan` 现在也是 snapshot-only；该路径改为严格要求 prebuilt anchor payload state，而不是隐式推进
 - 当前 runtime 还提供 `GET /admin/anchor-jobs/action-queue` 最小 operator triage 读面
 - 当前 runtime 还提供 `POST /admin/anchor-jobs/{id}/retry-broadcast-typed|fallback` 最小 failed-anchor remediation 写面
 - 还没有 payout job 或自动失败重试编排；后台确认 loop 目前仍是最小实现
@@ -560,6 +584,7 @@ Alpha 默认采用 **forecast-led aggregation**：
 - 当前 artifact 种类：
   - `task_pack`
   - `reward_window_membership`
+  - `reward_window_replay_bundle`
   - `settlement_anchor_payload`
   - `chain_tx_plan`
   - `chain_broadcast_receipt`
@@ -590,8 +615,10 @@ Alpha 默认采用 **forecast-led aggregation**：
 - `GET /v1/leaderboard`
 - `GET /admin/risk-cases/open`
 - `GET /admin/settlement-batches`
+- `POST /admin/reconcile`
 - `GET /admin/anchor-jobs`
 - `GET /admin/anchor-jobs/action-queue`
+- `GET /admin/forecast/health`
 - `GET /admin/anchor-jobs/{id}/chain-tx-plan`
 - `POST /admin/anchor-jobs/{id}/broadcast-fallback`
 - `POST /admin/anchor-jobs/{id}/broadcast-typed`

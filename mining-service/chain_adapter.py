@@ -847,6 +847,55 @@ async def inspect_broadcast_tx_confirmation_async(*, settings, tx_hash: str) -> 
     return await asyncio.to_thread(inspect_broadcast_tx_confirmation, settings=settings, tx_hash=tx_hash)
 
 
+def inspect_broadcast_tx_and_settlement_anchor(*, settings, tx_hash: str, settlement_batch_id: str) -> dict:
+    tx_receipt = inspect_broadcast_tx_confirmation(settings=settings, tx_hash=tx_hash)
+    if tx_receipt.get("confirmation_status") != "confirmed":
+        return tx_receipt
+
+    query_response = inspect_settlement_anchor(
+        settings=settings,
+        settlement_batch_id=settlement_batch_id,
+    )
+    return {
+        **tx_receipt,
+        "confirmed": True,
+        "query_response": query_response,
+    }
+
+
+async def inspect_broadcast_tx_and_settlement_anchor_async(*, settings, tx_hash: str, settlement_batch_id: str) -> dict:
+    tx_receipt = await inspect_broadcast_tx_confirmation_async(settings=settings, tx_hash=tx_hash)
+    if tx_receipt.get("confirmation_status") != "confirmed":
+        return tx_receipt
+
+    query_response = await inspect_settlement_anchor_async(
+        settings=settings,
+        settlement_batch_id=settlement_batch_id,
+    )
+    return {
+        **tx_receipt,
+        "confirmed": True,
+        "settlement_batch_id": settlement_batch_id,
+        "query_response": query_response,
+    }
+
+
+def inspect_broadcast_settlement_confirmation(*, settings, tx_hash: str, settlement_batch_id: str) -> dict:
+    return inspect_broadcast_tx_and_settlement_anchor(
+        settings=settings,
+        tx_hash=tx_hash,
+        settlement_batch_id=settlement_batch_id,
+    )
+
+
+async def inspect_broadcast_settlement_confirmation_async(*, settings, tx_hash: str, settlement_batch_id: str) -> dict:
+    return await inspect_broadcast_tx_and_settlement_anchor_async(
+        settings=settings,
+        tx_hash=tx_hash,
+        settlement_batch_id=settlement_batch_id,
+    )
+
+
 def inspect_settlement_anchor(*, settings, settlement_batch_id: str) -> dict:
     resolved_batch_id = (settlement_batch_id or "").strip()
     if not resolved_batch_id:

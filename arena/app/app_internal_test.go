@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 	"time"
 
@@ -11,7 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/clawchain/clawchain/arena/config"
+	"github.com/clawchain/clawchain/arena/testutil"
 )
+
+const arenaInternalTestSchema = "arena_app_internal_test"
 
 func TestNewConfiguresBoundedDBPool(t *testing.T) {
 	db := openArenaInternalTestDB(t)
@@ -33,30 +35,15 @@ func TestNewConfiguresBoundedDBPool(t *testing.T) {
 }
 
 func arenaInternalTestDatabaseURL() string {
-	if value := os.Getenv("ARENA_TEST_DATABASE_URL"); value != "" {
-		return value
-	}
-	return "postgres://clawchain:clawchain_dev_pw@127.0.0.1:55432/arena_runtime_test?sslmode=disable"
+	return testutil.DatabaseURLForSchema(arenaInternalTestSchema)
 }
 
 func openArenaInternalTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-
-	db, err := sql.Open("postgres", arenaInternalTestDatabaseURL())
-	require.NoError(t, err)
-	require.NoError(t, db.Ping())
-	return db
+	return testutil.OpenArenaTestDB(t, arenaInternalTestSchema)
 }
 
 func resetArenaInternalSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	for _, stmt := range []string{
-		"DROP SCHEMA IF EXISTS public CASCADE",
-		"CREATE SCHEMA IF NOT EXISTS public",
-		"GRANT ALL ON SCHEMA public TO public",
-	} {
-		_, err := db.Exec(stmt)
-		require.NoError(t, err)
-	}
+	testutil.ResetArenaSchema(t, db, arenaInternalTestSchema)
 }

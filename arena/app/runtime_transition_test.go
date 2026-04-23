@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"sort"
 	"testing"
 	"time"
@@ -17,7 +16,10 @@ import (
 	"github.com/clawchain/clawchain/arena/hub"
 	"github.com/clawchain/clawchain/arena/model"
 	"github.com/clawchain/clawchain/arena/table"
+	"github.com/clawchain/clawchain/arena/testutil"
 )
+
+const arenaRuntimeTestSchema = "arena_app_runtime_test"
 
 func TestAdvanceClosedTablesTriggersFinalTableTransition(t *testing.T) {
 	db := openArenaRuntimeTestDB(t)
@@ -33,6 +35,7 @@ func TestAdvanceClosedTablesTriggersFinalTableTransition(t *testing.T) {
 	defer func() {
 		require.NoError(t, application.Close(context.Background()))
 	}()
+	seedArenaRuntimeMiners(t, 16, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_final_table_transition_1"
@@ -96,6 +99,7 @@ func TestAdvanceClosedTablesPreservesReadOnlyHydrateForEliminatedEntrants(t *tes
 	defer func() {
 		require.NoError(t, application.Close(context.Background()))
 	}()
+	seedArenaRuntimeMiners(t, 16, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_clear_eliminated_after_transition_1"
@@ -163,6 +167,7 @@ func TestRestartRecoversReadOnlyHydrateForEliminatedEntrant(t *testing.T) {
 
 	application, err := New(cfg)
 	require.NoError(t, err)
+	seedArenaRuntimeMiners(t, 16, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_restart_eliminated_hydrate_1"
@@ -231,6 +236,7 @@ func TestApplyTransitionPlanCarriesHistoricalStreamSeqForReusedTableID(t *testin
 	defer func() {
 		require.NoError(t, application.Close(context.Background()))
 	}()
+	seedArenaRuntimeMiners(t, 16, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_reuse_table_id_stream_seq_1"
@@ -316,6 +322,7 @@ func TestAdvanceClosedTableCompletesTournamentAtSingleSurvivor(t *testing.T) {
 	defer func() {
 		require.NoError(t, application.Close(context.Background()))
 	}()
+	seedArenaRuntimeMiners(t, 8, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_complete_single_survivor_1"
@@ -374,6 +381,7 @@ func TestAdvanceClosedTablePersistsRoundBarrierProgress(t *testing.T) {
 	defer func() {
 		require.NoError(t, application.Close(context.Background()))
 	}()
+	seedArenaRuntimeMiners(t, 16, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_barrier_persist_1"
@@ -429,6 +437,7 @@ func TestRestartRecoversRoundBarrierProgress(t *testing.T) {
 		ShutdownTimeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
+	seedArenaRuntimeMiners(t, 16, first.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_barrier_recovery_1"
@@ -495,6 +504,7 @@ func TestAdvanceClosedTablesCompletesTournamentAtTimeCap(t *testing.T) {
 	defer func() {
 		require.NoError(t, application.Close(context.Background()))
 	}()
+	seedArenaRuntimeMiners(t, 16, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_complete_time_cap_1"
@@ -560,6 +570,7 @@ func TestTimeCapMultiSurvivorWritesDeterministicRatingStages(t *testing.T) {
 	defer func() {
 		require.NoError(t, application.Close(context.Background()))
 	}()
+	seedArenaRuntimeMiners(t, 16, application.runtime.now())
 
 	ctx := context.Background()
 	waveID := "wave_time_cap_rating_stages_1"
@@ -728,32 +739,17 @@ func minerID(idx int) string {
 }
 
 func arenaRuntimeTestDatabaseURL() string {
-	if value := os.Getenv("ARENA_TEST_DATABASE_URL"); value != "" {
-		return value
-	}
-	return "postgres://clawchain:clawchain_dev_pw@127.0.0.1:55432/arena_runtime_test?sslmode=disable"
+	return testutil.DatabaseURLForSchema(arenaRuntimeTestSchema)
 }
 
 func openArenaRuntimeTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-
-	db, err := sql.Open("postgres", arenaRuntimeTestDatabaseURL())
-	require.NoError(t, err)
-	require.NoError(t, db.Ping())
-	return db
+	return testutil.OpenArenaTestDB(t, arenaRuntimeTestSchema)
 }
 
 func resetArenaRuntimeSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
-
-	for _, stmt := range []string{
-		"DROP SCHEMA IF EXISTS public CASCADE",
-		"CREATE SCHEMA IF NOT EXISTS public",
-		"GRANT ALL ON SCHEMA public TO public",
-	} {
-		_, err := db.Exec(stmt)
-		require.NoError(t, err)
-	}
+	testutil.ResetArenaSchema(t, db, arenaRuntimeTestSchema)
 }
 
 func countArenaRuntimeRows(t *testing.T, db *sql.DB, query string, args ...any) int {
@@ -762,4 +758,19 @@ func countArenaRuntimeRows(t *testing.T, db *sql.DB, query string, args ...any) 
 	var count int
 	require.NoError(t, db.QueryRow(query, args...).Scan(&count))
 	return count
+}
+
+func seedArenaRuntimeMiners(t *testing.T, count int, at time.Time) {
+	t.Helper()
+
+	db := openArenaRuntimeTestDB(t)
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
+
+	minerIDs := make([]string, 0, count)
+	for idx := 1; idx <= count; idx++ {
+		minerIDs = append(minerIDs, minerID(idx))
+	}
+	testutil.SeedSharedMiners(t, db, minerIDs, at)
 }

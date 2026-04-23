@@ -244,7 +244,11 @@ def test_budget_ledger_marks_paid_only_after_anchor_confirmation():
         batch = await repo.get_settlement_batch(window["settlement_batch_id"])
         ready = await service.retry_anchor_settlement_batch(batch["id"], now=BUILD_NOW + timedelta(minutes=1))
         submitted = await service.submit_anchor_job(batch["id"], now=BUILD_NOW + timedelta(minutes=2))
-        anchored = await service.mark_anchor_job_anchored(submitted["id"], now=BUILD_NOW + timedelta(minutes=3))
+        anchored = await service.mark_anchor_job_anchored(
+            submitted["id"],
+            now=BUILD_NOW + timedelta(minutes=3),
+            verified=True,
+        )
 
         refreshed = await repo.list_poker_mtt_budget_ledgers(
             budget_source_id="treasury:poker-mtt:beta",
@@ -330,6 +334,28 @@ def test_reward_window_rebuild_uses_effective_multiplier_snapshots_as_inputs():
                 "submission_count": 1,
             },
         ]
+
+    asyncio.run(scenario())
+
+
+def test_reward_window_build_syncs_only_its_own_settlement_batch():
+    async def scenario():
+        repo = FakeRepository()
+        _seed_reward_ready_result(repo, tournament_id="mtt-local-batch", miner_address="claw1localbatch", total_score=1.0)
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        async def fail_global_batch_rebuild(_now):  # noqa: ANN001
+            raise AssertionError("global settlement batch rebuild should not run from poker reward window build")
+
+        service._build_settlement_batches = fail_global_batch_rebuild  # type: ignore[method-assign]
+
+        window = await _build_window(service, reward_pool_amount=70)
+        assert window["settlement_batch_id"].startswith("sb_poker_mtt_daily_20260410")
+        batch = await repo.get_settlement_batch(window["settlement_batch_id"])
+        assert batch is not None
+        assert batch["lane"] == "poker_mtt_daily"
+        assert batch["state"] == "open"
+        assert batch["total_reward_amount"] == 70
 
     asyncio.run(scenario())
 

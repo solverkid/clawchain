@@ -104,12 +104,19 @@ V1 不做：
 
 ## 3.1 15m 主赛道
 
-- 15m lane 是 **Claw 自定义合成任务**，不是必须对应一个真实 Polymarket 15m 合约
+- 目标设计上，15m lane 是 **Claw 自定义合成任务**，不是必须对应一个真实 Polymarket 15m 合约
 - Polymarket 主要提供：
   - 市场发现
   - 公开概率基线
   - 盘口和活跃度特征
-- 15m lane 结果用 Claw 自己的参考价格规则结算
+- 目标设计上，15m lane 结果用 Claw 自己的参考价格规则结算
+
+当前实现 truth（2026-04-23）：
+
+- active runtime 更接近 `Polymarket-derived short-horizon tasks`
+- live provider 当前直接消费 Polymarket Gamma 数据做 market discovery / resolution
+- `end_ref_price` 当前仍未落成独立 `ReferencePriceService` 的 fully-materialized path
+- 所以这一节里 “Claw 自有参考价格规则” 仍然是目标态，不是已经完全落地的 runtime truth
 
 ## 3.2 资产与任务范围
 
@@ -300,7 +307,7 @@ final_mining_score
 说明：
 
  - `slow_direct_score` 在 Alpha day-1 关闭，只保留给 post-Alpha 小权重启用
- - `model_reliability` 由 fast lane 的 calibration/consistency 和 daily lane 的 anchor score 共同决定
+ - 当前 runtime 里，`model_reliability` 仍然主要来自 fast lane settled history；daily lane 的 broader reliability merge 还是目标态，不是已实现事实
  - `ops_reliability` 只反映 reveal/在线履约纪律，不允许主导奖励
 - `arena_multiplier` 是 rolling arena skill 的小幅放大器
 - `anti_abuse_discount` 用于 risk-adjusted discount，不一刀切封禁

@@ -154,6 +154,7 @@ def build_release_review_bundle(
     runtime_summary: dict[str, Any] = {}
     log_check_summary: dict[str, Any] = {}
     settlement_query_summary: dict[str, Any] = {}
+    release_pack_lineage: dict[str, Any] = {}
 
     for artifact_key, filename in REQUIRED_ARTIFACTS.items():
         path = artifact_dir / filename
@@ -201,6 +202,9 @@ def build_release_review_bundle(
                 "payload_hash": release_pack_payload.get("payload_hash"),
                 "gate_status": release_pack_payload.get("gate_status") or {},
             }
+            release_pack_lineage = {
+                "release_pack_payload_hash": release_pack_payload.get("payload_hash"),
+            }
             release_pack_complete = bool((release_pack_payload.get("gate_status") or {}).get("phase3_release_pack_complete"))
         else:
             known_gaps.append(f"missing_artifact:{release_pack_path.name}")
@@ -219,6 +223,15 @@ def build_release_review_bundle(
         "runtime_summary": runtime_summary,
         "log_check_summary": log_check_summary,
         "settlement_query_summary": settlement_query_summary,
+        "lineage_roots": {
+            "release_pack_payload_hash": release_pack_lineage.get("release_pack_payload_hash"),
+            "settlement_batch_id": settlement_query_summary.get("settlement_batch_id"),
+            "canonical_root": settlement_query_summary.get("canonical_root"),
+            "anchor_payload_hash": settlement_query_summary.get("anchor_payload_hash"),
+            "reward_window_ids_root": settlement_query_summary.get("reward_window_ids_root"),
+            "task_run_ids_root": settlement_query_summary.get("task_run_ids_root"),
+            "miner_reward_rows_root": settlement_query_summary.get("miner_reward_rows_root"),
+        },
         "rollout_review": {
             **{field: metadata.get(field) for field in REQUIRED_METADATA_FIELDS},
             "signoffs": signoffs,

@@ -273,8 +273,22 @@ def _select_series_market(markets: list[dict[str, Any]], asset: str, now: dateti
 
 
 class SyntheticMarketDataProvider:
-    async def build_fast_task(self, now: datetime, settings, asset: str) -> dict:
-        task = forecast_engine.build_fast_task(now, settings=settings, asset=asset)
+    async def build_fast_task(
+        self,
+        now: datetime,
+        settings,
+        asset: str,
+        *,
+        publish_at: datetime | None = None,
+        generated_at: datetime | None = None,
+    ) -> dict:
+        task = forecast_engine.build_fast_task(
+            now,
+            settings=settings,
+            asset=asset,
+            publish_at=publish_at,
+            generated_at=generated_at,
+        )
         task["pack_json"]["fallback_reason"] = None
         task["pack_hash"] = _hash_pack(task["pack_json"])
         return task
@@ -306,9 +320,24 @@ class LiveMarketDataProvider:
         if self._owns_client:
             await self._client.aclose()
 
-    async def build_fast_task(self, now: datetime, settings, asset: str) -> dict:
-        base_task = forecast_engine.build_fast_task(now, settings=settings, asset=asset)
-        market_bundle = await self._fetch_market_bundle(asset, settings, now)
+    async def build_fast_task(
+        self,
+        now: datetime,
+        settings,
+        asset: str,
+        *,
+        publish_at: datetime | None = None,
+        generated_at: datetime | None = None,
+    ) -> dict:
+        generated_at = generated_at or now
+        base_task = forecast_engine.build_fast_task(
+            now,
+            settings=settings,
+            asset=asset,
+            publish_at=publish_at,
+            generated_at=generated_at,
+        )
+        market_bundle = await self._fetch_market_bundle(asset, settings, generated_at)
         snapshot_freshness_seconds = market_bundle.get("snapshot_freshness_seconds", {"binance": 0, "polymarket": 0})
         snapshot_health, task_state, degraded_reason = _classify_snapshot_state(settings, snapshot_freshness_seconds)
 
@@ -317,7 +346,7 @@ class LiveMarketDataProvider:
             "lane": "forecast_15m",
             **forecast_engine.snapshot_metadata(
                 snapshot_source="live",
-                frozen_at=now,
+                frozen_at=generated_at,
                 binance_freshness_seconds=snapshot_freshness_seconds.get("binance"),
                 polymarket_freshness_seconds=snapshot_freshness_seconds.get("polymarket"),
             ),
@@ -572,17 +601,45 @@ class HybridMarketDataProvider:
         self._live = live
         self._fallback = fallback or SyntheticMarketDataProvider()
 
-    async def build_fast_task(self, now: datetime, settings, asset: str) -> dict:
+    async def build_fast_task(
+        self,
+        now: datetime,
+        settings,
+        asset: str,
+        *,
+        publish_at: datetime | None = None,
+        generated_at: datetime | None = None,
+    ) -> dict:
         try:
-            return await self._live.build_fast_task(now, settings, asset)
+            timeout_seconds = float(getattr(settings, "fast_task_live_build_timeout_seconds", 0.0) or 0.0)
+            live_coro = self._live.build_fast_task(
+                now,
+                settings,
+                asset,
+                publish_at=publish_at,
+                generated_at=generated_at,
+            )
+            if timeout_seconds > 0:
+                return await asyncio.wait_for(live_coro, timeout=timeout_seconds)
+            return await live_coro
         except Exception as exc:
-            task = await self._fallback.build_fast_task(now, settings, asset)
+            task = await self._fallback.build_fast_task(
+                now,
+                settings,
+                asset,
+                publish_at=publish_at,
+                generated_at=generated_at,
+            )
             task["snapshot_health"] = "synthetic_fallback"
             task["task_state"] = "degraded"
             task["degraded_reason"] = "live_market_data_unavailable"
             task["void_reason"] = None
             task["pack_json"]["snapshot_source"] = "synthetic_fallback"
-            task["pack_json"]["fallback_reason"] = str(exc)
+            if isinstance(exc, asyncio.TimeoutError):
+                timeout_seconds = float(getattr(settings, "fast_task_live_build_timeout_seconds", 0.0) or 0.0)
+                task["pack_json"]["fallback_reason"] = f"fast_task_live_build_timeout:{timeout_seconds:.3f}s"
+            else:
+                task["pack_json"]["fallback_reason"] = str(exc) or exc.__class__.__name__
             task["pack_hash"] = _hash_pack(task["pack_json"])
             return task
 

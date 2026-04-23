@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/clawchain/clawchain/arena/model"
 	"github.com/clawchain/clawchain/arena/store"
 	"github.com/clawchain/clawchain/arena/store/postgres"
+	"github.com/clawchain/clawchain/arena/testutil"
 )
 
 func TestNewRepositoryRequiresDB(t *testing.T) {
@@ -413,6 +415,104 @@ func TestSubmissionLedgerRejectsPayloadConflict(t *testing.T) {
 	require.Equal(t, first.ExpectedStateSeq, entry.ExpectedStateSeq)
 }
 
+func TestAppendEventsAllowsIdempotentDuplicateEventID(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	entry := model.EventLogEntry{
+		EventID:        "evt:test:1",
+		AggregateType:  "table",
+		AggregateID:    "tbl:test:1",
+		StreamKey:      "table:tbl:test:1",
+		StreamSeq:      7,
+		TournamentID:   "tour:test:1",
+		TableID:        "tbl:test:1",
+		HandID:         "hand:test:1",
+		PhaseID:        "phase:test:1",
+		RoundNo:        2,
+		BarrierID:      "barrier:test:1",
+		EventType:      "phase_opened",
+		EventVersion:   1,
+		StateSeq:       11,
+		CausationID:    "cause:test:1",
+		CorrelationID:  "corr:test:1",
+		Payload:        json.RawMessage(`{"kind":"phase_opened"}`),
+		StateHashAfter: "state:test:1",
+		RNGRootSeed:    "rng:test:1",
+		SeedDerivation: model.SeedDerivationInputs{
+			TableID:    "tbl:test:1",
+			HandNumber: 3,
+			SeatNumber: 4,
+			StreamName: "community",
+		},
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "policy-v1",
+			PayloadHash:         "payload:test:1",
+			ArtifactRef:         "art:test:1",
+		},
+	}
+
+	require.NoError(t, repo.AppendEvents(ctx, []model.EventLogEntry{entry}))
+	require.NoError(t, repo.AppendEvents(ctx, []model.EventLogEntry{entry}))
+	require.Equal(t, 1, rowCount(t, db, "arena_event_log"))
+}
+
+func TestAppendEventsRejectsConflictingDuplicateEventID(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	first := model.EventLogEntry{
+		EventID:        "evt:test:conflict",
+		AggregateType:  "table",
+		AggregateID:    "tbl:test:conflict",
+		StreamKey:      "table:tbl:test:conflict",
+		StreamSeq:      13,
+		TournamentID:   "tour:test:conflict",
+		TableID:        "tbl:test:conflict",
+		HandID:         "hand:test:conflict",
+		PhaseID:        "phase:test:conflict",
+		RoundNo:        1,
+		BarrierID:      "barrier:test:conflict",
+		EventType:      "action_applied",
+		EventVersion:   1,
+		StateSeq:       21,
+		CausationID:    "cause:test:conflict",
+		CorrelationID:  "corr:test:conflict",
+		Payload:        json.RawMessage(`{"kind":"action_applied","action":"check"}`),
+		StateHashAfter: "state:test:conflict:1",
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "policy-v1",
+			PayloadHash:         "payload:test:conflict:1",
+		},
+	}
+	require.NoError(t, repo.AppendEvents(ctx, []model.EventLogEntry{first}))
+
+	conflicting := first
+	conflicting.Payload = json.RawMessage(`{"kind":"action_applied","action":"raise","amount":100}`)
+	conflicting.PayloadHash = "payload:test:conflict:2"
+	conflicting.StateHashAfter = "state:test:conflict:2"
+
+	err = repo.AppendEvents(ctx, []model.EventLogEntry{conflicting})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "append arena_event_log evt:test:conflict conflict")
+	require.ErrorContains(t, err, "payload_hash mismatch")
+
+	var payloadHash string
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT payload_hash FROM arena_event_log WHERE event_id = $1", first.EventID).Scan(&payloadHash))
+	require.Equal(t, "payload:test:conflict:1", payloadHash)
+	require.Equal(t, 1, rowCount(t, db, "arena_event_log"))
+}
+
 func TestRepositoryLoadsActionRecordByRequestID(t *testing.T) {
 	db := openTestDB(t)
 	require.NoError(t, postgres.Migrate(db))
@@ -450,6 +550,105 @@ func TestRepositoryLoadsActionRecordByRequestID(t *testing.T) {
 	require.Equal(t, "event:1", action.ResultEventID)
 	require.Equal(t, int64(8), action.AcceptedStateSeq)
 	require.Equal(t, "check", action.ActionType)
+}
+
+func TestAppendActionRecordsAllowsIdempotentLogicalDuplicate(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	receivedAt := time.Date(2026, time.April, 10, 10, 0, 0, 0, time.UTC)
+	first := model.ActionRecord{
+		RequestID:          "req:action:logical:1",
+		TournamentID:       "tour:logical",
+		TableID:            "tbl:logical",
+		HandID:             "hand:logical",
+		PhaseID:            "phase:logical",
+		SeatID:             "seat:logical",
+		SeatAlias:          "alias:logical",
+		ActionType:         "raise",
+		ActionAmountBucket: 200,
+		ActionSeq:          5,
+		ExpectedStateSeq:   9,
+		AcceptedStateSeq:   10,
+		ValidationStatus:   "accepted",
+		ResultEventID:      "evt:logical",
+		ReceivedAt:         receivedAt,
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "state:logical",
+			PayloadHash:         "payload:logical",
+			ArtifactRef:         "art:logical",
+		},
+		Payload: json.RawMessage(`{"kind":"action_applied","action":"raise","amount":200}`),
+	}
+	require.NoError(t, repo.AppendActionRecords(ctx, []model.ActionRecord{first}))
+
+	duplicate := first
+	duplicate.RequestID = "req:action:logical:2"
+	duplicate.ReceivedAt = receivedAt.Add(5 * time.Second)
+	duplicate.ProcessedAt = ptrTime(receivedAt.Add(6 * time.Second))
+	require.NoError(t, repo.AppendActionRecords(ctx, []model.ActionRecord{duplicate}))
+	require.Equal(t, 1, rowCount(t, db, "arena_action"))
+}
+
+func TestAppendActionRecordsRejectsConflictingLogicalDuplicate(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	first := model.ActionRecord{
+		RequestID:          "req:action:conflict:1",
+		TournamentID:       "tour:logical-conflict",
+		TableID:            "tbl:logical-conflict",
+		HandID:             "hand:logical-conflict",
+		PhaseID:            "phase:logical-conflict",
+		SeatID:             "seat:logical-conflict",
+		SeatAlias:          "alias:logical-conflict",
+		ActionType:         "call",
+		ActionAmountBucket: 50,
+		ActionSeq:          8,
+		ExpectedStateSeq:   14,
+		AcceptedStateSeq:   15,
+		ValidationStatus:   "accepted",
+		ResultEventID:      "evt:logical-conflict",
+		ReceivedAt:         time.Date(2026, time.April, 10, 10, 5, 0, 0, time.UTC),
+		TruthMetadata: model.TruthMetadata{
+			SchemaVersion:       1,
+			PolicyBundleVersion: "policy-v1",
+			StateHash:           "state:logical-conflict:1",
+			PayloadHash:         "payload:logical-conflict:1",
+		},
+		Payload: json.RawMessage(`{"kind":"action_applied","action":"call","amount":50}`),
+	}
+	require.NoError(t, repo.AppendActionRecords(ctx, []model.ActionRecord{first}))
+
+	conflicting := first
+	conflicting.RequestID = "req:action:conflict:2"
+	conflicting.PayloadHash = "payload:logical-conflict:2"
+	conflicting.StateHash = "state:logical-conflict:2"
+	conflicting.Payload = json.RawMessage(`{"kind":"action_applied","action":"raise","amount":200}`)
+
+	err = repo.AppendActionRecords(ctx, []model.ActionRecord{conflicting})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "append arena_action req:action:conflict:2 conflict")
+	require.True(
+		t,
+		strings.Contains(err.Error(), "state_hash mismatch") || strings.Contains(err.Error(), "payload_hash mismatch"),
+		err.Error(),
+	)
+
+	var requestID string
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT request_id FROM arena_action WHERE hand_id = $1 AND seat_id = $2 AND phase_id = $3 AND action_seq = $4", first.HandID, first.SeatID, first.PhaseID, first.ActionSeq).Scan(&requestID))
+	require.Equal(t, first.RequestID, requestID)
+	require.Equal(t, 1, rowCount(t, db, "arena_action"))
 }
 
 func TestAppendRatingInputsUpdatesMeasurementFieldsOnConflict(t *testing.T) {
@@ -867,12 +1066,11 @@ func TestUpsertMinerCompatibilityOnlyTouchesArenaOwnedColumns(t *testing.T) {
 	require.True(t, fastWindowStartAt.Valid)
 	require.Equal(t, createdAt.Add(-time.Hour), fastWindowStartAt.Time.UTC())
 	require.Equal(t, "open", admissionState)
-	require.Equal(t, 1.07, modelReliability)
+	require.Equal(t, 0.98, modelReliability)
 	require.Equal(t, 0.91, opsReliability)
 	require.Equal(t, 1.18, arenaMultiplier)
-	require.True(t, storedPublicRank.Valid)
-	require.EqualValues(t, publicRank, storedPublicRank.Int64)
-	require.Equal(t, 1444, publicELO)
+	require.False(t, storedPublicRank.Valid)
+	require.Equal(t, 1210, publicELO)
 	require.Equal(t, createdAt, storedCreatedAt.UTC())
 	require.Equal(t, updatedAt, storedUpdatedAt.UTC())
 }
@@ -897,6 +1095,19 @@ func TestUpsertMinerCompatibilityRequiresExistingMiner(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "miner not found")
 	require.Equal(t, 0, rowCount(t, db, "miners"))
+}
+
+func TestAssertSharedHarnessTablesRespectsCurrentSearchPath(t *testing.T) {
+	db := testutil.OpenArenaTestDB(t, "arena_store_search_path_test")
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+	})
+	testutil.ResetArenaSchema(t, db, "arena_store_search_path_test")
+	require.NoError(t, postgres.Migrate(db))
+
+	repo, err := postgres.NewRepository(db)
+	require.NoError(t, err)
+	require.NoError(t, repo.AssertSharedHarnessTables(context.Background()))
 }
 
 func rowCount(t *testing.T, db *sql.DB, table string) int {

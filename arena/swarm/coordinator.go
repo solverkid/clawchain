@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/clawchain/clawchain/arena/bot"
 )
@@ -17,11 +18,13 @@ type StandingSource interface {
 }
 
 type CoordinatorConfig struct {
-	Observer      StandingSource
-	Runners       []Runner
-	MaxSteps      int
-	MaxIdleCycles int
-	OnLog         func(ActionLog)
+	Observer       StandingSource
+	Runners        []Runner
+	MaxSteps       int
+	MaxIdleCycles  int
+	MaxConcurrency int
+	CycleDelay     time.Duration
+	OnLog          func(ActionLog)
 }
 
 type ActionLog struct {
@@ -45,11 +48,13 @@ type Result struct {
 }
 
 type Coordinator struct {
-	observer      StandingSource
-	runners       []Runner
-	maxSteps      int
-	maxIdleCycles int
-	onLog         func(ActionLog)
+	observer       StandingSource
+	runners        []Runner
+	maxSteps       int
+	maxIdleCycles  int
+	maxConcurrency int
+	cycleDelay     time.Duration
+	onLog          func(ActionLog)
 }
 
 func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
@@ -61,13 +66,19 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 	if maxIdleCycles <= 0 {
 		maxIdleCycles = 25
 	}
+	maxConcurrency := cfg.MaxConcurrency
+	if maxConcurrency <= 0 || maxConcurrency > len(cfg.Runners) {
+		maxConcurrency = len(cfg.Runners)
+	}
 
 	return &Coordinator{
-		observer:      cfg.Observer,
-		runners:       cfg.Runners,
-		maxSteps:      maxSteps,
-		maxIdleCycles: maxIdleCycles,
-		onLog:         cfg.OnLog,
+		observer:       cfg.Observer,
+		runners:        cfg.Runners,
+		maxSteps:       maxSteps,
+		maxIdleCycles:  maxIdleCycles,
+		maxConcurrency: maxConcurrency,
+		cycleDelay:     cfg.CycleDelay,
+		onLog:          cfg.OnLog,
 	}
 }
 
@@ -96,11 +107,16 @@ func (c *Coordinator) Run(ctx context.Context) (Result, error) {
 		progressed := false
 		steps := make([]bot.StepResult, len(c.runners))
 		errs := make([]error, len(c.runners))
+		sema := make(chan struct{}, c.maxConcurrency)
 		var wg sync.WaitGroup
 		wg.Add(len(c.runners))
 		for idx, runner := range c.runners {
 			go func(idx int, runner Runner) {
 				defer wg.Done()
+				sema <- struct{}{}
+				defer func() {
+					<-sema
+				}()
 				steps[idx], errs[idx] = runner.StepDetailed(ctx)
 			}(idx, runner)
 		}
@@ -132,11 +148,20 @@ func (c *Coordinator) Run(ctx context.Context) (Result, error) {
 
 		if progressed {
 			idleCycles = 0
-			continue
+		} else {
+			idleCycles++
+			if idleCycles > c.maxIdleCycles {
+				return result, fmt.Errorf("swarm idle for %d cycles before tournament completion", idleCycles)
+			}
 		}
-		idleCycles++
-		if idleCycles > c.maxIdleCycles {
-			return result, fmt.Errorf("swarm idle for %d cycles before tournament completion", idleCycles)
+		if c.cycleDelay > 0 {
+			timer := time.NewTimer(c.cycleDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return result, ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 

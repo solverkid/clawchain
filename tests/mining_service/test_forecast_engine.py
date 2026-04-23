@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from fastapi.testclient import TestClient
+import pytest
+from sqlalchemy import delete, func, select
 
 ROOT = Path(__file__).resolve().parents[2]
 MINING_SERVICE_DIR = ROOT / "mining-service"
@@ -13,8 +18,9 @@ if str(MINING_SERVICE_DIR) not in sys.path:
 
 import forecast_engine
 import models
+import server
 from repository import FakeRepository
-from pg_repository import normalize_database_url
+from pg_repository import PostgresRepository, normalize_database_url
 
 
 class StaticTaskProvider:
@@ -348,6 +354,27 @@ def test_build_fast_task_freezes_snapshot_metadata_with_canonical_pack_hash():
     assert task["pack_hash"] == expected_pack_hash
 
 
+def test_build_fast_task_supports_prewarm_for_future_publish_at():
+    now = datetime(2026, 4, 9, 8, 59, 55, tzinfo=timezone.utc)
+    publish_at = datetime(2026, 4, 9, 9, 0, 0, tzinfo=timezone.utc)
+    settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=15)
+
+    task = forecast_engine.build_fast_task(
+        now,
+        settings=settings,
+        asset="BTCUSDT",
+        publish_at=publish_at,
+        generated_at=now,
+    )
+
+    assert task["publish_at"] == "2026-04-09T09:00:00Z"
+    assert task["commit_deadline"] == "2026-04-09T09:00:05Z"
+    assert task["reveal_deadline"] == "2026-04-09T09:00:15Z"
+    assert task["resolve_at"] == "2026-04-09T09:01:00Z"
+    assert task["created_at"] == "2026-04-09T08:59:55Z"
+    assert task["pack_json"]["snapshot_frozen_at"] == "2026-04-09T08:59:55Z"
+
+
 def test_build_daily_anchor_task_contains_prediction_inputs():
     now = datetime(2026, 4, 10, 0, 0, 1, tzinfo=timezone.utc)
 
@@ -449,10 +476,86 @@ def test_models_expose_deterministic_settlement_columns():
     )
 
 
+def test_postgres_save_submission_is_atomic_for_concurrent_inserts():
+    async def scenario():
+        database_url = os.getenv(
+            "CLAWCHAIN_SHARED_TEST_DATABASE_URL",
+            "postgresql://clawchain:clawchain_dev_pw@127.0.0.1:55432/clawchain",
+        )
+        repo = PostgresRepository(database_url)
+        task_run_id: str | None = None
+        miner_address: str | None = None
+        try:
+            try:
+                await repo.init_schema()
+            except Exception as exc:  # pragma: no cover - environment-specific availability gate
+                pytest.skip(f"postgres unavailable for submission upsert regression: {exc}")
+
+            suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+            task_run_id = f"tr_fast_pg_atomic_{suffix}"
+            miner_address = f"claw1pgatomic{suffix[-12:]}"
+            submission = {
+                "id": f"sub:{task_run_id}:{miner_address}",
+                "task_run_id": task_run_id,
+                "miner_address": miner_address,
+                "economic_unit_id": f"eu:{suffix[-12:]}",
+                "commit_request_id": f"commit-{suffix}",
+                "reveal_request_id": None,
+                "commit_hash": f"hash-{suffix}",
+                "commit_nonce": f"nonce-{suffix}",
+                "p_yes_bps": None,
+                "eligibility_status": "eligible",
+                "state": "committed",
+                "score": 0.0,
+                "reward_amount": 0,
+                "reward_window_id": None,
+                "accepted_commit_at": "2026-04-23T04:50:02Z",
+                "accepted_reveal_at": None,
+                "created_at": "2026-04-23T04:50:02Z",
+                "updated_at": "2026-04-23T04:50:02Z",
+            }
+
+            await asyncio.gather(
+                repo.save_submission(submission),
+                repo.save_submission(submission),
+            )
+
+            saved = await repo.get_submission(task_run_id, miner_address)
+            assert saved is not None
+            assert saved["commit_request_id"] == submission["commit_request_id"]
+
+            async with repo.engine.connect() as conn:
+                count = await conn.execute(
+                    select(func.count())
+                    .select_from(models.forecast_submissions)
+                    .where(models.forecast_submissions.c.task_run_id == task_run_id)
+                    .where(models.forecast_submissions.c.miner_address == miner_address)
+                )
+                assert count.scalar_one() == 1
+        finally:
+            if task_run_id and miner_address:
+                async with repo.engine.begin() as conn:
+                    await conn.execute(
+                        delete(models.forecast_submissions)
+                        .where(models.forecast_submissions.c.task_run_id == task_run_id)
+                        .where(models.forecast_submissions.c.miner_address == miner_address)
+                    )
+            await repo.engine.dispose()
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_reconcile_marks_fast_task_pending_until_official_resolution():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        settings = forecast_engine.ForecastSettings(
+            fast_task_seconds=60,
+            commit_window_seconds=5,
+            reveal_window_seconds=10,
+            legacy_arena_apply_enabled=True,
+        )
         provider = StaticTaskProvider(
             [{"outcome": None, "resolution_status": "pending", "commit_close_ref_price": 70000.5, "end_ref_price": None}]
         )
@@ -709,6 +812,112 @@ def test_confirm_anchor_job_on_chain_marks_anchored():
     asyncio.run(scenario())
 
 
+def test_confirm_anchor_job_on_chain_passes_settlement_batch_id_to_confirmer():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        provider = StaticTaskProvider(
+            [{"outcome": 1, "resolution_status": "resolved", "commit_close_ref_price": 70000.5, "end_ref_price": None}]
+        )
+        captured = {}
+
+        async def fake_confirmer(tx_hash, now, *, settlement_batch_id=None):  # noqa: ANN001
+            captured["tx_hash"] = tx_hash
+            captured["settlement_batch_id"] = settlement_batch_id
+            return {
+                "tx_hash": tx_hash,
+                "found": True,
+                "confirmed": True,
+                "confirmation_status": "confirmed",
+                "height": 321,
+                "code": 0,
+                "raw_log": "",
+                "query_response": {
+                    "anchor": {
+                        "settlement_batch_id": settlement_batch_id,
+                        "anchor_job_id": submitted["anchor_job_id"],
+                        "lane": ready_batch["lane"],
+                        "schema_version": ready_batch["anchor_schema_version"],
+                        "policy_bundle_version": ready_batch["anchor_payload_json"]["policy_bundle_version"],
+                        "canonical_root": ready_batch["canonical_root"],
+                        "anchor_payload_hash": ready_batch["anchor_payload_hash"],
+                        "reward_window_ids_root": ready_batch["anchor_payload_json"]["reward_window_ids_root"],
+                        "task_run_ids_root": ready_batch["anchor_payload_json"]["task_run_ids_root"],
+                        "miner_reward_rows_root": ready_batch["anchor_payload_json"]["miner_reward_rows_root"],
+                        "window_end_at": ready_batch["window_end_at"],
+                        "total_reward_amount": ready_batch["total_reward_amount"],
+                    }
+                },
+            }
+
+        service = forecast_engine.ForecastMiningService(
+            repo,
+            settings,
+            task_provider=provider,
+            chain_tx_confirmer=fake_confirmer,
+        )
+
+        await service.register_miner(
+            address="claw1confirmarg",
+            name="confirm-arg",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        now = datetime(2026, 4, 10, 17, 10, 1, tzinfo=timezone.utc)
+        task = forecast_engine.build_fast_task(now, settings, asset="BTCUSDT")
+        await repo.upsert_task(task)
+        await repo.save_submission(
+            {
+                "id": f"sub:{task['task_run_id']}:claw1confirmarg",
+                "task_run_id": task["task_run_id"],
+                "miner_address": "claw1confirmarg",
+                "economic_unit_id": "eu:confirm-arg",
+                "commit_request_id": "req-commit",
+                "reveal_request_id": "req-reveal",
+                "commit_hash": "hash",
+                "commit_nonce": "nonce",
+                "p_yes_bps": 6400,
+                "eligibility_status": "eligible",
+                "state": "revealed",
+                "score": 0.0,
+                "reward_amount": 0,
+                "accepted_commit_at": "2026-04-10T17:10:02Z",
+                "accepted_reveal_at": "2026-04-10T17:10:06Z",
+                "created_at": "2026-04-10T17:10:02Z",
+                "updated_at": "2026-04-10T17:10:06Z",
+            }
+        )
+
+        await service.reconcile(datetime(2026, 4, 10, 17, 11, 5, tzinfo=timezone.utc))
+        batch = (await repo.list_settlement_batches())[0]
+        await service.retry_anchor_settlement_batch(batch["id"], now=datetime(2026, 4, 10, 17, 11, 6, tzinfo=timezone.utc))
+        ready_batch = await repo.get_settlement_batch(batch["id"])
+        submitted = await service.submit_anchor_job(batch["id"], now=datetime(2026, 4, 10, 17, 11, 7, tzinfo=timezone.utc))
+        await repo.save_anchor_job(
+            {
+                **(await repo.get_anchor_job(submitted["anchor_job_id"])),
+                "broadcast_status": "broadcast_submitted",
+                "broadcast_tx_hash": "CONFIRMARGTX",
+                "last_broadcast_at": "2026-04-10T17:11:08Z",
+                "updated_at": "2026-04-10T17:11:08Z",
+            }
+        )
+
+        receipt = await service.confirm_anchor_job_on_chain(
+            submitted["anchor_job_id"],
+            now=datetime(2026, 4, 10, 17, 11, 9, tzinfo=timezone.utc),
+        )
+
+        assert captured["tx_hash"] == "CONFIRMARGTX"
+        assert captured["settlement_batch_id"] == batch["id"]
+        assert receipt["chain_confirmation_status"] == "confirmed"
+        assert receipt["anchor_job_state"] == "anchored"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_confirm_anchor_job_on_chain_keeps_submitted_when_pending():
     async def scenario():
         repo = FakeRepository()
@@ -790,6 +999,87 @@ def test_confirm_anchor_job_on_chain_keeps_submitted_when_pending():
         assert receipt["anchor_job_state"] == "anchor_submitted"
         assert saved_job["state"] == "anchor_submitted"
         assert saved_batch["state"] == "anchor_submitted"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_create_app_default_chain_confirmer_returns_query_receipt_for_known_anchor_job(monkeypatch):
+    async def fake_inspect_broadcast_tx_confirmation_async(*, settings, tx_hash):  # noqa: ANN001
+        assert settings is not None
+        return {
+            "tx_hash": tx_hash,
+            "found": True,
+            "confirmation_status": "confirmed",
+            "height": 123,
+            "code": 0,
+            "raw_log": "",
+        }
+
+    captured: dict[str, str] = {}
+
+    async def fake_inspect_broadcast_settlement_confirmation_async(*, settings, tx_hash, settlement_batch_id):  # noqa: ANN001
+        assert settings is not None
+        captured["tx_hash"] = tx_hash
+        captured["settlement_batch_id"] = settlement_batch_id
+        return {
+            "tx_hash": tx_hash,
+            "found": True,
+            "confirmation_status": "confirmed",
+            "height": 123,
+            "code": 0,
+            "raw_log": "",
+            "settlement_batch_id": settlement_batch_id,
+            "query_response": {
+                "found": True,
+                "settlement_batch_id": settlement_batch_id,
+                "anchor": {
+                    "settlement_batch_id": settlement_batch_id,
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        server,
+        "inspect_broadcast_tx_confirmation_async",
+        fake_inspect_broadcast_tx_confirmation_async,
+    )
+    monkeypatch.setattr(
+        server,
+        "inspect_broadcast_settlement_confirmation_async",
+        fake_inspect_broadcast_settlement_confirmation_async,
+    )
+
+    async def scenario():
+        repo = FakeRepository()
+        await repo.save_anchor_job(
+            {
+                "id": "aj_default_confirmer",
+                "settlement_batch_id": "sb_default_confirmer",
+                "broadcast_tx_hash": "CONFIRM123TX",
+                "broadcast_status": "broadcast_submitted",
+                "created_at": "2026-04-10T17:01:07Z",
+                "updated_at": "2026-04-10T17:01:08Z",
+            }
+        )
+
+        app = server.create_app(
+            settings=forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10),
+            repository=repo,
+        )
+
+        with TestClient(app):
+            receipt = await app.state.service.chain_tx_confirmer(
+                "CONFIRM123TX",
+                datetime(2026, 4, 10, 17, 1, 9, tzinfo=timezone.utc),
+            )
+
+        assert captured == {
+            "tx_hash": "CONFIRM123TX",
+            "settlement_batch_id": "sb_default_confirmer",
+        }
+        assert receipt["query_response"]["anchor"]["settlement_batch_id"] == "sb_default_confirmer"
 
     import asyncio
 
@@ -1023,7 +1313,75 @@ def test_probationary_rewards_use_20_80_admission_hold():
         assert holds[0]["amount_held"] == miner["held_rewards"]
         assert holds[0]["state"] == "held"
         assert status["admission_state"] == "probation"
-        assert status["anti_abuse_discount"] == 0.2
+        assert status["anti_abuse_discount"] == 1.0
+        assert status["admission_release_ratio"] == 0.2
+        assert status["reward_timeline"]["anti_abuse_discount"] == 1.0
+        assert status["reward_timeline"]["admission_release_ratio"] == 0.2
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_open_cluster_risk_case_reduces_status_anti_abuse_discount_until_cleared():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+        now = datetime(2026, 4, 10, 9, 1, 6, tzinfo=timezone.utc)
+
+        await service.register_miner(
+            address="claw1riskstatus",
+            name="risk-status",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        miner = await repo.get_miner("claw1riskstatus")
+        assert miner is not None
+        case_id = f"risk:cluster:{miner['economic_unit_id']}"
+        await repo.save_risk_case(
+            {
+                "id": case_id,
+                "case_type": "economic_unit_cluster",
+                "severity": "medium",
+                "state": "open",
+                "economic_unit_id": miner["economic_unit_id"],
+                "miner_address": "claw1riskstatus",
+                "task_run_id": None,
+                "submission_id": None,
+                "evidence_json": {"member_addresses": ["claw1riskstatus", "claw1riskpeer"]},
+                "created_at": "2026-04-10T09:00:30Z",
+                "updated_at": "2026-04-10T09:00:30Z",
+            }
+        )
+
+        status = await service.get_miner_status("claw1riskstatus", now)
+        assert status["anti_abuse_discount"] == 0.25
+        assert status["admission_release_ratio"] == 0.2
+        assert status["risk_review_state"] == "review_required"
+        assert status["open_risk_case_count"] == 1
+        assert status["open_risk_case_types"] == ["economic_unit_cluster"]
+        assert status["reward_timeline"]["anti_abuse_discount"] == 0.25
+        assert status["reward_timeline"]["admission_release_ratio"] == 0.2
+        assert status["reward_timeline"]["open_risk_case_count"] == 1
+
+        await service.override_risk_case(
+            case_id,
+            decision="clear",
+            reason="false positive",
+            operator_id="operator",
+            authority_level="operator",
+            now=now,
+        )
+
+        cleared = await service.get_miner_status("claw1riskstatus", now)
+        assert cleared["anti_abuse_discount"] == 1.0
+        assert cleared["admission_release_ratio"] == 0.2
+        assert cleared["risk_review_state"] == "clear"
+        assert cleared["open_risk_case_count"] == 0
+        assert cleared["open_risk_case_types"] == []
+        assert cleared["reward_timeline"]["anti_abuse_discount"] == 1.0
+        assert cleared["reward_timeline"]["admission_release_ratio"] == 0.2
+        assert cleared["reward_timeline"]["open_risk_case_count"] == 0
 
     import asyncio
 
@@ -1120,6 +1478,82 @@ def test_registering_linked_miners_opens_cluster_risk_case():
     asyncio.run(scenario())
 
 
+def test_loopback_ip_is_ignored_for_economic_unit_and_cluster_linking():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        await service.register_miner(
+            address="claw1loopa",
+            name="loop-a",
+            public_key="pubkey-a",
+            miner_version="0.4.0",
+            ip_address="127.0.0.1",
+            user_agent="python-requests/2.32.3",
+        )
+        await service.register_miner(
+            address="claw1loopb",
+            name="loop-b",
+            public_key="pubkey-b",
+            miner_version="0.4.0",
+            ip_address="::1",
+            user_agent="curl/8.7.1",
+        )
+
+        miner_a = await repo.get_miner("claw1loopa")
+        miner_b = await repo.get_miner("claw1loopb")
+        cases = await repo.list_risk_cases(state="open")
+
+        assert miner_a is not None
+        assert miner_b is not None
+        assert miner_a["ip_address"] is None
+        assert miner_b["ip_address"] is None
+        assert miner_a["economic_unit_id"] != miner_b["economic_unit_id"]
+        assert cases == []
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_generic_transport_user_agent_is_ignored_for_cluster_linking():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        await service.register_miner(
+            address="claw1uagna",
+            name="ua-generic-a",
+            public_key="pubkey-a",
+            miner_version="0.4.0",
+            ip_address="10.0.0.1",
+            user_agent="python-requests/2.32.3",
+        )
+        await service.register_miner(
+            address="claw1uagnb",
+            name="ua-generic-b",
+            public_key="pubkey-b",
+            miner_version="0.4.0",
+            ip_address="10.0.0.2",
+            user_agent="python-requests/2.32.3",
+        )
+
+        miner_a = await repo.get_miner("claw1uagna")
+        miner_b = await repo.get_miner("claw1uagnb")
+        cases = await repo.list_risk_cases(state="open")
+
+        assert miner_a is not None
+        assert miner_b is not None
+        assert miner_a["user_agent_hash"] is None
+        assert miner_b["user_agent_hash"] is None
+        assert miner_a["economic_unit_id"] != miner_b["economic_unit_id"]
+        assert cases == []
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_duplicate_reveal_creates_open_risk_case():
     async def scenario():
         repo = FakeRepository()
@@ -1191,6 +1625,100 @@ def test_duplicate_reveal_creates_open_risk_case():
     asyncio.run(scenario())
 
 
+def test_duplicate_reveal_uses_refreshed_economic_unit_instead_of_stale_argument():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1refreshdupa",
+            name="refresh-dup-a",
+            public_key="pubkey-a",
+            miner_version="0.4.0",
+            ip_address="10.0.0.1",
+            user_agent="agent-a",
+        )
+        await service.register_miner(
+            address="claw1refreshdupb",
+            name="refresh-dup-b",
+            public_key="pubkey-b",
+            miner_version="0.4.0",
+            ip_address="10.0.0.2",
+            user_agent="agent-b",
+        )
+
+        task_now = datetime(2026, 4, 10, 9, 30, 1, tzinfo=timezone.utc)
+        task = forecast_engine.build_fast_task(task_now, settings, asset="BTCUSDT")
+        await repo.upsert_task(task)
+
+        initial_a = await repo.get_miner("claw1refreshdupa")
+        initial_b = await repo.get_miner("claw1refreshdupb")
+        stale_b_economic_unit_id = initial_b["economic_unit_id"]
+        shared_economic_unit_id = initial_a["economic_unit_id"]
+        assert stale_b_economic_unit_id != shared_economic_unit_id
+
+        for miner_address, p_yes_bps in [("claw1refreshdupa", 6200), ("claw1refreshdupb", 6300)]:
+            reveal_nonce = f"nonce-{miner_address}"
+            commit_hash = forecast_engine.compute_commit_hash(task["task_run_id"], miner_address, p_yes_bps, reveal_nonce)
+            miner = await repo.get_miner(miner_address)
+            await service.commit_submission(
+                task_run_id=task["task_run_id"],
+                miner_address=miner_address,
+                economic_unit_id=miner["economic_unit_id"],
+                request_id=f"commit-{miner_address}",
+                commit_hash=commit_hash,
+                commit_nonce=reveal_nonce,
+                accepted_at=datetime(2026, 4, 10, 9, 30, 2, tzinfo=timezone.utc),
+                ip_address=miner.get("ip_address"),
+                user_agent="shared-agent",
+            )
+
+        for miner_address in ("claw1refreshdupa", "claw1refreshdupb"):
+            await repo.update_miner_cluster_identity(
+                miner_address,
+                economic_unit_id=shared_economic_unit_id,
+                updated_at=datetime(2026, 4, 10, 9, 30, 3, tzinfo=timezone.utc),
+            )
+
+        first_submission = await service.reveal_submission(
+            task_run_id=task["task_run_id"],
+            miner_address="claw1refreshdupa",
+            economic_unit_id=shared_economic_unit_id,
+            request_id="reveal-claw1refreshdupa",
+            p_yes_bps=6200,
+            reveal_nonce="nonce-claw1refreshdupa",
+            accepted_at=datetime(2026, 4, 10, 9, 30, 6, tzinfo=timezone.utc),
+            user_agent="shared-agent",
+        )
+        second_submission = await service.reveal_submission(
+            task_run_id=task["task_run_id"],
+            miner_address="claw1refreshdupb",
+            economic_unit_id=stale_b_economic_unit_id,
+            request_id="reveal-claw1refreshdupb",
+            p_yes_bps=6300,
+            reveal_nonce="nonce-claw1refreshdupb",
+            accepted_at=datetime(2026, 4, 10, 9, 30, 7, tzinfo=timezone.utc),
+            user_agent="shared-agent",
+        )
+
+        cases = await repo.list_risk_cases(state="open")
+        duplicate_cases = [case for case in cases if case["case_type"] == "economic_unit_duplicate"]
+
+        assert second_submission["eligibility_status"] == "audit_only"
+        assert second_submission["economic_unit_id"] == first_submission["economic_unit_id"]
+        assert len(duplicate_cases) == 1
+        assert duplicate_cases[0]["economic_unit_id"] == first_submission["economic_unit_id"]
+        assert sorted(duplicate_cases[0]["evidence_json"]["miner_addresses"]) == [
+            "claw1refreshdupa",
+            "claw1refreshdupb",
+        ]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_missing_fast_tasks_penalizes_selective_participation():
     async def scenario():
         repo = FakeRepository()
@@ -1247,6 +1775,61 @@ def test_missing_fast_tasks_penalizes_selective_participation():
         assert miner["fast_task_opportunities"] == 2
         assert miner["fast_task_misses"] == 1
         assert miner["ops_reliability"] < 1.0
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_reconcile_prewarms_next_fast_bucket_without_exposing_it_active():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(
+            fast_task_seconds=60,
+            fast_task_prewarm_seconds=10,
+            commit_window_seconds=5,
+            reveal_window_seconds=15,
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=StaticTaskProvider([]))
+
+        current = datetime(2026, 4, 10, 9, 0, 55, tzinfo=timezone.utc)
+        await service.reconcile(current)
+
+        current_task = await repo.get_task("tr_fast_202604100900_btcusdt")
+        next_task = await repo.get_task("tr_fast_202604100901_btcusdt")
+        assert current_task is not None
+        assert next_task is not None
+        assert next_task["publish_at"] == "2026-04-10T09:01:00Z"
+        assert next_task["created_at"] == "2026-04-10T09:00:55Z"
+
+        active = await service.get_active_tasks(current)
+        assert "tr_fast_202604100900_btcusdt" not in {item["task_run_id"] for item in active}
+        assert "tr_fast_202604100901_btcusdt" not in {item["task_run_id"] for item in active}
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_active_tasks_exclude_fast_tasks_after_commit_deadline():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(
+            fast_task_seconds=60,
+            fast_task_prewarm_seconds=10,
+            commit_window_seconds=5,
+            reveal_window_seconds=15,
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=StaticTaskProvider([]))
+
+        published_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc)
+        after_commit_close = datetime(2026, 4, 10, 9, 0, 6, tzinfo=timezone.utc)
+
+        await repo.upsert_task(forecast_engine.build_fast_task(published_at, settings, asset="BTCUSDT"))
+
+        active = await service.get_active_tasks(after_commit_close)
+
+        assert "tr_fast_202604100900_btcusdt" not in {item["task_run_id"] for item in active}
 
     import asyncio
 
@@ -1509,6 +2092,7 @@ def test_active_tasks_exclude_resolved_daily_tasks_from_prior_days():
         old_task = forecast_engine.build_daily_anchor_task(yesterday, asset="BTC")
         old_task["state"] = "resolved"
         await repo.upsert_task(old_task)
+        await service.reconcile(today)
 
         active = await service.get_active_tasks(today)
         daily_items = [item for item in active if item["lane"] == "daily_anchor"]
@@ -1524,7 +2108,7 @@ def test_active_tasks_exclude_resolved_daily_tasks_from_prior_days():
 def test_practice_arena_results_do_not_change_multiplier():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings()
+        settings = forecast_engine.ForecastSettings(legacy_arena_apply_enabled=True)
         service = forecast_engine.ForecastMiningService(repo, settings)
 
         await service.register_miner(
@@ -1554,7 +2138,7 @@ def test_practice_arena_results_do_not_change_multiplier():
 def test_arena_multiplier_changes_after_sixteenth_eligible_result():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings()
+        settings = forecast_engine.ForecastSettings(legacy_arena_apply_enabled=True)
         service = forecast_engine.ForecastMiningService(repo, settings)
 
         await service.register_miner(
@@ -1597,7 +2181,7 @@ def test_arena_multiplier_changes_after_sixteenth_eligible_result():
 def test_apply_arena_results_uses_arena_multiplier_writer():
     async def scenario():
         repo = GuardedMinerWriterRepository()
-        settings = forecast_engine.ForecastSettings()
+        settings = forecast_engine.ForecastSettings(legacy_arena_apply_enabled=True)
         service = forecast_engine.ForecastMiningService(repo, settings)
 
         await service.register_miner(
@@ -1617,6 +2201,32 @@ def test_apply_arena_results_uses_arena_multiplier_writer():
             )
 
         assert ("arena_multiplier", "claw1arenawriter") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_apply_arena_results_disabled_by_default():
+    async def scenario():
+        repo = FakeRepository()
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        await service.register_miner(
+            address="claw1arenadisabled",
+            name="arena-disabled",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+
+        with pytest.raises(ValueError, match="legacy_arena_apply_disabled"):
+            await service.apply_arena_results(
+                tournament_id="arena-disabled-1",
+                rated_or_practice="rated",
+                human_only=True,
+                results=[{"miner_id": "claw1arenadisabled", "arena_score": 0.8}],
+                completed_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+            )
 
     import asyncio
 
@@ -1652,6 +2262,50 @@ def test_commit_submission_uses_cluster_identity_and_forecast_participation_writ
 
         assert ("cluster_identity", "claw1writercommit") in repo.writer_calls
         assert ("forecast_participation", "claw1writercommit") in repo.writer_calls
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_commit_submission_skips_cluster_recompute_when_signals_are_unchanged():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        service = forecast_engine.ForecastMiningService(repo, settings)
+
+        await service.register_miner(
+            address="claw1fastpath",
+            name="fast-path",
+            public_key="pubkey-fast-path",
+            miner_version="0.4.0",
+        )
+        task = forecast_engine.build_fast_task(datetime(2026, 4, 10, 9, 0, 1, tzinfo=timezone.utc), settings, asset="BTCUSDT")
+        await repo.upsert_task(task)
+
+        async def _fail_list_miners():  # noqa: ANN202
+            raise AssertionError("list_miners should not be called for unchanged loopback/default signals")
+
+        async def _fail_sync(*args, **kwargs):  # noqa: ANN202, ANN001
+            raise AssertionError("_sync_cluster_risk_cases should not run for unchanged loopback/default signals")
+
+        repo.list_miners = _fail_list_miners  # type: ignore[method-assign]
+        service._sync_cluster_risk_cases = _fail_sync  # type: ignore[method-assign]
+
+        saved = await service.commit_submission(
+            task_run_id=task["task_run_id"],
+            miner_address="claw1fastpath",
+            economic_unit_id="eu:spoofed-client-value",
+            request_id="req-fastpath-commit",
+            commit_hash="hash-fastpath",
+            commit_nonce="nonce-fastpath",
+            accepted_at=datetime(2026, 4, 10, 9, 0, 2, tzinfo=timezone.utc),
+            ip_address="127.0.0.1",
+            user_agent="python-requests/2.31.0",
+        )
+
+        assert saved["miner_address"] == "claw1fastpath"
+        assert saved["economic_unit_id"] == (await repo.get_miner("claw1fastpath"))["economic_unit_id"]
 
     import asyncio
 
@@ -2505,12 +3159,75 @@ def test_mark_anchor_job_anchored_uses_terminal_writer():
 
         service.reconcile = noop_reconcile  # type: ignore[method-assign]
 
-        saved = await service.mark_anchor_job_anchored(anchor_job_id, now=now)
+        saved = await service.mark_anchor_job_anchored(anchor_job_id, now=now, verified=True)
         saved_batch = await repo.get_settlement_batch(batch_id)
 
         assert ("settlement_terminal", batch_id) in repo.writer_calls
         assert saved["state"] == "anchored"
         assert saved_batch["state"] == "anchored"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_mark_anchor_job_anchored_rejects_manual_bypass():
+    async def scenario():
+        repo = FakeRepository()
+        now = datetime(2026, 4, 11, 0, 1, 1, tzinfo=timezone.utc)
+        batch_id = "sb_manual_anchor_disabled"
+        anchor_job_id = "aj_manual_anchor_disabled"
+        await repo.save_settlement_batch(
+            {
+                "id": batch_id,
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "window_start_at": "2026-04-11T00:00:00Z",
+                "window_end_at": "2026-04-11T00:15:00Z",
+                "reward_window_ids": ["rw_manual_anchor_disabled"],
+                "task_run_ids": ["task_manual_anchor_disabled"],
+                "miner_reward_rows": [],
+                "total_reward_amount": 0,
+                "canonical_root": "sha256:" + "a" * 64,
+                "anchor_payload_hash": "sha256:" + "b" * 64,
+                "anchor_payload_json": {"schema_version": "clawchain.anchor_payload.v1"},
+                "anchor_schema_version": "clawchain.anchor_payload.v1",
+                "anchor_job_id": anchor_job_id,
+                "created_at": "2026-04-11T00:00:00Z",
+                "updated_at": "2026-04-11T00:00:00Z",
+            }
+        )
+        await repo.save_anchor_job(
+            {
+                "id": anchor_job_id,
+                "settlement_batch_id": batch_id,
+                "lane": "forecast_15m",
+                "state": "anchor_submitted",
+                "anchor_payload_hash": "sha256:" + "b" * 64,
+                "broadcast_status": None,
+                "broadcast_tx_hash": None,
+                "chain_confirmation_status": None,
+                "last_broadcast_at": None,
+                "failure_reason": None,
+                "submitted_at": "2026-04-11T00:00:01Z",
+                "anchored_at": None,
+                "created_at": "2026-04-11T00:00:01Z",
+                "updated_at": "2026-04-11T00:00:01Z",
+            }
+        )
+        service = forecast_engine.ForecastMiningService(repo, forecast_engine.ForecastSettings())
+
+        async def noop_reconcile(now=None):  # noqa: ANN001
+            return None
+
+        service.reconcile = noop_reconcile  # type: ignore[method-assign]
+
+        try:
+            await service.mark_anchor_job_anchored(anchor_job_id, now=now)
+        except ValueError as exc:
+            assert "use confirm-chain" in str(exc)
+        else:
+            raise AssertionError("manual mark_anchor_job_anchored should be rejected")
 
     import asyncio
 
@@ -3164,6 +3881,54 @@ def test_build_poker_mtt_reward_window_propagates_explicit_policy_bundle_version
     asyncio.run(scenario())
 
 
+def test_merge_reward_component_rows_preserves_sparse_poker_shape():
+    sparse_rows = forecast_engine.merge_reward_component_rows(
+        [
+            {
+                "miner_address": "claw1sparse",
+                "submission_count": 1,
+                "gross_reward_amount": 51,
+            },
+            {
+                "miner_address": "claw1sparse",
+                "submission_count": 2,
+                "gross_reward_amount": 49,
+            },
+        ]
+    )
+    assert sparse_rows == [
+        {
+            "miner_address": "claw1sparse",
+            "submission_count": 3,
+            "gross_reward_amount": 100,
+        }
+    ]
+
+    rich_rows = forecast_engine.merge_reward_component_rows(
+        [
+            {
+                "miner_address": "claw1rich",
+                "submission_count": 1,
+                "fast_direct_score": 120,
+                "slow_direct_score": 0,
+                "base_score": 120,
+                "final_mining_score": 108,
+                "released_reward_amount": 88,
+                "held_reward_amount": 20,
+                "gross_reward_amount": 108,
+                "model_reliability": 0.9,
+                "ops_reliability": 1.0,
+                "arena_multiplier": 1.0,
+                "anti_abuse_discount": 1.0,
+                "quality_envelope": 0.9,
+            }
+        ]
+    )
+    assert rich_rows[0]["quality_envelope"] == 0.9
+    assert rich_rows[0]["gross_reward_amount"] == 108
+    assert rich_rows[0]["released_reward_amount"] == 88
+
+
 def test_retry_anchor_settlement_batch_materializes_poker_mtt_reward_rows():
     async def scenario():
         repo = FakeRepository()
@@ -3775,6 +4540,163 @@ def test_pending_resolution_appears_in_miner_task_history():
     asyncio.run(scenario())
 
 
+def test_read_only_service_methods_do_not_reconcile_implicitly():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        provider = StaticTaskProvider(
+            [{"outcome": 1, "resolution_status": "resolved", "commit_close_ref_price": 70000.5, "end_ref_price": None}]
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=provider)
+
+        await service.register_miner(
+            address="claw1readonlyminer",
+            name="readonly-miner",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        now = datetime(2026, 4, 10, 11, 0, 1, tzinfo=timezone.utc)
+        task = forecast_engine.build_fast_task(now, settings, asset="BTCUSDT")
+        await repo.upsert_task(task)
+        await repo.save_submission(
+            {
+                "id": f"sub:{task['task_run_id']}:claw1readonlyminer",
+                "task_run_id": task["task_run_id"],
+                "miner_address": "claw1readonlyminer",
+                "economic_unit_id": "eu:readonly",
+                "commit_request_id": "req-commit",
+                "reveal_request_id": "req-reveal",
+                "commit_hash": "hash",
+                "commit_nonce": "nonce",
+                "p_yes_bps": 6400,
+                "eligibility_status": "eligible",
+                "state": "revealed",
+                "score": 0.0,
+                "reward_amount": 0,
+                "accepted_commit_at": "2026-04-10T11:00:02Z",
+                "accepted_reveal_at": "2026-04-10T11:00:06Z",
+                "created_at": "2026-04-10T11:00:02Z",
+                "updated_at": "2026-04-10T11:00:06Z",
+            }
+        )
+
+        await service.reconcile(datetime(2026, 4, 10, 11, 1, 5, tzinfo=timezone.utc))
+        reward_window = (await repo.list_reward_windows())[0]
+        reward_window_artifact = (await repo.list_artifacts_for_entity("reward_window", reward_window["id"]))[0]
+
+        async def fail_reconcile(now=None):  # noqa: ANN001
+            raise AssertionError("read method should not call reconcile")
+
+        service.reconcile = fail_reconcile
+
+        active = await service.get_active_tasks(datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc))
+        detail = await service.get_task_detail(task["task_run_id"], datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc))
+        status = await service.get_miner_status("claw1readonlyminer", datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc))
+        submissions = await service.get_miner_submission_history(
+            "claw1readonlyminer",
+            limit=10,
+            now=datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc),
+        )
+        holds = await service.get_miner_reward_hold_history(
+            "claw1readonlyminer",
+            limit=10,
+            now=datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc),
+        )
+        windows = await service.get_miner_reward_window_history(
+            "claw1readonlyminer",
+            limit=10,
+            now=datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc),
+        )
+        task_history = await service.get_miner_task_history(
+            "claw1readonlyminer",
+            limit=10,
+            now=datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc),
+        )
+        proof = await service.get_replay_proof(
+            "reward_window",
+            reward_window["id"],
+            now=datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc),
+        )
+        artifact = await service.get_artifact(
+            reward_window_artifact["id"],
+            now=datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc),
+        )
+        anchor_jobs = await service.list_anchor_jobs(now=datetime(2026, 4, 10, 11, 1, 6, tzinfo=timezone.utc))
+
+        assert active
+        assert detail["task_run_id"] == task["task_run_id"]
+        assert status["settled_tasks"] == 1
+        assert submissions[0]["task_run_id"] == task["task_run_id"]
+        assert holds[0]["task_run_id"] == task["task_run_id"]
+        assert windows[0]["id"] == reward_window["id"]
+        assert task_history[0]["task_run_id"] == task["task_run_id"]
+        assert proof["entity_id"] == reward_window["id"]
+        assert artifact["id"] == reward_window_artifact["id"]
+        assert anchor_jobs == []
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_get_task_detail_hides_prewarmed_fast_task_until_publish_at():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(
+            fast_task_seconds=60,
+            fast_task_prewarm_seconds=10,
+            commit_window_seconds=5,
+            reveal_window_seconds=15,
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=StaticTaskProvider([]))
+
+        current = datetime(2026, 4, 10, 11, 0, 55, tzinfo=timezone.utc)
+        await service.reconcile(current)
+
+        with pytest.raises(ValueError, match="task not found"):
+            await service.get_task_detail("tr_fast_202604101101_btcusdt", current)
+
+        detail = await service.get_task_detail(
+            "tr_fast_202604101101_btcusdt",
+            datetime(2026, 4, 10, 11, 1, 0, tzinfo=timezone.utc),
+        )
+        assert detail["publish_at"] == "2026-04-10T11:01:00Z"
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_get_upcoming_fast_task_details_exposes_prewarmed_task_before_publish():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(
+            fast_task_seconds=60,
+            fast_task_prewarm_seconds=10,
+            commit_window_seconds=5,
+            reveal_window_seconds=15,
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=StaticTaskProvider([]))
+
+        current = datetime(2026, 4, 10, 11, 0, 55, tzinfo=timezone.utc)
+        await service.reconcile(current)
+
+        upcoming = await service.get_upcoming_fast_task_details(now=current, limit=5)
+
+        assert len(upcoming) == 2
+        assert {item["task_run_id"] for item in upcoming} == {
+            "tr_fast_202604101101_btcusdt",
+            "tr_fast_202604101101_ethusdt",
+        }
+        assert all(item["availability_state"] == "prewarmed" for item in upcoming)
+        assert all(item["commit_open"] is False for item in upcoming)
+        assert all(item["seconds_until_publish"] == 5.0 for item in upcoming)
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_reward_window_rebuild_replay_proof_and_anchor_payload():
     async def scenario():
         repo = FakeRepository()
@@ -3789,6 +4711,20 @@ def test_reward_window_rebuild_replay_proof_and_anchor_payload():
             name="proof-miner",
             public_key="pubkey",
             miner_version="0.4.0",
+        )
+        miner = await repo.get_miner("claw1proofminer")
+        assert miner is not None
+        await repo.save_risk_case(
+            {
+                "id": "rc:proof-medium",
+                "economic_unit_id": miner["economic_unit_id"],
+                "case_type": "cluster_linked",
+                "severity": "medium",
+                "state": "open",
+                "summary": "proof medium severity case",
+                "created_at": "2026-04-10T11:00:00Z",
+                "updated_at": "2026-04-10T11:00:00Z",
+            }
         )
         now = datetime(2026, 4, 10, 11, 0, 1, tzinfo=timezone.utc)
         task = forecast_engine.build_fast_task(now, settings, asset="BTCUSDT")
@@ -3836,10 +4772,34 @@ def test_reward_window_rebuild_replay_proof_and_anchor_payload():
         assert proof["replay_proof_hash"].startswith("sha256:")
         assert proof["artifact_refs"]
         assert proof["policy_bundle_version"] == rebuilt["policy_bundle_version"]
-        assert artifacts[0]["kind"] == "reward_window_membership"
-        assert artifacts[0]["payload_hash"] == rebuilt["canonical_root"]
-        assert proof["artifact_refs"][0]["payload_hash"] == rebuilt["canonical_root"]
+        membership_artifact = next(
+            artifact
+            for artifact in artifacts
+            if artifact["kind"] == "reward_window_membership"
+        )
+        membership_ref = next(
+            ref
+            for ref in proof["artifact_refs"]
+            if ref["kind"] == "reward_window_membership"
+        )
+        assert membership_artifact["payload_hash"] == rebuilt["canonical_root"]
+        assert membership_ref["payload_hash"] == rebuilt["canonical_root"]
         assert proof["membership"]["task_run_ids"] == [task["task_run_id"]]
+        replay_artifact = next(
+            artifact
+            for artifact in artifacts
+            if artifact["kind"] == "reward_window_replay_bundle"
+        )
+        reward_composition = proof["reward_composition"]
+        assert reward_composition["reward_component_rows_root"] == forecast_engine._hash_sequence(rebuilt["miner_reward_rows"])
+        assert reward_composition["reward_component_rows_count"] == 1
+        assert reward_composition["anti_abuse_input_rows_root"] == replay_artifact["payload_json"]["anti_abuse_input_rows_root"]
+        assert reward_composition["anti_abuse_input_rows_count"] == 1
+        assert reward_composition["overlay_merge_state"]["daily_snapshot_merge"]["state"] == "deferred"
+        assert reward_composition["overlay_merge_state"]["arena_snapshot_merge"]["state"] == "deferred"
+        assert replay_artifact["payload_json"]["anti_abuse_input_rows"][0]["open_risk_case_ids"] == ["rc:proof-medium"]
+        assert replay_artifact["payload_json"]["anti_abuse_input_rows"][0]["open_risk_case_types"] == ["cluster_linked"]
+        assert replay_artifact["payload_json"]["anti_abuse_input_rows"][0]["anti_abuse_discount"] == 0.25
         assert anchored["id"] == batch_id
         assert anchored["state"] == "anchor_ready"
         assert anchored["policy_bundle_version"] == rebuilt["policy_bundle_version"]
@@ -4247,7 +5207,11 @@ def test_anchor_job_progression_to_anchored():
         batch = (await repo.list_settlement_batches())[0]
         ready = await service.retry_anchor_settlement_batch(batch["id"], now=datetime(2026, 4, 10, 12, 1, 6, tzinfo=timezone.utc))
         submitted = await service.submit_anchor_job(batch["id"], now=datetime(2026, 4, 10, 12, 1, 7, tzinfo=timezone.utc))
-        anchored = await service.mark_anchor_job_anchored(submitted["id"], now=datetime(2026, 4, 10, 12, 1, 8, tzinfo=timezone.utc))
+        anchored = await service.mark_anchor_job_anchored(
+            submitted["id"],
+            now=datetime(2026, 4, 10, 12, 1, 8, tzinfo=timezone.utc),
+            verified=True,
+        )
 
         saved_batch = await repo.get_settlement_batch(batch["id"])
         jobs = await repo.list_anchor_jobs()
@@ -4674,6 +5638,68 @@ def test_build_chain_tx_plan_from_anchor_job():
     asyncio.run(scenario())
 
 
+def test_build_chain_tx_plan_does_not_reconcile_implicitly():
+    async def scenario():
+        repo = FakeRepository()
+        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        provider = StaticTaskProvider(
+            [{"outcome": 1, "resolution_status": "resolved", "commit_close_ref_price": 70000.5, "end_ref_price": None}]
+        )
+        service = forecast_engine.ForecastMiningService(repo, settings, task_provider=provider)
+
+        await service.register_miner(
+            address="claw1chainplanreadonly",
+            name="chain-plan-readonly",
+            public_key="pubkey",
+            miner_version="0.4.0",
+        )
+        now = datetime(2026, 4, 10, 14, 0, 1, tzinfo=timezone.utc)
+        task = forecast_engine.build_fast_task(now, settings, asset="BTCUSDT")
+        await repo.upsert_task(task)
+        await repo.save_submission(
+            {
+                "id": f"sub:{task['task_run_id']}:claw1chainplanreadonly",
+                "task_run_id": task["task_run_id"],
+                "miner_address": "claw1chainplanreadonly",
+                "economic_unit_id": "eu:chainplanreadonly",
+                "commit_request_id": "req-commit",
+                "reveal_request_id": "req-reveal",
+                "commit_hash": "hash",
+                "commit_nonce": "nonce",
+                "p_yes_bps": 6400,
+                "eligibility_status": "eligible",
+                "state": "revealed",
+                "score": 0.0,
+                "reward_amount": 0,
+                "accepted_commit_at": "2026-04-10T14:00:02Z",
+                "accepted_reveal_at": "2026-04-10T14:00:06Z",
+                "created_at": "2026-04-10T14:00:02Z",
+                "updated_at": "2026-04-10T14:00:06Z",
+            }
+        )
+
+        await service.reconcile(datetime(2026, 4, 10, 14, 1, 5, tzinfo=timezone.utc))
+        batch = (await repo.list_settlement_batches())[0]
+        await service.retry_anchor_settlement_batch(batch["id"], now=datetime(2026, 4, 10, 14, 1, 6, tzinfo=timezone.utc))
+        submitted = await service.submit_anchor_job(batch["id"], now=datetime(2026, 4, 10, 14, 1, 7, tzinfo=timezone.utc))
+
+        async def fail_reconcile(now=None):  # noqa: ANN001
+            raise AssertionError("build_chain_tx_plan should not call reconcile")
+
+        service.reconcile = fail_reconcile
+        tx_plan = await service.build_chain_tx_plan(
+            submitted["anchor_job_id"],
+            now=datetime(2026, 4, 10, 14, 1, 8, tzinfo=timezone.utc),
+        )
+
+        assert tx_plan["anchor_job_id"] == submitted["anchor_job_id"]
+        assert tx_plan["settlement_batch_id"] == batch["id"]
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
 def test_broadcast_chain_tx_typed_records_tx_hash():
     async def scenario():
         repo = FakeRepository()
@@ -4855,7 +5881,12 @@ def test_retry_failed_anchor_job_broadcast_typed_creates_new_anchor_job():
 def test_miner_status_includes_score_explanation_and_reward_timeline():
     async def scenario():
         repo = FakeRepository()
-        settings = forecast_engine.ForecastSettings(fast_task_seconds=60, commit_window_seconds=5, reveal_window_seconds=10)
+        settings = forecast_engine.ForecastSettings(
+            fast_task_seconds=60,
+            commit_window_seconds=5,
+            reveal_window_seconds=10,
+            legacy_arena_apply_enabled=True,
+        )
         provider = StaticTaskProvider(
             [{"outcome": 1, "resolution_status": "resolved", "commit_close_ref_price": 70000.5, "end_ref_price": 70120.0}],
             daily_resolutions=[
