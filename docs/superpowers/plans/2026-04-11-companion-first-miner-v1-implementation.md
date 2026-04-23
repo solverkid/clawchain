@@ -2,18 +2,112 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a no-Electron V1 companion shell so ClawChain miners experience one persistent buddy across runtime, command surfaces, and Control UI while the existing forecast-first protocol continues to drive rewards.
+**Goal:** Ship a durable V1 IA split: ClawChain miner client owns `Companion Home / Activities / History / Network`, operator console owns risk and settlement tooling, and stock OpenClaw surfaces host the shell.
 
-**Architecture:** Keep the current forecast-first mining core, but add a companion state layer above it. Persist companion identity, mood, preferences, and latest activity outside OpenClaw session transcripts; extend the mining-service status envelope to expose companion-facing fields; then reshape the skill CLI and website surfaces around `Companion Home`, `Activities`, and `History` instead of raw lane/operator language.
+**Architecture:** Keep the current forecast-first mining core, but stop pretending the companion shell already exists. First align docs and implementation to the real service-led miner loop, then add companion-facing read models above that truth. Browser surfaces in `website/` are repo-local reference implementations; they are not stock OpenClaw itself.
 
 **Tech Stack:** Python (`FastAPI`, existing mining-service), Python CLI scripts in `skill/`, Next.js app-router UI in `website/`, Node `node:test` for website view-model tests, `pytest` for new Python tests.
 
+## Authority Inputs
+
+- Stock OpenClaw capability boundary: official OpenClaw docs and latest release only
+- Product truth: `docs/PRODUCT_SPEC.md`
+- Protocol truth: `docs/MINING_DESIGN.md`
+- Current runtime truth: `docs/IMPLEMENTATION_STATUS_2026_04_10.md`
+
+## Runtime Truth Check
+
+Current truth before any companion-shell work:
+
+- `forecast_15m` is the only full public reward-bearing lane
+- `daily_anchor` is calibration-only scaffolding
+- `arena_multiplier` is a read-only shared-state modifier
+- current miner entry path is `setup.py -> mine.py -> status.py`
+- there is no durable companion state store yet
+- there is no shipped `Companion Home / Activities / History`
+- `/risk` is operator-oriented and should not stay in miner primary navigation
+- stock OpenClaw `/status` is not the same contract as a future ClawChain companion home command
+
+## Known Gaps / Launch Restrictions
+
+- `daily_anchor` still has an idempotency gap on repeated already-committed / already-revealed paths; until that is fixed or explicitly quarantined, do not describe the current loop as a fully hardened always-on companion daemon
+- companion state source of truth is still target-state, not current-state
+- deterministic `/pause` / `/resume` / `/brief` control must not be documented as shipped before command registration and routing exist
+
 ## Architecture Decision: Companion State Source Of Truth
 
-- **Source of truth:** `mining-service` owns cross-surface companion state that must stay consistent across Menu Bar, TUI, commands, and Control UI.
-- **Local cache:** `skill/` keeps a local companion state cache only for bootstrap, offline CLI readability, and transient runtime updates before sync.
-- **Sync contract:** `setup.py` creates local state, registers the companion, and pushes the initial companion profile to `mining-service`; `mine.py` refreshes `current_work`, `current_activity`, `mood`, and `daily_brief_status` back to the service; `status.py` reads service state first and falls back to local cache only when the service is unavailable.
-- **Guardrail:** do not let website pages read a local-only companion object. All browser surfaces must consume the service envelope.
+- **Current truth:** `mining-service` owns miner, reward, settlement, and read-model truth today. `skill/` owns wallet/config/local log only.
+- **Target-state source of truth:** if companion persistence is introduced, `mining-service` should own cross-surface companion state.
+- **Local cache:** `skill/` may keep a local cache for bootstrap, offline readability, and transient runtime updates before sync, but it cannot become the browser truth.
+- **Guardrail:** do not let website pages read a local-only companion object. All browser miner surfaces must consume the service envelope.
+
+## Companion Contract To Implement
+
+### Durable service envelope
+
+Prefer a stable service envelope with these sub-documents:
+
+- `CompanionProfile`
+- `CompanionPreferences`
+- `CompanionRuntimeSnapshot`
+- `CompanionDailyBrief`
+- `CompanionActivityView[]`
+- `CompanionEventLog[]`
+- `CompanionSyncMeta`
+
+The first V1 slice does not need every field fully populated, but it should not invent a second incompatible shape later.
+
+### Surface ownership
+
+- cross-platform default miner entry: `TUI -> commands -> Control UI / WebChat`
+- macOS companion glance surface: `menu bar`
+- browser miner IA: `Companion Home / Activities / History / Network`
+- operator-only surfaces: `Risk / Abuse Review / Settlement Ops / Arena Ops`
+- Linux / Windows native companion shell: out of scope for V1
+
+### Command contract
+
+Canonical target-state commands:
+
+- `/buddy`
+- `/brief`
+- `/activities`
+- `/why`
+- `/history`
+- `/pause`
+- `/resume`
+- `/settings`
+
+Compatibility aliases:
+
+- `/checkin -> /brief`
+- `/wake -> /resume`
+- `/status -> /buddy` only if ClawChain owns a non-conflicting command namespace
+
+Transport rule:
+
+- these are non-stock OpenClaw extension commands
+- choose one transport before implementation: plugin command registration or skill command registration with `command-dispatch: tool`
+- do not treat plain script entrypoints as equivalent to shipped Gateway commands
+
+## Phase 0 / Prerequisite Gates
+
+Before building more companion-shell surface area:
+
+1. **Doc truth alignment**
+   - rewrite `SETUP.md`
+   - rewrite `skill/SKILL.md`
+   - mark current-state vs target-state in `PRODUCT_SPEC.md` / `MINING_DESIGN.md`
+2. **daily_anchor idempotency decision**
+   - either fix the already-committed / already-revealed path
+   - or mark it as a launch-blocking known gap
+3. **IA split decision**
+   - miner client vs operator console vs stock OpenClaw host surfaces must be explicit
+4. **Command transport decision**
+   - choose plugin command registration vs skill command + `command-dispatch: tool`
+   - verify on gateway-backed TUI plus one browser host surface
+5. **UI truth cleanup**
+   - fix the current dashboard field-label mismatch before promoting `/dashboard` toward `Companion Home`
 
 ---
 
@@ -51,7 +145,7 @@
 - Create: `skill/tests/test_status_cli.py`
   - Verify CLI output for companion-first terminology and missing-state behavior.
 
-### Website / Control UI-aligned surfaces
+### Miner client browser prototypes + operator console split
 
 - Modify: `website/src/lib/dashboard-data.js`
   - Turn the dashboard view-model into a companion-home view-model.
@@ -74,24 +168,31 @@
 - Modify: `website/src/app/page.tsx`
   - Replace landing-page-first framing with companion-first entry copy and current install guidance.
 - Modify: `website/src/app/layout.tsx`
-  - Add top-level navigation for `Companion Home`, `Activities`, `History`, `Network`, `Risk`.
+  - Add top-level navigation for `Companion Home`, `Activities`, `History`, `Network`.
+- Modify: `website/src/app/risk/page.tsx`
+  - Move the risk queue out of miner-primary IA or relocate it under an operator namespace such as `/ops/risk`.
+- Modify: `website/src/lib/risk-data.js`
+  - Treat risk data as operator-console data, not miner-home data.
 
 ### Docs / integration cleanup
 
 - Modify: `SETUP.md`
-  - Replace hardcoded manual copy assumptions with current OpenClaw `onboard` / `skills install` guidance.
+  - Replace challenge-era copy and hardcoded workspace assumptions with the current supported repo-local path plus official OpenClaw bootstrap guidance.
 - Modify: `docs/PRODUCT_SPEC_EN.md`
-  - Align English product doc with companion-first shell and current OpenClaw surfaces.
+  - Add deprecation / authority notes or fully align the English summary with the current forecast-first companion direction.
 - Modify: `docs/PRODUCT_SPEC.md`
-  - Keep aligned with shipped implementation details if implementation deviates in small ways.
+  - Split current runtime truth from target-state companion UX and remove fake current commands/surfaces.
 - Modify: `docs/MINING_DESIGN.md`
-  - Keep aligned with any API/state naming finalized during implementation.
+  - Make public miner contract vs operator integration contract explicit.
+- Modify: `docs/IMPLEMENTATION_STATUS_2026_04_10.md`
+  - Mark it as current runtime truth and separate public miner path from operator integration paths.
 
 ### Boundaries
 
 - Do **not** start in `/miner/cmd/clawminer`; treat the old Go miner as legacy.
 - Do **not** build Electron in this plan.
 - Do **not** rename protocol `lane` objects inside backend scoring logic; add companion/activity aliases at the surface boundary only.
+- Do **not** keep `Risk` in miner-primary navigation.
 
 ---
 
@@ -214,9 +315,12 @@ git commit -m "feat: persist local companion state"
 - Modify: `skill/SKILL.md`
 - Create: `skill/scripts/companion.py`
 - Create: `skill/scripts/activities.py`
-- Create: `skill/scripts/checkin.py`
+- Create: `skill/scripts/brief.py`
+- Create: `skill/scripts/why.py`
+- Create: `skill/scripts/history.py`
 - Create: `skill/scripts/pause.py`
 - Create: `skill/scripts/resume.py`
+- Create: `skill/scripts/settings.py`
 - Create: `skill/tests/test_command_scripts.py`
 
 - [ ] **Step 1: Write failing tests for companion command scripts**
@@ -227,8 +331,8 @@ def test_companion_command_renders_current_work(capsys):
     out = capsys.readouterr().out
     assert "Current work" in out
 
-def test_checkin_command_updates_daily_brief_status():
-    result = run_checkin(...)
+def test_brief_command_updates_daily_brief_status():
+    result = run_brief(...)
     assert result["daily_brief_status"] == "done"
 ```
 
@@ -246,14 +350,24 @@ if __name__ == "__main__":
 ```
 
 Update `skill/SKILL.md` so the documented entry points expose companion-centered verbs and note that deterministic control should later be routed through plugin/tool-dispatch if required at launch.
+Do not mark them as real Gateway commands until the chosen transport is registered and tested.
 
-Make the aliasing explicit in the skill contract:
+Make the command ownership explicit in the skill contract:
 
 - `/buddy` -> `skill/scripts/companion.py`
 - `/activities` -> `skill/scripts/activities.py`
-- `/checkin` -> `skill/scripts/checkin.py`
+- `/brief` -> `skill/scripts/brief.py`
+- `/why` -> `skill/scripts/why.py`
+- `/history` -> `skill/scripts/history.py`
 - `/pause` -> `skill/scripts/pause.py`
-- `/wake` or `/resume` -> `skill/scripts/resume.py`
+- `/resume` -> `skill/scripts/resume.py`
+- `/settings` -> `skill/scripts/settings.py`
+
+Compatibility aliases after registration rules are settled:
+
+- `/checkin -> /brief`
+- `/wake -> /resume`
+- do not claim `/status -> /buddy` unless the stock OpenClaw `/status` conflict is resolved
 
 - [ ] **Step 4: Re-run the command-script tests**
 
@@ -263,7 +377,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skill/SKILL.md skill/scripts/companion.py skill/scripts/activities.py skill/scripts/checkin.py skill/scripts/pause.py skill/scripts/resume.py skill/tests/test_command_scripts.py
+git add skill/SKILL.md skill/scripts/companion.py skill/scripts/activities.py skill/scripts/brief.py skill/scripts/why.py skill/scripts/history.py skill/scripts/pause.py skill/scripts/resume.py skill/scripts/settings.py skill/tests/test_command_scripts.py
 git commit -m "feat: add companion command entrypoints"
 ```
 
@@ -444,3 +558,4 @@ git commit -m "docs: align companion shell with openclaw surfaces"
 - Keep protocol naming (`lane`, `baseline_q`, `reward_window`) inside backend/scoring internals.
 - Translate to `activity`, `current work`, `daily brief`, and `buddy` only at the surface boundary.
 - If V1 launch requires deterministic `/pause` and `/resume`, schedule a follow-up plugin task immediately after Task 5 instead of trying to fake it with plain skills.
+- Verification for Task 3 must exercise the chosen command transport on gateway-backed surfaces, not only local script execution.

@@ -1,131 +1,154 @@
 ---
 name: clawchain-miner
-description: "ClawChain auto-mining — let your OpenClaw agent connect to ClawChain testnet during idle time, claim AI challenge tasks, solve with LLM, submit answers, and earn $CLAW rewards. Triggers: cron (every 10 min), or user says \"mine\"/\"mining\"/\"clawchain status\"/\"start mining\"."
+description: "ClawChain forecast-first miner runtime wrapper. Use it to bootstrap the current repo path with `setup.py`, run the mining loop with `mine.py`, and inspect service-backed miner status with `status.py`. This skill does not by itself provide a stock OpenClaw companion UI, menu bar app, or built-in `/buddy` command."
 ---
 
 # ClawChain Miner
 
-**Automatically mine $CLAW with your idle AI agent.**
+> **Authority:** This file is a thin wrapper around the current repo runtime path in `skill/scripts/setup.py`, `skill/scripts/mine.py`, and `skill/scripts/status.py`.
+>
+> **Not authoritative:** This file does not define protocol truth, token economics, or shipped companion surfaces. For current runtime truth, use [`docs/IMPLEMENTATION_STATUS_2026_04_10.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md). For protocol and settlement truth, use [`docs/MINING_DESIGN.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md).
 
-## Prerequisites
+## What This Skill Is
 
-- **Local testnet node**: Current version requires a local ClawChain testnet node (public testnet endpoint coming soon)
-- **LLM API Key**: At least one — `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY` (some challenges can be solved locally without LLM)
-- **Python 3.10+** with `requests` library
+- A wrapper for the current forecast-first miner scripts
+- A repo-local integration path for OpenClaw users
+- A way to bootstrap wallet/config state, run the mining loop, and inspect status
 
-## Core Parameters
+## What This Skill Is Not
 
-- **Epoch**: 100 blocks = 10 minutes (@6s block time)
-- **Miner pool per epoch**: 50 CLAW (100% Fair Launch — all to miners)
-- **Validators**: Earn from transaction fees (after Task Marketplace launch)
-- **Daily miner pool**: 7,200 CLAW (50 × 144 epochs/day)
-- **Halving cycle**: 210,000 epochs ≈ 4 years
-- **Challenge validity**: 200 blocks after creation (~20 minutes)
+- Not a stock OpenClaw companion product layer
+- Not proof that `Companion Home`, `Activities`, `History`, or `/buddy` already ship
+- Not a challenge-era micro-task miner
+- Not a standalone published ClawHub install contract
 
-## First-Time Setup
+## Current Runtime Truth
 
-1. Run `python3 scripts/setup.py` — auto-generates wallet (obfuscated key, 600 permissions), registers miner
-2. Ensure environment has `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY` (at least one; optional for local-only mining)
-3. Optional: Edit `scripts/config.json` to adjust `rpc_url`, `solver_mode`, LLM config, etc.
-4. Run `python3 scripts/doctor.py` to verify your setup
+Today the active miner path is:
 
-### Wallet Security
-- Wallet encryption requires the `cryptography` package (`pip install cryptography`). Without it, the wallet is stored with basic obfuscation only. For production use, always install `cryptography` and set a passphrase.
-- When `cryptography` is installed: PBKDF2 + Fernet encryption at rest with 600 file permissions.
-- Without `cryptography`: base64 obfuscation only — **not real encryption**.
-- Passphrase via env var: `export CLAWCHAIN_WALLET_PASSPHRASE=<passphrase>`
-- Override private key via env var: `export CLAWCHAIN_PRIVATE_KEY=<hex>`
-- Migrate legacy wallets: `python3 scripts/setup.py --migrate-wallet`
-- **⚠️ This is a mining/test wallet. Do not store significant value.**
+- `forecast_15m` as the only full reward-bearing public lane
+- `daily_anchor` as calibration-only scaffolding
+- externally ingested `arena_multiplier` as a read-only modifier
+- `mining-service` + Postgres as the authoritative service ledger
+- `setup.py`, `mine.py`, and `status.py` as the current local entry points
 
-### Solver Mode (`solver_mode` in config.json)
-- `auto` (default): Local solver first, LLM fallback
-- `local_only`: Local only, skip LLM challenges
-- `llm`: Always use LLM
+The current runtime is **service-led**, not chain-led.
 
-> In `auto`/`llm` modes, challenge prompts are sent to your LLM provider.
+## Requirements
 
-## Execution Flow (cron or manual)
+- Python 3.10+
+- `requests`
+- `cryptography` recommended for encrypted wallet storage
+- A reachable ClawChain `mining-service` endpoint
+- Optional: Codex CLI if you want `forecast_mode=codex_v1`
 
-1. Run `python3 scripts/mine.py`
-2. The script automatically:
-   - Checks miner registration (auto-registers if needed)
-   - Queries pending on-chain challenges (`GET /clawchain/challenges/pending`)
-   - Solves by type: local compute first (math/sentiment/classification/translation), LLM fallback
-   - Submits answers to chain (DEV mode: direct submit; supports commit-reveal two-phase)
-   - Logs results to `data/mining_log.json`
-3. Exits silently when no challenges are available
+Notes:
 
-## Challenge Types
+- No local ClawChain testnet node is required for the current forecast-first miner path.
+- No LLM API key is required for the default `heuristic_v1` path.
 
-| Type | Description | Solver | Tier |
-|------|-------------|--------|------|
-| math | Math computation | ✅ Local eval | T1 |
-| sentiment | Sentiment analysis | ✅ Local keywords → LLM | T2 |
-| classification | Text classification | ✅ Local keywords → LLM | T2 |
-| translation | EN↔ZH translation | ✅ Local dictionary → LLM | T3 |
-| format_convert | Format conversion | ✅ Local processing | T1 |
-| text_summary | Text summarization | LLM | T3 |
-| entity_extraction | Entity extraction | LLM | T2 |
-| logic | Logical reasoning | LLM | T1 |
+## Current Runtime Entry Path
 
-**LLM auto-detection**: Checks `OPENAI_API_KEY` → `GEMINI_API_KEY` → `ANTHROPIC_API_KEY` in order.
+1. Run `python3 scripts/setup.py`
+   - generate or load a local wallet
+   - register the miner against the service
+   - persist `miner_address`, `forecast_mode`, and runtime config
+2. Run `python3 scripts/mine.py`
+   - fetch active tasks from the mining service
+   - prioritize active `daily_anchor`
+   - then process capped `forecast_15m` tasks
+   - commit, reveal, and append local mining logs
+3. Run `python3 scripts/status.py`
+   - inspect service-backed miner status
+   - inspect released/held rewards, latest settlement snapshot, and local reveal logs
 
-## Check Status
+Path note:
 
-```bash
-python3 scripts/status.py          # Miner status
-python3 scripts/status.py --chain  # Including chain stats
-python3 scripts/status.py --json   # JSON output
-```
+- inside the mounted skill directory the files appear as `scripts/...`
+- in the repo root the same files are `skill/scripts/...`
 
-## Cron Setup
+## Effective Config Fields
 
-```bash
-openclaw cron add \
-  --name "clawchain-auto-mine" \
-  --schedule "*/10 * * * *" \
-  --message "Read skills/clawchain-miner/SKILL.md and follow the Execution Flow."
-```
+Current effective fields in `scripts/config.json` include:
 
-## Testnet Node
+- `rpc_url`
+- `miner_name`
+- `wallet_path`
+- `forecast_mode`
+- `codex_binary`
+- `codex_model`
+- `codex_timeout_seconds`
+- `request_timeout_seconds`
+- `min_commit_time_remaining_seconds`
+- `parallel_tasks`
+- `max_tasks_per_run`
+- `miner_address`
 
-Current testnet runs on `localhost:1317`. To run your own node:
+Some legacy-looking fields such as `auto_mine` and `log_dir` may still exist in the file, but they are not the main source of truth for companion UX or a durable control plane.
+
+## Current Commands
 
 ```bash
-cd /path/to/clawchain
-export CHAIN_HOME=$HOME/.clawchain-testnet
-export CLAWCHAIN_DEV=1
-
-# Initialize (first time)
-./clawchaind init validator1 --chain-id clawchain-testnet-1 --home "$CHAIN_HOME"
-sed -i '' 's/"stake"/"uclaw"/g' "$CHAIN_HOME/config/genesis.json"
-# ... (see project README for full steps)
-
-# Start
-CLAWCHAIN_DEV=1 ./clawchaind start --home "$CHAIN_HOME"
+python3 scripts/setup.py
+python3 scripts/mine.py
+python3 scripts/status.py
+python3 scripts/doctor.py
 ```
 
-> **Public testnet**: Coming soon. Once live, `config.json`'s `rpc_url` will be updated to the public endpoint.
+`status.py` is the current supported status entry point. Do not document `status.py --chain` or challenge-era routes; those are stale.
 
-## Notes
+## Optional Cron Wrapper
 
-- DEV mode: single miner can settle challenges (production requires 3 independent miners)
-- Reputation thresholds: T2 ≥ 600, T3 ≥ 800
-- 10% of challenges are Spot Checks — wrong answer docks reputation by -50
-- New miners: 50% rewards for first 100 epochs (cool-start period)
-- First 1,000 miners get 3× early bird multiplier
-- Submissions are HMAC-authenticated (auth_secret generated during setup)
-- Staking is enforced at registration when miner count exceeds thresholds
-- Faucet is dev-only (disabled in production)
+`openclaw cron` is only an optional scheduler wrapper around the current script flow. It does **not** create a persistent companion runtime by itself.
 
----
+If you use cron, point it at the documented script entry path and treat it as a wrapper around `mine.py`, not as proof that ClawChain already has a full buddy-native control plane.
 
-## 中文简要说明
+## OpenClaw Integration Boundary
 
-ClawChain 自动挖矿 Skill。让 OpenClaw agent 在空闲时连接 ClawChain 测试网，领取 AI 挑战任务，用 LLM 解题，提交答案，赚取 $CLAW 奖励。
+OpenClaw provides the host platform:
 
-- 首次运行: `python3 scripts/setup.py`
-- 开始挖矿: `python3 scripts/mine.py`
-- 查看状态: `python3 scripts/status.py`
-- Cron 定时: 每 10 分钟自动执行
+- Gateway
+- TUI
+- Control UI / WebChat
+- skills / plugins / slash-command infrastructure
+- cron / heartbeat / background-task primitives
+
+ClawChain still has to define and implement its own custom miner surfaces:
+
+- `Companion Home`
+- `Activities`
+- `History`
+- deterministic companion control verbs such as `/buddy`, `/pause`, `/resume`
+
+Those are target surfaces, not stock OpenClaw defaults today.
+
+`doctor.py` remains a pre-flight helper. It does not define companion command availability, browser IA, or product-contract truth.
+
+## Known Gaps
+
+- The current repo does not yet ship a durable companion state store
+- The current repo does not yet ship `Companion Home`, `Activities`, or `History`
+- The current miner loop still has a `daily_anchor` idempotency gap on repeated already-submitted / already-revealed paths; do not describe the current loop as a fully hardened always-on daemon until that gap is closed
+
+## 中文说明
+
+这是当前 ClawChain forecast-first 矿工路径的 skill 包装层，不是旧 challenge miner，也不是已经完成的 companion 产品层。
+
+当前建议的使用方式：
+
+1. `python3 scripts/setup.py`
+2. `python3 scripts/mine.py`
+3. `python3 scripts/status.py`
+
+当前系统真实结构是：
+
+- `forecast_15m` 公开主赛道
+- `daily_anchor` 校准赛道
+- `arena_multiplier` 外部写回修正因子
+- `mining-service + Postgres` 服务化结算
+
+如果需要完整产品/协议文档，请优先看：
+
+- [`docs/IMPLEMENTATION_STATUS_2026_04_10.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md)
+- [`docs/PRODUCT_SPEC.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/PRODUCT_SPEC.md)
+- [`docs/MINING_DESIGN.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md)

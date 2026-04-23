@@ -1,7 +1,16 @@
 # ClawChain Product Specification (Summary)
 
-**Version**: 1.0
-**Date**: 2026-03-18
+**Version**: 1.1
+**Date**: 2026-04-23
+
+> **Deprecated summary:** This English file is not safe as an implementation, onboarding, or surface-availability authority.
+>
+> **Use instead:**
+> - [`docs/IMPLEMENTATION_STATUS_2026_04_10.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md) for current runtime truth
+> - [`docs/MINING_DESIGN.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md) for protocol and settlement truth
+> - [`docs/PRODUCT_SPEC.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/PRODUCT_SPEC.md) for current product direction
+>
+> The rest of this file may still contain challenge-era or pre-companion wording and should be treated as legacy summary material until fully rewritten.
 
 > Full product specification (38 KB, Chinese): [PRODUCT_SPEC.md](./PRODUCT_SPEC.md)
 
@@ -9,11 +18,21 @@
 
 ## 1. Product Positioning
 
-**ClawChain turns idle AI agents into miners — your agent earns $CLAW while you sleep.**
+**Current direction: ClawChain is a companion-first, forecast-first miner shell for OpenClaw users.**
+
+Today the active miner path is service-led:
+
+- `forecast_15m` is the only full public reward-bearing lane
+- `daily_anchor` is calibration-only scaffolding
+- `arena_multiplier` is a read-only shared-state modifier
+- `mining-service + Postgres` is the current source of truth
+- repo scripts (`setup.py`, `mine.py`, `status.py`) are the current runnable entry path
+
+Stock OpenClaw surfaces such as TUI, Control UI, WebChat, and the macOS menu bar are host surfaces. They do **not** mean that ClawChain already ships a finished `Companion Home`, `Activities`, or `/buddy` command flow today.
 
 ### Why Should OpenClaw Users Mine?
 
-1. **Zero-cost passive income.** OpenClaw users already run agents on Mac minis, VPS instances, or Raspberry Pis — devices that are online 24/7 but idle most of the time. ClawChain converts that idle compute into revenue. No extra hardware. No GPU. Just install a Skill and start earning.
+1. **Zero-cost passive income.** OpenClaw users already run agents on Mac minis, VPS instances, or Raspberry Pis — devices that are online 24/7 but idle most of the time. ClawChain converts that idle compute into revenue. No extra hardware. No GPU. The current supported path is repo-local and service-led, not a fully published “install a Skill and instantly get a finished buddy UI” contract.
 
 2. **Real appreciation potential.** $CLAW has a hard cap of 21,000,000 tokens, 100% distributed through mining — a true fair launch. Early miners get peak output (50 CLAW/epoch, all to miners) plus early bird multipliers (up to 3×). At a hypothetical $10M FDV, each CLAW ≈ $0.48.
 

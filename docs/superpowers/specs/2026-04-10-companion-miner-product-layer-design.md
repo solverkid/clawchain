@@ -1,14 +1,28 @@
 # ClawChain Companion-First Miner Product Layer Design
 
-**Version**: 1.0  
-**Date**: 2026-04-10  
-**Status**: Approved product-layer design for V1  
+**Version**: 1.2
+**Date**: 2026-04-23
+**Status**: Approved product-layer design for V1 after wave-2 synthesis
 **Related docs**:
 - [docs/MINING_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md)
 - [docs/IMPLEMENTATION_STATUS_2026_04_10.md](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md)
 - [skill/SKILL.md](/Users/yanchengren/Documents/Projects/clawchain/skill/SKILL.md)
 
 ---
+
+## 0. Authority Boundary
+
+This file defines the **target-state companion shell contract**.
+
+It does **not** override:
+
+- stock OpenClaw capability boundaries from official OpenClaw docs
+- current runtime truth from [`docs/IMPLEMENTATION_STATUS_2026_04_10.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md)
+- protocol / settlement truth from [`docs/MINING_DESIGN.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md)
+
+Rule:
+
+- If a surface, command, or persistence layer is described here but not implemented in code or not confirmed in `IMPLEMENTATION_STATUS`, it should be read as **target-state**, not as shipped reality.
 
 ## 1. Decision Summary
 
@@ -34,7 +48,7 @@ V1 does:
 - keep mining mostly automatic
 - add one small daily interaction
 - present forecast, arena, and future games as one unified activity system
-- use TUI, plugin/slash commands, menu bar, and Control UI / WebChat as the main surfaces
+- use TUI, plugin/slash commands, menu bar, and Control UI / WebChat as stock host surfaces for ClawChain custom product work
 
 ---
 
@@ -102,12 +116,49 @@ All present and future mining forms must fit one registry:
 - future prediction games
 - future skill-based or game-based mining forms
 
-### 3.5 Surfaces have clear jobs
+### 3.5 Stock OpenClaw Surfaces vs ClawChain Custom Product Surfaces
 
-- TUI is for presence and quick status
-- slash commands are for control
-- Control UI / WebChat is for understanding and browsing
+Verified host contract snapshot as of 2026-04-23:
+
+| Surface | Upstream status | ClawChain V1 interpretation |
+|---|---|---|
+| OpenClaw TUI | shipped | cross-platform ambient/status/command host |
+| Control UI | shipped | browser host surface |
+| WebChat | shipped | browser host surface with shared Gateway sessions |
+| macOS menu bar | shipped, macOS only | optional glance surface |
+| Linux / Windows native companion app | not shipped upstream | out of scope for V1 baseline |
+
+- stock TUI is for ambient presence and quick status
+- stock Control UI / WebChat is for chat/control hosting and browser access
+- stock menu bar is a macOS host surface for glanceable state
+- ClawChain still needs to define and implement its own `Companion Home`, `Activities`, `History`, `Network`, and contextual `Review`
 - runtime is for execution
+
+### 3.6 Contract Anti-Patterns
+
+The following should be treated as product and implementation anti-patterns:
+
+- using session transcript as companion source of truth
+- building a stateless or blank-slate companion
+- turning daily check-in into a reward faucet
+- turning the companion into a Tamagotchi chore loop
+- using TUI as an operator dashboard
+- letting multiple surfaces independently own companion state
+- letting personality text override verifiable runtime status
+- overloading ambiguous commands when stock OpenClaw already owns the base verb
+- building a referral-first or empty tap-to-claim miner shell before core runtime/status/history are legible
+- making score or reward changes opaque to the user
+
+### 3.7 External pattern synthesis
+
+This spec is intentionally borrowing the strongest repeatable pattern found across official OpenClaw surfaces, EdgeClaw-style companions, ClawGPT-style device continuity, Drakeling-style state separation, and well-liked crypto AI miners such as Fraction AI / Grass / Nodepay:
+
+- one durable identity
+- one explicit state store
+- many surfaces
+- ambient presence over chore loops
+- activities extending the shell instead of replacing it
+- visible progress, history, and reasons
 
 ---
 
@@ -135,6 +186,45 @@ The companion is persistent across user touchpoints.
 That persistence cannot rely on OpenClaw session transcript alone.
 
 It requires an explicit companion state store so the same companion appears consistently across TUI, Control UI / WebChat, menu bar, and command flow.
+
+Preferred durable state objects:
+
+- `CompanionProfile`
+  - `companion_id`
+  - `display_name`
+  - `avatar_seed`
+  - `created_at`
+- `CompanionPreferences`
+  - `activity_policy`
+  - `daily_brief_reminder`
+  - `notification_level`
+  - `interaction_style`
+- `CompanionRuntimeSnapshot`
+  - `current_work`
+  - `current_activity`
+  - `mood`
+  - `presence_state`
+  - `updated_at`
+- `CompanionDailyBrief`
+  - `brief_date`
+  - `status`
+  - `recommended_action`
+  - `last_check_in_at`
+- `CompanionActivityView`
+  - `activity_id`
+  - `title`
+  - `mode`
+  - `earning_role`
+  - `status`
+  - `recommended_reason`
+- `CompanionEventLog`
+  - `event_type`
+  - `headline`
+  - `event_at`
+- `CompanionSyncMeta`
+  - `source`
+  - `version`
+  - `last_synced_at`
 
 ### 4.2 Runtime
 
@@ -171,20 +261,37 @@ Activities are not all equal. Each activity may be:
 - calibration-only
 - multiplier-only
 
-### 4.4 Surfaces
+### 4.4 Host Surfaces and Custom Surface Targets
 
-Surfaces are where the user sees and controls the companion.
+Surfaces are where the user sees and controls the companion, but they fall into two classes.
 
-V1 surfaces:
+Stock host surfaces:
 
-- macOS menu bar companion
+- macOS menu bar status
 - OpenClaw TUI
-- plugin commands / slash commands
-- companion-aware Control UI / WebChat surfaces
+- Control UI / WebChat
+- skills / plugins / command infrastructure
+
+Recommended ordering:
+
+- cross-platform default: `TUI -> commands -> Control UI / WebChat`
+- macOS: `menu bar -> TUI -> commands -> Control UI / WebChat`
+
+Custom ClawChain targets:
+
+- `Companion Home`
+- `Activities`
+- `History`
+- `Network`
+- contextual `Review`
 
 Deferred surface:
 
 - dedicated Electron game hub
+
+Rule:
+
+- Do not describe stock OpenClaw host surfaces as if they already ship the ClawChain companion IA.
 
 ---
 
@@ -376,9 +483,16 @@ These are the default earnings layer.
 
 Example:
 
-- `arena`
+- future public arena-like activities
 
 These happen on defined timing windows and primarily contribute calibration or multiplier value.
+
+Current public-visibility rule:
+
+- `forecast_15m` = public default activity today
+- `daily_anchor` = public calibration activity today
+- `arena_multiplier` = public explanation layer today, not an independent public activity
+- `Poker MTT` / bluff-arena style work = operator-gated or future until explicit rollout closes
 
 #### Light Interactive Activities
 
@@ -440,37 +554,62 @@ It should show:
 
 It should not try to be the full analytics console.
 
-### 9.2 Slash commands / skill commands
+### 9.2 Command Surface Contract (Stock / Extension / Deterministic)
 
-Commands are the shortest control path.
+Commands are the shortest control path, but stock OpenClaw and ClawChain extension verbs must stay separate.
 
-Recommended V1 command set:
+Stock OpenClaw command surface includes built-ins such as `/status`, `/session`, `/model`, `/new`, plus dynamic commands only when a skill or plugin registers them.
+
+ClawChain canonical extension targets:
 
 - `/buddy`
-- `/status`
+- `/brief`
 - `/activities`
-- `/checkin`
-- `/arena`
+- `/why`
+- `/history`
 - `/pause`
 - `/resume`
+- `/settings`
 
-These are companion-centered verbs, not raw operator commands.
+Compatibility aliases:
 
-If they need deterministic runtime control, they should be implemented through plugin commands or tool-dispatch, not left as plain model-mediated skills.
+- `/checkin -> /brief`
+- `/wake -> /resume`
+- `/status -> /buddy` only if registration rules avoid conflict with stock OpenClaw `/status`
+
+Rules:
+
+- these are target extension commands, not stock OpenClaw defaults
+- these commands must be explicitly registered and tested; they do not exist just because ClawChain documents them
+- companion-centered control verbs should not be documented as shipped until registration and routing exist
+- if they need deterministic runtime control, they should be implemented through plugin commands or tool-dispatch, not left as plain model-mediated skills
+- do not overload a stock host command unless the namespace and ownership are explicit
 
 ### 9.3 Control UI / WebChat
 
-Control UI / WebChat is the medium-depth understanding surface.
+Control UI / WebChat is the medium-depth browser host surface.
 
-It should evolve from the current operator/read-model shape into a companion-first product surface.
+What stock OpenClaw provides today:
 
-Recommended V1 sections:
+- chat with the model
+- sessions
+- cron
+- skills
+- nodes
+- config / approvals
+
+What ClawChain may build on top:
 
 - `Companion Home`
 - `Activities`
-- `Rankings`
+- `Network`
 - `History`
-- `Review / Risk` (user-visible subset only)
+- contextual `Review`
+
+Rule:
+
+- do not collapse `Review` into raw `Risk`; raw abuse queues remain operator-only
+- do not describe stock Control UI / WebChat as if they already contain the ClawChain miner IA
 
 ### 9.4 Runtime
 

@@ -1,7 +1,7 @@
 # ClawChain V1 挖矿设计
 
-**版本**: 1.3
-**日期**: 2026-04-11
+**版本**: 1.4
+**日期**: 2026-04-23
 **状态**: 协议/机制权威方案
 **关联文档**:
 - [docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md)
@@ -14,13 +14,38 @@
 - 本文档是 **协议、评分、结算、anti-abuse** 的权威方案
 - 矿工主产品层、companion shell、surface 语言以 companion spec 为权威
 
+## 0. 文档权威范围与 current-runtime 标注规则
+
+凡是涉及 stock OpenClaw 的安装路径、平台支持、Gateway、TUI、Control UI、WebChat、macOS menu bar、skills、plugins、slash commands、cron、heartbeat、background tasks 等能力边界，一律以官方 OpenClaw 文档和官方 release 为准。
+
+### 0.1 官方 OpenClaw host contract 快照（2026-04-23 refresh）
+
+- 最新官方 release：`v2026.4.21`（2026-04-22）
+- OpenClaw 仍然是 **Gateway-first**
+- stock TUI 是 client surface；`--local` 模式不等价于 Gateway-backed companion
+- stock `Control UI / WebChat` 是已 shipped host surfaces，不等于 ClawChain 已有 custom miner IA
+- macOS menu bar 是 upstream 已 shipped 的原生 companion 级桌面 surface；Linux/Windows native companion app 仍未 shipped
+- stock built-in commands 不包含 `/buddy`、`/brief`、`/pause`、`/resume`
+- session transcript / presence / session history 不能直接充当 durable companion store
+
+本文负责回答三类问题：
+
+1. **协议 truth**：评分、结算、anti-abuse、reward window、settlement batch 的设计边界
+2. **runtime contract**：当前公开矿工路径到底依赖哪些服务、哪些字段、哪些只读解释层
+3. **target-state shell contract**：如果 companion-first 壳层存在，它需要遵守哪些协议和运行时边界
+
+额外规则：
+
+- 如果本文和 `docs/IMPLEMENTATION_STATUS_2026_04_10.md` 在 “today / current / actually implemented” 上冲突，以 `IMPLEMENTATION_STATUS` 和 live runtime verification 为准。
+- 如果本文和 `docs/PRODUCT_SPEC.md` 在产品语言上冲突，以 `PRODUCT_SPEC` 为准；但协议与结算逻辑仍以本文为准。
+
 ---
 
 ## 1. 执行摘要
 
 从矿工视角，ClawChain V1 的最新定义是：
 
-> **一个 companion-first 的 agent mining shell：用户拥有一个常驻 mining buddy，它在后台自动参与 forecast、daily、arena 等 activities 来挖取 CLAW。**
+> **一个 companion-first 的 agent mining shell：用户拥有一个常驻 mining buddy，它在后台自动参与公开 forecast activity、daily calibration activity，以及未来扩展 activity 来挖取 CLAW。**
 
 从协议视角，它建立在以下四层结构上：
 
@@ -138,6 +163,8 @@ V1 不做：
 - Arena 结果先更新 rolling rating，再导出 `arena_multiplier`
 - Alpha 阶段 `arena_multiplier` 范围收窄为 `0.96..1.04`
 
+当前公开 miner contract 只应暴露 `arena_multiplier` 与有限解释字段；Arena runtime 自身、seat/table/state、admin bridge 和 rated gating 细节仍属于 operator integration contract。
+
 ## 3.5 Poker MTT 角色
 
 - `poker mtt` 是后续独立 skill-game mining lane，不复用 `arena` 语义
@@ -156,6 +183,12 @@ V1 不做：
 - reputation follow-on phase：窗口级 `reputation_delta` 写入 `x/reputation`；keeper-level append-only contract 已落地，但不属于当前 Poker MTT Phase 3 production-readiness gate，外部 enablement 仍需单独 release review
 - Go 实现边界上，`pokermtt/*` 不应 import `arena/*` domain，也不应让 donor structs 穿透进 ClawChain domain model
 
+当前公开 contract 额外边界：
+
+- `Poker MTT` 现在不进入默认公开 miner activity 集合
+- `poker_mtt_daily` / `poker_mtt_weekly` 是内部 reward-window family，不等于当前公开 task lane
+- 在 miner-facing status 里，今天可见的仅是极少量衍生字段，例如 `poker_mtt_multiplier`；reward-window build、hidden eval、HUD、projection、rollback 和 release-review bundle 都仍属于 operator / release-review 语境
+
 ## 3.6 技术形态
 
 - 先做 **模块化单体**
@@ -172,108 +205,172 @@ V1 不做：
 
 ## 4.1 一句话定义
 
-> **ClawChain V1 的矿工主产品层是一个 persistent mining buddy；协议层则通过 forecast / daily / arena 三类 activities 结算它的表现。**
+> **ClawChain V1 的产品目标是一个 companion-first miner shell；但当前公开矿工契约仍然是 forecast-first service runtime。**
+
+换句话说：
+
+- companion 是用户层壳
+- `forecast_15m` / `daily_anchor` / `arena_multiplier` 才是今天真正稳定的运行时基础
+- 不能把 target-state companion 壳层写成 current runtime truth
 
 ## 4.2 面向矿工的主叙事
 
 不是：
 
-- 答题得积分
-- 在线挂机挖币
-- 写作文给 AI 打分
+- challenge-era 答题矿工
+- 纯在线挂机发币
+- 复杂 operator 面板
 
 而是：
 
-> **你拥有一个会自己出去工作的 mining buddy。它在真实 crypto 市场信息流里持续做判断、参与活动、带回结果；你每天只需要轻量查看状态并偶尔给一点方向。**
+> **你最终会拥有一个会持续工作的 mining buddy。**
 
-## 4.3 产品对象
+但在当前实现里，矿工真正依赖的仍然是：
 
-面向矿工的 V1 壳层固定为 4 个对象：
+- `setup.py`
+- `mine.py`
+- `status.py`
+- service-backed task / status / reward / settlement read models
 
-1. **Companion**
-   - 用户拥有的长期身份
-   - 有名字、状态、心情、战绩和 activity history
-   - 不是奖励源，也不是协议真相来源
+所以本文所有 “current / today / actually available” 都必须落回这条 service-led forecast path。
 
-2. **Runtime**
-   - 后台 mining runtime
-   - 调度 forecast / daily / arena
-   - companion 的身份和偏好必须独立持久化，不能只依赖 OpenClaw session transcript
+## 4.3 公开矿工契约 vs Operator Integration Contract
 
-3. **Activities**
-   - 产品层统一叫 activity
-   - 内部协议层仍保留 `lane`
-   - activity 角色至少要标注 `direct reward` / `calibration` / `multiplier` / `practice`
+当前仓库需要严格拆开两层：
 
-4. **Surfaces**
-   - macOS menu bar
-   - TUI
-   - Control UI / WebChat
-   - plugin commands / slash commands
+### 公开矿工契约
 
-## 4.4 V1 主 surfaces
+矿工今天真的可以依赖的是：
 
-- **macOS menu bar**：优先 companion 入口，最适合常驻状态
-- **TUI**：ambient chat/status surface，不假设自定义面板系统
-- **Control UI / WebChat**：完整 companion home、activities、history、review 子集
-- **plugin commands / slash commands**：`/buddy`、`/status`、`/activities`、`/checkin`、`/pause`、`/wake`
+- 注册 miner
+- 获取 active task list / task detail
+- 对 `forecast_15m` 与 `daily_anchor` 执行 commit / reveal
+- 查看 miner status / submissions / reward holds / reward windows / task history / replay proof / leaderboard
+- 读取 `arena_multiplier` 作为解释字段
 
-约束：
+### Operator integration contract
 
-- companion 不能只靠对话 session 保持“记忆”
-- 需要独立的 companion state store
-- 若命令承担确定性控制，优先 native plugin command 或 tool-dispatch，而不是纯模型中介 skill
+只应在 operator / release-review / internal 文档里定义的是：
 
-## 4.5 V1 每日交互边界
+- Arena result ingestion bridge
+- Poker MTT evidence / ranking / reward-window / settlement pipeline
+- reward-window rebuild / chain tx plan / anchor job / rollback / release review
+- raw risk queue、economic-unit、人工 override、support 流程
 
-V1 允许每天一次轻互动：
+这两层如果不分开，`forecast_15m / daily_anchor / arena / poker mtt` 会被误写成一个假统一 miner 故事。
 
-- 时长目标 `10-30s`
-- 作用是状态同步、轻偏好输入、陪伴感
-- 不直接发放奖励
-- 不影响 runtime 是否继续工作
+## 4.4 Stock Host Surfaces 与 Companion Surface Contract
 
-明确不做：
+### Stock OpenClaw host surfaces
 
-- 喂养 / 清洁 / 掉血 / 死亡
-- 漏签惩罚
-- 一天多次强打扰
+这些是宿主能力，不等于已经完成的 ClawChain miner client：
 
-## 4.6 产品语言与内部术语映射
+- macOS menu bar status
+- TUI
+- Control UI
+- WebChat
+- skills / plugins / slash-command infrastructure
 
-产品层：
+### ClawChain custom surfaces
 
+这些属于 ClawChain 自己要定义和实现的业务 IA：
+
+- `Companion Home`
+- `Activities`
+- `History`
+- `Network`
+- contextual `Review`
+
+规则：
+
+- stock OpenClaw surfaces 只提供承载壳、认证、命令路由和宿主状态面
+- `Companion Home / Activities / History` 不能表述成 stock OpenClaw 已提供
+- `Review` 在 V1 只做 Home / History 的上下文解释层，不做 raw case queue
+- `Risk / Abuse Review / Settlement Ops` 永远不属于 miner 一级 IA
+
+## 4.5 Runtime / Cron / Heartbeat / Background Tasks Contract
+
+ClawChain 的 persistent mining runtime 必须被建模为独立运行进程或服务。
+
+在 OpenClaw 里：
+
+- `cron` 负责精确定时调度
+- `heartbeat` 负责主 session 的周期性 awareness，默认不产生 task records
+- `background tasks` 负责 detached-work ledger
+
+三者都 **不等于** ClawChain persistent mining buddy 本体。
+
+更精确地说：
+
+- `cron` 是 Gateway scheduler；任务会持久化，并为每次运行创建 task record
+- `heartbeat` 是主 session 的周期性 turn，不应冒充后台矿工账本
+- `background tasks` 是 detached work 审计面，不是 companion identity store
+- OpenClaw session 默认按本地时间每日维护重置，presence 也是 best-effort，所以两者都不该被当作 durable buddy state
+
+因此：
+
+- 如果本文提到 `cron`，它只应用于 wrapper / 定时触发 / operator scheduling
+- 如果本文提到 `heartbeat`，它只应用于 brief / re-entry / reminder
+- 如果本文提到 `background tasks`，它只应用于 detached work audit
+
+## 4.6 产品语言与术语边界
+
+### 面向矿工公开的词
+
+- `Forecast Activity`
+- `Daily Calibration Activity`
+- `arena multiplier`
 - `activity`
 - `daily brief`
 - `current work`
 - `buddy`
 
-协议层：
+### 协议 / 运行时内部词
 
+- `forecast_15m`
+- `daily_anchor`
 - `lane`
 - `reward_window`
 - `baseline_q`
 - `settlement_batch`
+- `poker_mtt_daily`
+- `poker_mtt_weekly`
 
-## 4.7 面向矿工的可见信息
+额外边界：
 
-V1 的矿工主界面至少包含：
+- `arena_multiplier` 是 shared-state bridge output，不是公开独立 lane
+- `Poker MTT` 当前应被写成 operator-gated reward program，不是默认公开 activity
+- `poker_mtt_daily` / `poker_mtt_weekly` 是 reward-window family，不是 forecast/daily 这种 public task lane
 
-- current work state
-- current activity / recommended activity
-- daily brief status
-- companion mood / availability
-- scoped `public rank / public ELO / calibration / streak`
-- `reward timeline`
+## 4.7 面向矿工的当前可见信息
+
+今天公开矿工面真正稳定可见的，应收口为：
+
+- `public rank / public ELO`
+- released / held rewards
+- pending resolution / maturity / review-required 摘要
 - `score explanation`
-- `arena multiplier`
-- `probation / reward maturity / review status`
-- `snapshot hash / settlement version / reference source`
+- forecast-led `reward timeline`
+- latest settlement snapshot
+- `arena_multiplier`
+- reference source / snapshot version / replay proof
 
-其中：
+不应写成当前 miner contract 的包括：
 
-- Arena 内的本场 `arena_tournament_standing / stack / blind level / bubble pressure` 只在进入 Arena 视图时显示
-- `Market Ops`、`Settlement Ops` 等后台面板不直接等于矿工主界面
+- raw Arena runtime、seat/table/standing
+- raw risk case queue、economic_unit、operator decision log
+- Poker MTT hidden eval、HUD、reward-window build internals、release-review bundle
+
+## 4.8 V1 每日交互边界
+
+V1 允许每天一次轻互动，但这是 target-state 壳层要求，不是当前已实现真相。
+
+边界保持：
+
+- 时长目标 `10-30s`
+- 不直接发放奖励
+- 不把 companion 变成 chores
+- 不做喂养 / 清洁 / 掉血 / 死亡 / 漏签惩罚
 
 ---
 
@@ -1131,10 +1228,13 @@ V1 上线前必须有：
 
 - companion activation 路径可用
 - companion state store 可用，不能只依赖 session transcript
-- macOS menu bar / TUI / Control UI 至少有两个 surfaces 能正确显示 current work
-- `/buddy`、`/status`、`/activities`、`/checkin` 控制链路可用
+- gateway-backed `TUI / Control UI / WebChat` 至少两个 surfaces 能正确显示 current work；macOS menu bar 只作为额外加分项，不是跨平台 baseline
+- `/buddy`、`/brief`、`/activities`、`/pause`、`/resume` 作为 **non-stock extension commands** 已注册并可测试
+- miner 一级 IA 固定为 `Companion Home / Activities / History / Network`
+- `Risk / Abuse Review / Settlement Ops` 不进入 miner 一级导航
 - daily brief 可选且不影响奖励
 - V1 不依赖 Electron
+- V1 不依赖 Linux / Windows native companion shell
 
 1. **offline replay**
    - 历史数据回放

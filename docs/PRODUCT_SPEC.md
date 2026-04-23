@@ -1,14 +1,46 @@
 # ClawChain 产品全案
 
-**版本**: 1.1
-**日期**: 2026-04-11
+**版本**: 1.3
+**日期**: 2026-04-23
 **作者**: ClawChain 产品团队
-**状态**: 已合并 companion-first 产品层
+**状态**: 已合并 wave-2 synthesis 的 companion-first 产品层
 **关联文档**:
 - [docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md)
 - [docs/MINING_DESIGN.md](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md)
+- [docs/IMPLEMENTATION_STATUS_2026_04_10.md](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md)
 
 ---
+
+## 第0章：文档权威与 OpenClaw 依赖边界
+
+> **权威顺序**
+>
+> 1. stock OpenClaw 能力边界以官方 OpenClaw 文档与官方 release 为准
+> 2. 当前 runtime 真相以 [`docs/IMPLEMENTATION_STATUS_2026_04_10.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md) 为准
+> 3. 本文定义矿工产品语言、壳层目标、surface 边界
+> 4. 协议、评分、结算、anti-abuse 以 [`docs/MINING_DESIGN.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md) 为准
+
+本文只负责定义 **ClawChain 在 OpenClaw 之上的自定义 miner product layer**。
+这意味着：
+
+- OpenClaw 的 `Gateway / TUI / Control UI / WebChat / macOS menu bar / skills / plugins / commands / cron / heartbeat` 都是 **host capabilities**
+- `Companion Home / Activities / History / Network` 是 **ClawChain custom surfaces**
+- 任何 “today / current / already available” 的表述，都不能越过 `IMPLEMENTATION_STATUS`
+
+### 0.1 官方 OpenClaw host contract 快照（2026-04-23 refresh）
+
+基于官方 OpenClaw 文档与最新官方 release，当前必须锁死这些宿主边界：
+
+| 项目 | 当前确认 truth |
+|---|---|
+| 最新官方 release | `v2026.4.21`，发布于 2026-04-22 |
+| 架构中心 | OpenClaw 仍然是 **Gateway-first**；Gateway 是 session、routing、channel 的权威 |
+| TUI | 是 host surface，不是 source of truth；`--local` 模式不等价于 Gateway-backed companion |
+| Browser surface | `Control UI / WebChat` 已 shipped，但它们是宿主 chat/control/browser 面，不自动等于 ClawChain `Companion Home / Activities / History` |
+| Native companion | 官方 shipped 的原生 companion 级桌面 surface 当前只有 macOS menu bar；Linux/Windows native companion app 仍是 upstream planned |
+| Built-in commands | stock OpenClaw 内建命令不包含 `/buddy`、`/brief`、`/pause`、`/resume` |
+| Deterministic control | 如果 ClawChain 需要确定性 companion verbs，必须自己注册 extension command，并通过 plugin command 或 `command-dispatch: tool` 路由 |
+| Durable buddy state | OpenClaw session / presence / transcript 不能直接当 durable companion store |
 
 ## 第1章：产品定位与价值主张
 
@@ -18,24 +50,36 @@
 
 ### 1.2 为什么 OpenClaw 用户要挖矿？
 
-**理由一：零额外硬件成本。** OpenClaw 用户已经在运行 agent（Mac mini、VPS、树莓派），设备 24/7 在线但 agent 大部分时间不是在执行高价值用户请求。ClawChain 把这部分空闲运行时间变成挖矿机会。不需要额外 GPU，不需要再部署另一套客户端，安装 Skill 并激活 companion 就能开始。
+**理由一：零额外硬件成本。** OpenClaw 用户已经在运行 agent（Mac mini、VPS、树莓派），设备 24/7 在线但 agent 大部分时间不是在执行高价值用户请求。ClawChain 把这部分空闲运行时间变成挖矿机会。不需要额外 GPU，不需要再部署另一套客户端。当前支持路径是 `openclaw onboard --install-daemon` 后运行 repo-local `skill/scripts/setup.py -> mine.py -> status.py`；“安装 Skill 并激活 companion 即挖”仍然是 target-state distribution 话术，不是当前 install contract。
 
 **理由二：奖励叙事和留存叙事终于统一。** 过去“运行矿工脚本”适合作为内核，不适合作为产品正脸。companion-first 让后台 runtime、前台状态反馈、每日轻互动和多玩法扩展有了统一容器。用户理解的是“我的伙伴在外面工作”，而不是“我在维护一个脚本”。
 
-**理由三：$CLAW 的分发仍然有真实协议基础。** $CLAW 总量 2100 万，永不增发，100% 挖矿分发。V1 当前现实不是通用微任务，而是 `forecast_15m`、`daily_anchor`、`arena_multiplier` 三类 activities 叠加 service-led settlement；后续 `poker mtt` 作为独立 skill-game mining lane 接入同一 `reward_window / settlement_batch` 框架。奖励仍来自活动结果与协议结算，而不是陪伴行为本身。收益推演见第6章。
+**理由三：$CLAW 的分发仍然有真实协议基础。** $CLAW 总量 2100 万，永不增发，100% 挖矿分发。V1 当前公开现实不是通用微任务，而是 `forecast_15m` 主公开赛道 + `daily_anchor` 校准赛道 + `arena_multiplier` 解释字段叠加 service-led settlement。Poker MTT、MTT-like bluff arena 以及其它新 activity 已进入 operator integration / acceptance 视野，但这不等于它们已经成为默认公开 miner activities。奖励仍来自活动结果与协议结算，而不是陪伴行为本身。收益推演见第6章。
 
 ### 1.3 差异化：OpenClaw Agent 的独特优势
 
 | 维度 | Grass | Bittensor | Koii | **ClawChain** |
 |------|-------|-----------|------|---------------|
-| 参与门槛 | 装浏览器插件 | 需要 GPU + ML 专业知识 | 下载桌面应用 + 8GB RAM | **已有 OpenClaw + Skill = 激活 companion 即挖** |
+| 参与门槛 | 装浏览器插件 | 需要 GPU + ML 专业知识 | 下载桌面应用 + 8GB RAM | **已有 OpenClaw + repo-local runtime；目标态再收口成 published companion install** |
 | 用户拥有的对象 | 账号/插件 | Subnet / validator / miner | 节点 | **常驻 companion + wallet + activity history** |
-| 贡献类型 | 被动带宽共享 | ML 模型推理/训练 | JS 计算任务 | **Forecast / Arena / 未来游戏化 activities** |
+| 贡献类型 | 被动带宽共享 | ML 模型推理/训练 | JS 计算任务 | **Forecast-first public activities + future game-like activities** |
 | 是否需要额外硬件 | 否 | 是（GPU） | 否 | **否** |
 | 工作是否有用 | 数据采集 | AI 模型训练 | 通用计算 | **真实市场判断与 agent evaluation** |
 | 用户基础 | 从零开始获客 | 技术社区 | 开发者社区 | **复用 OpenClaw 存量用户** |
 
-**核心差异化：ClawChain 不需要从零发明矿工容器。** OpenClaw 已经有 Gateway、TUI、Control UI/WebChat、macOS 菜单栏 companion、后台服务和命令面。ClawChain 的机会不是再造一个“miner app”，而是把这些 surfaces 统一到一个 persistent companion shell 里。
+**核心差异化：ClawChain 不需要从零重建 agent 基础设施。** OpenClaw 已经有 Gateway、TUI、Control UI、WebChat、macOS 菜单栏状态、skills、plugins、cron / heartbeat 等 host capabilities。但这些 host capabilities 不等于已完成的 ClawChain companion 产品层。ClawChain 真正要做的是：在这些宿主表面之上定义并实现自己的 companion shell、activity IA、命令面和状态解释层。
+
+### 1.3.1 外部产品模式综合
+
+本轮深度调研后，V1 的 companion shell 应明确吸收这些外部模式：
+
+- **官方 OpenClaw / EdgeClaw / ClawGPT / Drakeling 一致指向的一点**：强 companion 不是 Tamagotchi，而是 **one identity, many surfaces, explicit state store**
+- **Fraction AI / Grass / Nodepay 一致验证的一点**：强 miner retention 不是重交互，而是 **被动主循环 + 可解释进展 + 少量 intentional action**
+- **因此 ClawChain 的正确方向**：
+  - 伙伴身份必须持久
+  - ambient presence 要强，但不能变成 chore loop
+  - activities 是 shell 的扩展，不是 shell 本体
+  - 状态、收益、历史、变化原因必须可解释
 
 ### 1.4 产品语言规则
 
@@ -79,18 +123,28 @@ V1 的主产品层由 4 个对象组成：
    - companion 的身份、mood、偏好、history 需要独立持久化，不能只依赖 OpenClaw session transcript
 
 3. **Activities**
-   - `forecast_15m`
-   - `daily_anchor`
-   - `arena`
-   - 未来的游戏类、预测类、挑战类玩法
+   - `forecast_15m`（公开主 activity）
+   - `daily_anchor`（公开校准 activity）
+   - `arena_multiplier`（当前是 read-only multiplier explanation，不是独立公开 activity）
+   - 未来的游戏类、预测类、挑战类玩法，例如 `poker mtt`
    - 用户层统一叫 activities，不让 `lane` 成为第一心智
 
 4. **Surfaces**
-   - macOS Menu Bar：最强 companion 入口
-   - TUI：陪伴和即时状态
+   - TUI：跨平台的 ambient companion 入口
    - Slash commands / plugin commands：最短交互路径
-   - Control UI / WebChat：完整信息面
+   - Control UI / WebChat：中深度 browser host surface
+   - macOS Menu Bar：仅 macOS 的 glanceable companion surface
    - Runtime：执行层，不是主产品入口
+
+### 2.1.1 当前 activity 可见性矩阵
+
+| 产品层对象 | 当前可见性 | 当前对矿工的正确说法 | 备注 |
+|---|---|---|---|
+| Forecast Activity | 公开 today | 默认公开主收益 activity | 协议源头是 `forecast_15m` |
+| Daily Calibration Activity | 公开 today | 自动参与的慢反馈校准 activity | 协议源头是 `daily_anchor` |
+| Arena Multiplier | 公开 explain-only | 只读 multiplier / explanation 字段 | 当前不是独立公开 activity surface |
+| Poker MTT | operator-gated / future | 已有集成与 acceptance，但不是默认公开 miner activity | 未来独立 skill-game mining lane |
+| Bluff arena / future games | future | 可并入 unified activity registry | 当前不应写成 shipped reality |
 
 ### 2.2 V1 companion 定义
 
@@ -107,6 +161,53 @@ V1 的主产品层由 4 个对象组成：
 - 不能直接发奖励
 - 不能替代协议结算逻辑
 - 不能变成重交互电子宠物
+
+### 2.2.1 Durable companion contract
+
+如果 V1 要把 companion 做成可跨 surface 一致出现的对象，至少要把状态拆成这些稳定子对象：
+
+- `CompanionProfile`
+  - `companion_id`
+  - `display_name`
+  - `avatar_seed`
+  - `created_at`
+- `CompanionPreferences`
+  - `activity_policy`
+  - `daily_brief_reminder`
+  - `notification_level`
+  - `interaction_style`
+- `CompanionRuntimeSnapshot`
+  - `current_work`
+  - `current_activity`
+  - `mood`
+  - `presence_state`
+  - `updated_at`
+- `CompanionDailyBrief`
+  - `brief_date`
+  - `status`
+  - `recommended_action`
+  - `last_check_in_at`
+- `CompanionActivityView`
+  - `activity_id`
+  - `title`
+  - `mode`
+  - `earning_role`
+  - `status`
+  - `recommended_reason`
+- `CompanionEventLog`
+  - `event_type`
+  - `headline`
+  - `event_at`
+- `CompanionSyncMeta`
+  - `source`
+  - `version`
+  - `last_synced_at`
+
+规则：
+
+- browser truth 必须来自 service-owned envelope，而不是 session transcript
+- 本地脚本缓存可以存在，但不能成为跨 surface 的权威状态
+- personality 文案不能覆盖真实 runtime / reward / settlement 状态
 
 ### 2.3 Activity system
 
@@ -136,18 +237,50 @@ V1 统一把挖矿形式叫作 **Activities**，并按 3 类组织：
 - 最近结果如何
 - 为什么今天推荐或不推荐
 
-### 2.4 Surface 分工
+### 2.4 Durable V1 IA ownership
 
-- **macOS Menu Bar**：companion 的优先入口，适合常驻状态和回访
-- **TUI**：终端内的 ambient chat/status surface
-- **Plugin commands / slash commands**：`/buddy`、`/status`、`/activities`、`/checkin`、`/arena`、`/pause`、`/wake`
-- **Control UI / WebChat**：Companion Home、Activities、Rankings、History、Review/Risk 子集
-- **Operator surfaces**：仍然存在，但不是矿工主入口
+V1 需要把“谁拥有业务 IA”和“谁只是宿主壳”拆开：
 
-说明：
+- **ClawChain miner client**
+  - `Companion Home`
+  - `Activities`
+  - `History`
+  - `Network`
+  - contextual `Review`
+- **operator console**
+  - `Abuse Review`
+  - `Settlement Ops`
+  - `Arena Ops`
+  - support / override / rollback
+- **stock OpenClaw host surfaces**
+  - macOS menu bar status
+  - TUI
+  - Control UI
+  - WebChat
+  - skills / plugins / slash-command infrastructure
 
-- V1 不把公开 Web 页面直接等同于 OpenClaw Control UI
-- 如果需要可控的命令行为，优先使用 native plugin command 或 skill `command-dispatch: tool`
+官方 host-surface support matrix：
+
+| Surface | OpenClaw upstream 状态 | ClawChain V1 角色 |
+|---|---|---|
+| TUI | shipped | 跨平台 ambient / status / command 入口 |
+| Control UI | shipped | browser host / chat / control |
+| WebChat | shipped | browser host / chat / session continuity |
+| macOS menu bar | shipped, macOS only | glanceable optional extra |
+| Linux / Windows native companion app | not shipped upstream | 不作为 V1 依赖 |
+
+推荐 surface 优先级：
+
+- 跨平台默认：`TUI -> commands -> Control UI / WebChat`
+- macOS 补充：`menu bar -> TUI -> commands -> Control UI / WebChat`
+- operator surfaces 永远不参与 miner client 的一级入口排序
+
+规则：
+
+- `Risk` 不进入 miner 一级导航
+- `Review` 在 V1 只作为 Home / History 的上下文解释层，不做 raw case queue
+- stock OpenClaw surfaces 提供承载、认证、通知和命令路由，不自动提供 ClawChain 的 `Companion Home / Activities / History`
+- 如果命令承担确定性控制，优先使用 plugin command 或 `command-dispatch: tool`
 
 ### 2.5 每日轻互动边界
 
@@ -180,287 +313,225 @@ Electron 只进入 roadmap，作为后续深度 activity 容器。
 
 ## 第3章：用户旅程（User Journey）
 
-### 3.1 完整步骤：从"听说"到"获得第一笔 $CLAW"
+> **Current-runtime note:** 本章优先描述当前可运行路径；所有 “Companion Home / `/buddy` / daily brief / pause-resume shell” 只作为 target-state 产品目标，不应被读成已交付功能。
 
-V1 目标仍然是 **5 分钟内从安装到开始挖矿**，但主路径从“运行脚本”改成“激活 companion”。
+### 3.1 当前支持路径：从 OpenClaw 启动到跑通当前 miner
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Step 0: 听说 ClawChain                                        │
-│  ├── Discord/Twitter/朋友推荐                                   │
-│  └── "你的 companion 闲着也是闲着，不如让它出去挖矿"            │
-│                                                                  │
-│  Step 1: 安装 Skill / Plugin 并激活 companion（1分钟）           │
-│  ├── git clone https://github.com/0xVeryBigOrange/clawchain     │
-│  ├── cd clawchain                                               │
-│  ├── openclaw onboard --install-daemon                          │
-│  ├── openclaw skills install ... 或 openclaw plugins install... │
-│  ├── 如需本地开发，再手动挂载 workspace 中的 skill/plugin        │
-│  ├── python3 scripts/setup.py                                   │
-│  └── 输出: "✅ Companion activated, wallet created"              │
-│                                                                  │
-│  Step 2: 初始化身份和钱包（30秒）                                 │
-│  ├── 首次运行自动生成钱包                                        │
-│  ├── 显示: 你的地址 claw1abc...xyz                               │
-│  ├── 显示: 助记词（提示用户备份）                                 │
-│  └── 输出: "💰 Wallet ready. Your buddy is ready to work."      │
-│                                                                  │
-│  Step 3: companion 开始自动工作                                  │
-│  ├── runtime 连接 Gateway 与 ClawChain 服务                       │
-│  ├── 自动进入 forecast / daily / arena 调度                       │
-│  ├── companion 显示当前 work state                               │
-│  └── 输出: "⛏️ Mining started. First activity joined."          │
-│                                                                  │
-│  Step 4: 第一次回来看状态（约10-15分钟后）                         │
-│  ├── companion 汇报最近 activity                                  │
-│  ├── 用户看到当前收益、活动、状态                                 │
-│  └── 输出: "🎉 +0.42 CLAW earned! Buddy is now focused."        │
-└─────────────────────────────────────────────────────────────────┘
-```
+V1 今天真正支持的路径是：
 
-**关键设计原则：**
-- **零配置启动**：不需要手动设置 RPC、端口、网络参数
-- **自动钱包生成**：不要求用户预先拥有钱包
-- **自动为主**：安装后 companion 自动工作，不要求持续操作
-- **即时反馈**：第一个 15m 窗口内就能看到工作状态
-- **回访理由明确**：用户回来不是看原始脚本日志，而是看 buddy brief 和 activity 结果
+1. 按官方路径启动 OpenClaw
+   - `openclaw onboard --install-daemon`
+   - `openclaw gateway status`
+   - `openclaw dashboard`
+2. 在 repo 内运行 ClawChain 当前脚本路径
+   - `python3 skill/scripts/setup.py`
+   - `python3 skill/scripts/mine.py`
+   - `python3 skill/scripts/status.py`
+3. 用 service-backed read surfaces 看状态
+- `status.py`
+- repo `dashboard`
+- repo `network`
+- repo `risk`（operator-oriented）
 
-### 3.2 新手引导设计
+当前 repo 还没有默认 shipped 的：
 
-```
-首次安装后的引导流程：
+- `Companion Home`
+- `Activities`
+- `History`
+- durable companion state store
+- deterministic `/buddy` / `/pause` / `/resume`
 
-1. 欢迎消息:
-   "🦞 Welcome to ClawChain.
-    You now have a mining buddy that can earn $CLAW
-    by joining activities while your agent is idle."
+### 3.2 Target-state：companion activation 路径
 
-2. 激活 companion:
-   "✨ Your buddy is waking up...
-    It will work automatically in the background
-    and report back through TUI / Control UI."
+长期目标仍然是：
 
-3. 钱包设置:
-   "🔑 Generating your wallet...
-    Address: claw1q2w3e4r5t...
-    ⚠️ IMPORTANT: Write down your seed phrase:
-    [abandon ability able about above absent ...]
-    This is the ONLY way to recover your wallet."
-    
-    [I've saved my seed phrase] ← 用户确认后继续
+- 用户先“拥有一个伙伴”
+- 后台 runtime 自动工作
+- 用户通过 Menu Bar / TUI / browser host / commands 做 glance、brief、history 和轻控制
+- 跨平台默认依赖 `Gateway + TUI + Control UI / WebChat`
+- macOS menu bar 是增强 surface，不是 V1 baseline
 
-4. companion 偏好（可选，默认值即可工作）:
-   "⚙️ Companion Preferences (all optional):
-    • Auto-mine when idle: ON (default)
-    • Activity policy: Balanced (default)
-    • Max CPU usage: 50% (default)
-    • Daily brief reminder: ON (default)
-    
-    Type 'claw config' to change later."
+但这条 companion activation 路径在今天仍然是 **product target-state**，不是当前 runnable onboarding 契约。
 
-5. 开始工作:
-   "⛏️ Companion activated
-    Current work: scouting forecast activities
-    Mining status: ACTIVE
-    Next forecast window in: 8:32
-    
-    Type '/buddy' or 'python3 scripts/status.py'
-    anytime to check on your buddy."
-```
+### 3.3 当前错误处理与用户预期
 
-### 3.3 错误处理
+当前应该向用户明确的不是“宠物化文案”，而是 runtime truth：
 
-| 错误场景 | 用户看到的消息 | 自动处理 |
-|---------|---------------|---------|
-| 网络连接失败 | "⚠️ Buddy cannot reach ClawChain right now. Retrying in 30s..." | 指数退避重试，最大间隔 5 分钟 |
-| 当前窗口未成功提交 | "⏰ Missed this activity window. Buddy will rejoin the next one." | 自动进入下一个 activity |
-| 钱包文件损坏 | "🔑 Wallet file corrupted. Use 'claw wallet recover' with your seed phrase." | 引导恢复流程 |
-| OpenClaw 版本过低 | "📦 ClawChain requires a recent OpenClaw version for TUI / control surfaces." | 显示升级命令 |
-| AI 模型不可用 | "🤖 No AI model configured. Mining needs at least one LLM provider or local model." | 引导配置 LLM |
-| Daily check-in 未完成 | "📝 No daily brief yet. Mining is still running." | 不扣收益，只保留轻提醒 |
+| 场景 | 当前正确说法 |
+|---|---|
+| 服务不可达 | 当前 miner 依赖 `mining-service`；如果 service 不可达，脚本会失败或降级，不能伪装成 companion 正常工作 |
+| 钱包问题 | 当前钱包是 `~/.clawchain/wallet.json` 的本地加密私钥文件，不是 seed phrase / BIP-39 恢复流 |
+| OpenClaw 表面 | stock OpenClaw 提供宿主表面，不等于已完成的 ClawChain custom miner UI |
+| `daily_anchor` 长跑 | 当前 `daily_anchor` 路径仍有幂等性缺口，不能对外包装成 fully hardened always-on daemon |
 
-### 3.4 FAQ
+### 3.4 FAQ（当前 truth 版）
 
-**Q: 挖矿会影响我正常使用 OpenClaw 吗？**  
-A: 不会。挖矿 Skill 有空闲检测机制，只在 agent 没有处理用户请求时才接任务。一旦你开始和 agent 交互，挖矿自动暂停。
+**Q: 挖矿会影响我正常使用 OpenClaw 吗？**
+A: 当前 repo 还没有真正的 idle detection / auto-pause control plane。不要把今天的脚本路径描述成“和正常使用完全隔离的后台 companion daemon”。
 
-**Q: 需要什么 AI 模型？**  
-A: 任何 OpenClaw 支持的 LLM 都行——本地模型（Ollama）或 API（OpenAI、Anthropic）。但注意，使用 API 模型挖矿会产生 API 费用，建议用本地模型。
+**Q: 需要什么模型？**
+A: 当前最小路径可以走 `heuristic_v1`。如果你使用 `codex_v1`，需要本地可用的 Codex CLI。
 
-**Q: 我的数据安全吗？**  
-A: V1 当前主 activity 是标准化 forecast / daily / arena 数据包，不涉及你的个人会话内容。你的 companion 只处理公开或协议定义的任务输入。
+**Q: 钱包是什么形态？**
+A: 当前是本地 secp256k1 私钥文件，默认路径 `~/.clawchain/wallet.json`，不是 seed phrase 钱包。
 
-**Q: 能在多台设备上挖矿吗？**  
-A: 可以，但同一 IP 最多 3 个矿工节点（防女巫攻击）。每个矿工需要独立钱包和独立质押。
+**Q: 现在能看到真正的 buddy UI 吗？**
+A: 还不能。当前只有 service-backed CLI/read-model surfaces；companion-first 壳层仍是目标态。
 
 ---
 
 ## 第4章：Companion Runtime 与控制面设计
 
-### 4.1 安装与配置
+> **Current vs target-state rule:** 本章同时描述当前运行时真相和目标 companion 壳层合同。凡是没有脚本、路由、默认页面或权威状态源支持的内容，一律视为 target-state。
+
+### 4.1 当前安装与配置路径
+
+当前受支持路径以 [`SETUP.md`](/Users/yanchengren/Documents/Projects/clawchain/SETUP.md) 为准，最小流程是：
 
 ```bash
-# 安装（详见 SETUP.md）
-git clone https://github.com/0xVeryBigOrange/clawchain.git
-cd clawchain
 openclaw onboard --install-daemon
+openclaw gateway status
+openclaw dashboard
 
-# 优先使用 active workspace / official install flow
-openclaw skills install ./skill
-# 或在 plugin 化后:
-# openclaw plugins install ./plugin
-
-cd skill
-
-# 初始化钱包 & 注册
-python3 scripts/setup.py
-
-# 启动后台 runtime
-python3 scripts/mine.py
-
-# 查看 companion 状态
-python3 scripts/status.py
-
-# 配置（可选）— 编辑 scripts/config.json
-# 包括: 节点地址、LLM 配置、activity policy、提醒策略等
+python3 skill/scripts/setup.py
+python3 skill/scripts/mine.py
+python3 skill/scripts/status.py
 ```
-
-这几条命令在实现层仍然存在，但在产品层它们不再是主心智。主心智是 companion activation、background runtime 和 gateway-backed status surfaces。
-
-### 4.2 Runtime 工作流程
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                 ClawChain companion runtime 主循环             │
-│                                                                │
-│  1. COMPANION STATE LOAD（载入身份与状态）                       │
-│     ├── 载入钱包、设备身份、companion state store                 │
-│     ├── 检查 OpenClaw 会话 / CPU / provider 健康                 │
-│     └── 准备进入 activity scheduler                             │
-│                                                                │
-│  2. ACTIVITY SCHEDULER（活动调度）                               │
-│     ├── 优先检查 active daily activity                           │
-│     ├── 再进入 forecast_15m 调度                                 │
-│     ├── 定时拉取 arena multiplier / practice 状态                │
-│     └── 输出当前 work state                                      │
-│                                                                │
-│  3. SOLVE / SUBMIT（求解与提交）                                 │
-│     ├── 基于统一 pack 生成预测或动作                              │
-│     ├── 执行 commit-reveal / result ingestion                    │
-│     └── 等待 resolution / settlement                              │
-│                                                                │
-│  4. STATE SYNC（状态同步）                                       │
-│     ├── 更新 current work / mood / latest reward                 │
-│     ├── 推送给 Menu Bar / TUI / commands / Control UI            │
-│     └── 记录 history / reward timeline                           │
-│                                                                │
-│  5. OPTIONAL DAILY BRIEF（可选日互动）                            │
-│     ├── 用户可以做一次轻 check-in                                │
-│     ├── 更新 mood / preference / reminder state                  │
-│     └── 不直接发放奖励                                            │
-│                                                                │
-│  → 回到 Step 1，循环继续                                        │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 4.3 钱包管理与控制命令
-
-```bash
-# 自动生成（首次运行时）
-claw wallet create
-# → 输出地址 + 助记词
-
-# 导入已有钱包
-claw wallet import --seed "abandon ability able ..."
-# → 恢复已有钱包
-
-# 查看地址和余额
-claw wallet balance
-# → Address: claw1abc...xyz
-# → Available: 142.50 CLAW
-# → Staked:    100.00 CLAW
-# → Pending:     3.20 CLAW (current epoch)
-
-# 转账
-claw wallet send --to claw1def...uvw --amount 50
-# → ✅ Sent 50 CLAW. TX: 0xabc123...
-
-# 导出私钥（高级）
-claw wallet export --format hex
-# → ⚠️ WARNING: Never share your private key!
-```
-
-**钱包存储**：
-- 密钥文件存储在 `~/.openclaw/clawchain/wallet.json`
-- AES-256 加密，用户设置的密码保护
-- 助记词符合 BIP-39 标准（24 词）
-
-V1 命令面建议统一成两层：
-
-- **实现层命令**
-  - `python3 scripts/setup.py`
-  - `python3 scripts/mine.py`
-  - `python3 scripts/status.py`
-  - `claw wallet ...`
-
-- **产品层命令**
-  - `/buddy`
-  - `/status`
-  - `/activities`
-  - `/checkin`
-  - `/arena`
-  - `/pause`
-  - `/wake`
 
 说明：
 
-- 如果这些命令要承担“暂停挖矿 / 恢复挖矿 / 触发 check-in”这类确定性控制，优先走 native plugin command 或 `command-dispatch: tool`
-- 纯 description-only skill 不应被当成可靠控制面
+- `openclaw dashboard` 打开的是 stock Control UI
+- repo 当前主要是 repo-local runtime path，而不是已发布的 ClawHub skill / plugin contract
+- `openclaw skills install <slug>` 只适用于已发布 skill；不能把 repo 本地目录直接冒充成官方主安装流
 
-### 4.4 Companion 状态、余额与历史
+### 4.2 当前 runtime 真相与 source of truth
 
-```bash
-# 查看挖矿统计 / companion 状态
-claw stats
-# → Today:          forecast + daily + arena summary
-# → Current work:   working_forecast
-# → Buddy mood:     focused
-# → This week:      +29.1 CLAW
-# → All time:       +412.8 CLAW
-# → Reliability:    1.02
-# → Arena mult:     1.01
+当前系统的 source of truth 分层如下：
 
-# 查看详细 activity 历史
-claw history --days 7
-# → 日期 | Activities | 奖励 | Reliability | Arena
-# → 04-11 | F15+D+A   | 5.1  | +0.01       | 1.00
-# → 04-10 | F15+D     | 4.2  | +0.00       | 1.01
-# → ...
+- **服务端权威**
+  - `mining-service + Postgres`
+  - miners / tasks / submissions / rewards / holds / reward windows / settlement batches / anchor jobs / risk
+- **本地状态**
+  - `wallet.json`
+  - `config.json`
+  - append-only local mining log
+- **尚未存在**
+  - service-owned companion state store
+  - cross-surface consistent companion identity
+  - deterministic pause/resume control plane
 
-# 质押（渐进式：早期免质押，后期需 10-100 CLAW）
-claw stake --amount 10
-# → ✅ Staked 10 CLAW. You are now an active miner.
+当前 miner loop 真实结构：
 
-# 解除质押（7天冷却期）
-claw unstake --amount 50
-# → ⏳ Unstaking 50 CLAW. Available in 7 days.
-```
+1. `setup.py` 生成或加载钱包、注册 miner、写回 `miner_address` 和 `forecast_mode`
+2. `mine.py` 拉 active tasks，优先 `daily_anchor`，再处理 capped `forecast_15m`
+3. 客户端执行 commit / reveal
+4. 结算、reward window、settlement batch、anchor progression 全部留在服务端 reconcile 链路
 
-### 4.5 配置项一览
+已知当前 gap：
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `auto_mine` | `true` | 是否在空闲时自动挖矿 |
-| `max_cpu` | `50` | CPU 使用率上限 (%) |
-| `activity_policy` | `balanced` | companion 的调度倾向: balanced / steady / aggressive |
-| `idle_threshold` | `60` | 空闲判定等待时间（秒） |
-| `network` | `testnet` | 连接的网络 |
-| `rpc_endpoint` | 自动发现 | 自定义 RPC 节点地址 |
-| `log_level` | `info` | 日志级别: debug / info / warn / error |
-| `auto_stake` | `false` | 挖到足够 CLAW 后自动质押 |
-| `reward_notify` | `true` | 每次获得奖励时通知 |
-| `daily_brief_reminder` | `true` | 是否提醒用户做每日轻互动 |
-| `surface_mode` | `auto` | 优先暴露 Menu Bar / TUI / Control UI / mixed 状态面 |
+- `daily_anchor` 在重复 already-committed / already-revealed 路径上还没有完全收成幂等
+- 在修掉之前，不能把当前 loop 写成 fully hardened always-on companion daemon
+
+### 4.3 当前命令面与 target-state verbs
+
+#### 当前真实入口
+
+- `python3 skill/scripts/setup.py`
+- `python3 skill/scripts/mine.py`
+- `python3 skill/scripts/status.py`
+
+当前并不存在的 current-state 命令：
+
+- `claw wallet ...`
+- `claw stats`
+- `claw history`
+- `claw stake`
+- `claw unstake`
+
+#### Target-state product verbs
+
+这些可以保留为 companion-first 的目标命令面，但必须标成 target-state：
+
+- `/buddy`
+- `/brief`
+- `/activities`
+- `/why`
+- `/history`
+- `/pause`
+- `/resume`
+- `/settings`
+
+兼容 alias 只在命令注册和冲突规则明确后启用：
+
+- `/checkin -> /brief`
+- `/wake -> /resume`
+- `/status -> /buddy` 仅在不与 stock OpenClaw `/status` 语义冲突时启用
+
+规则：
+
+- 控制类 verbs 如果要承担确定性行为，优先走 plugin command 或 `command-dispatch: tool`
+- `/buddy` / `/brief` / `/pause` / `/resume` 是 **ClawChain extension commands**，不是 stock OpenClaw built-ins
+- 在没有 deterministic control plane 前，它们不能被写成“当前默认可用”
+- 不要把 stock OpenClaw `/status` 和 ClawChain 的 companion home verb 混写成同一个默认命令
+
+### 4.4 当前可见 surfaces 与 durable V1 IA 目标
+
+#### 当前 repo surfaces
+
+- `status.py`
+- `website /dashboard`
+- `website /network`
+- `website /risk`
+
+其中：
+
+- `/dashboard` 仍是 read-model surface，不是 Companion Home
+- `/network` 更接近公开网络/排行视图
+- `/risk` 是 operator-oriented，不应进入 miner 一级 IA
+
+#### Durable V1 IA 目标
+
+ClawChain V1 的业务 IA 应固定为：
+
+- `Companion Home`
+- `Activities`
+- `History`
+- `Network`
+- contextual `Review`
+
+不应进入 miner 一级 IA：
+
+- `Risk`
+- `Abuse Review`
+- raw settlement tooling
+- raw operator queue
+
+### 4.5 当前有效配置 vs target-state 偏好层
+
+当前有效配置以 [`skill/scripts/config.json`](/Users/yanchengren/Documents/Projects/clawchain/skill/scripts/config.json) 为准，主要包括：
+
+| 配置项 | 当前作用 |
+|---|---|
+| `rpc_url` | 指向当前 mining-service |
+| `miner_name` | 注册时使用的 miner 名称 |
+| `wallet_path` | 本地钱包路径 |
+| `forecast_mode` | `heuristic_v1` / `codex_v1` |
+| `codex_binary` / `codex_model` / `codex_timeout_seconds` | `codex_v1` 辅助配置 |
+| `request_timeout_seconds` | HTTP 请求超时 |
+| `min_commit_time_remaining_seconds` | commit 前最低剩余时间 |
+| `parallel_tasks` | 本地并行 worker 数 |
+| `max_tasks_per_run` | 每轮处理的 fast task 上限 |
+| `miner_address` | 当前 miner 地址 |
+
+target-state 但当前还没有落地为权威 companion contract 的配置包括：
+
+- `activity_policy`
+- `daily_brief_reminder`
+- `surface_mode`
+- true pause / resume state
+- durable companion preferences
+
+也就是说，今天不能把这些 companion 偏好字段写成 current-state truth。
 
 ---
 
@@ -582,6 +653,12 @@ tournament result
 2026-04-19 更新：`make test-poker-mtt-phase2` 已成为 Poker MTT Evidence Phase 2 的 local beta 一键 gate，覆盖 Go authadapter / Poker MTT / settlement tests、Phase 2 Python evidence-to-anchor tests、以及 30/300/20k/2,000-table offline load shape。它证明本地 beta slice，不代表 reward-bearing production rollout。
 
 产品上仍然按 beta / internal rollout 处理：自动发奖和 poker settlement anchoring 默认关闭，公开页面只展示 `poker_mtt_public_rank` / `poker_mtt_public_rating`，不展示 hidden-eval-derived `total_score`。
+
+当前公开矿工契约额外边界：
+
+- `Poker MTT` 不进入默认公开 activity catalog
+- `poker_mtt_daily` / `poker_mtt_weekly` 不应被写成当前公开 task lane
+- reward-window build、hidden eval、HUD、projection、rollback、release-review bundle 都仍属于 operator / release-review 语境
 
 2026-04-17 Phase 3 统一定义为 **Poker MTT Production Readiness**，不是 high-value reward launch。Phase 3 的目标是关闭这些闸门：
 
@@ -772,8 +849,8 @@ final_mining_score
 | **Bittensor** | ~10,000 矿工 | 变动大，高端 subnet 矿工 $50-500/天 | GPU + ML 技能 | GPU 电费 + API |
 | **Koii** | ~87,000 节点 | $0.5-5/天（依任务） | 桌面应用 + 8GB RAM | 电费 |
 | **io.net** | ~数千供应商 | 按 GPU 型号定价，A100 约 $1-2/小时 | GPU 硬件 | 硬件 + 电费 |
-| **ClawChain (100矿工)** | 100 | **$34.29/天 (FDV $10M)** | 安装 Skill | 无额外成本 |
-| **ClawChain (1000矿工)** | 1,000 | **$3.43/天 (FDV $10M)** | 安装 Skill | 无额外成本 |
+| **ClawChain (100矿工)** | 100 | **$34.29/天 (FDV $10M)** | repo-local runtime（target-state 为 published companion install） | 无额外成本 |
+| **ClawChain (1000矿工)** | 1,000 | **$3.43/天 (FDV $10M)** | repo-local runtime（target-state 为 published companion install） | 无额外成本 |
 
 **关键洞察**：100% Fair Launch 让矿工收益比之前提升 67%（从 4,320 → 7,200 CLAW/天）。早期矿工（<500人）在 FDV $10M 场景下，日收益远超 Koii 顶级节点，且零额外硬件成本。
 
@@ -831,7 +908,7 @@ final_mining_score
 **怎么测？**
 ```text
 Week 1: companion activation + wallet + runtime dogfood
-Week 2: 邀请 20 名核心用户，验证 TUI/status/check-in 路径
+Week 2: 邀请 20 名核心用户，验证 gateway-backed TUI / extension command / brief 路径
 Week 3: 扩展到 50 名用户，验证 forecast / daily / arena 状态反馈
 Week 4: 压力测试，修 bug，完善文档和 Control UI IA
 ```
@@ -853,7 +930,7 @@ Week 4: 压力测试，修 bug，完善文档和 Control UI IA
 ```text
 Claw Points:
 ├── Activation point: 成功激活 companion
-├── Quality point: 完成有效 forecast / daily / arena activity
+├── Quality point: 完成有效 forecast / daily / approved future activity
 ├── Return point: 回来查看状态与完成 daily brief
 ├── Bug report: 有效问题反馈
 └── No idle-online farming: 不因纯在线时长发积分
@@ -870,15 +947,21 @@ Claw Points:
 **创世配置：**
 ```text
 初始矿工: invite-only 用户迁移
-主入口: OpenClaw Skill / plugin + TUI + Control UI Companion Home
-默认 activities: forecast_15m, daily_anchor, arena(read-first)
+主入口: stock OpenClaw host surfaces（跨平台默认 `TUI / Control UI / WebChat`；macOS 可加 `menu bar`）承载 ClawChain miner client
+默认一级 IA: Companion Home / Activities / History / Network
+默认 activities: forecast-first（forecast_15m + daily_anchor），arena 先以 read-only multiplier 解释层存在
 默认日互动: 1 次可选 daily brief
 ```
 
 **上线清单：**
 - [ ] companion activation 路径打通
-- [ ] `/buddy`、`/status`、`/activities`、`/checkin` 定义清楚
-- [ ] Control UI Companion Home / Activities / History 可用
+- [ ] service-owned companion state store 可用
+- [ ] `daily_anchor` 幂等性缺口已修复，或已被明确 quarantined 出 launch contract
+- [ ] 选择并实现 extension command transport（plugin command 或 skill command + `command-dispatch: tool`）
+- [ ] `/buddy`、`/brief`、`/activities`、`/pause`、`/resume` 定义清楚
+- [ ] miner client `Companion Home / Activities / History / Network` 可用
+- [ ] `Risk` 不出现在 miner 一级导航
+- [ ] operator console 与 miner client route 分离
 - [ ] settlement explanation 和 reward timeline 可解释
 - [ ] 文档与 onboarding 同步更新
 
@@ -934,18 +1017,20 @@ Poker MTT 不直接进入本节的增长策略。它先走 `docs/POKER_MTT_PHASE
 | companion-first 产品层设计 | ✅ | 持久伙伴 + activities + surfaces 已锁定 |
 | forecast-first 挖矿设计 | ✅ | `forecast_15m + daily_anchor + arena_multiplier` 已锁定 |
 | 产品全案文档 | ✅ | 本文档 |
-| Control UI / Skill 原型 | ✅ | 已有 dashboard / risk / network / skill runtime 基础 |
+| browser read-surface / skill runtime 原型 | ✅ | 已有 `dashboard / network / risk / skill runtime` 基础，但尚未完成 durable V1 IA split |
 | Token 经济模型设计 | ✅ | 21M CLAW，减半曲线 |
 
 ### Q2 2026（4-6月）
 
 | 功能 | 优先级 | 预计工时 |
 |------|--------|---------|
+| 文档 truth 收口（authority / current-vs-target） | P0 | 1 周 |
+| operator console 与 miner client IA 拆分 | P0 | 1 周 |
 | companion identity + state model | P0 | 1 周 |
-| Skill 命令面调整（`/buddy` 等） | P0 | 1 周 |
+| non-stock extension command transport + registration（`/buddy` 等） | P0 | 1 周 |
 | TUI 状态表达与 daily brief 提醒 | P0 | 1 周 |
-| Control UI Companion Home | P0 | 2 周 |
-| Activities / History / Rankings IA | P0 | 2 周 |
+| miner client `Companion Home` browser prototype | P0 | 2 周 |
+| Activities / History / Network IA | P0 | 2 周 |
 | runtime 状态同步与 API contract | P0 | 1 周 |
 | reward timeline / explanation surfaces | P1 | 1 周 |
 
@@ -954,8 +1039,8 @@ Poker MTT 不直接进入本节的增长策略。它先走 `docs/POKER_MTT_PHASE
 | 功能 | 优先级 | 预计工时 |
 |------|--------|---------|
 | 公开测试网 companion launch | P0 | 1 周 |
-| Arena read surfaces / ranking surfaces | P0 | 2 周 |
-| Review / Risk 用户可见子集 | P1 | 1 周 |
+| Arena read surfaces / public ranking surfaces | P0 | 2 周 |
+| Home / History contextual review explanation | P1 | 1 周 |
 | Activity registry 扩展机制 | P1 | 2 周 |
 | 文档与 onboarding polish | P1 | 1 周 |
 | 安全审计 / abuse policy 收敛 | P0 | 外包，4 周 |
@@ -1066,4 +1151,4 @@ Poker MTT 不直接进入本节的增长策略。它先走 `docs/POKER_MTT_PHASE
 
 ---
 
-*本文档为 ClawChain 产品全案 v1.1，将随项目发展持续迭代。*
+*本文档为 ClawChain 产品全案 v1.2，将随项目发展持续迭代。*

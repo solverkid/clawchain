@@ -1,260 +1,221 @@
 # ClawChain Setup Guide
 
-Get mining in 5 minutes. No GPU needed. Alpha mining is deterministic-first — all 8 challenge types (math, logic, hash, text_transform, json_extract, format_convert, sentiment, classification) are solvable locally without any LLM API key.
+> **Authority:** This file is the authoritative runnable onboarding guide for the current local miner path.
+>
+> **Rule:** If this file conflicts with product-language docs, this file wins for installation and command steps. For current runtime truth, [`docs/IMPLEMENTATION_STATUS_2026_04_10.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md) wins. For protocol and settlement truth, [`docs/MINING_DESIGN.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md) wins.
 
-## Quick Start (Miners)
+## Quick Start (Current Supported Path)
 
 ```bash
-# 1. Clone the repo (recommended: use a tagged release)
+# 1. Clone the repo
 git clone https://github.com/0xVeryBigOrange/clawchain.git
 cd clawchain
-git checkout v0.2.0   # use a stable release instead of main
 
-# 2. Ensure OpenClaw workspace exists
-mkdir -p ~/.openclaw/workspace/skills
+# 2. Bootstrap OpenClaw via the official path
+openclaw onboard --install-daemon
+openclaw gateway status
+openclaw dashboard
 
-# 3. Copy the mining skill
-cp -r skill ~/.openclaw/workspace/skills/clawchain-miner
+# 3. Initialize local ClawChain state
+python3 skill/scripts/setup.py
 
-# 4. Set up wallet and register as a miner
-cd ~/.openclaw/workspace/skills/clawchain-miner
-python3 scripts/setup.py
+# 4. Start the current mining loop
+python3 skill/scripts/mine.py
 
-# 5. Start mining
-python3 scripts/mine.py
-
-# 6. Check your status
-python3 scripts/status.py
+# 5. Inspect current miner status
+python3 skill/scripts/status.py
 ```
+
+This is the current repo-local runtime path. It does **not** imply that the repo already ships a finished companion UI, a stock `/buddy` command, or a published ClawHub/plugin install path.
+
+## Official OpenClaw Bootstrap Path
+
+OpenClaw host-platform setup should follow the official docs:
+
+1. Install OpenClaw
+2. Run `openclaw onboard --install-daemon`
+3. Run `openclaw gateway status`
+4. Run `openclaw dashboard`
+
+Verified against the official OpenClaw docs:
+
+- [Getting Started](https://docs.openclaw.ai/start/getting-started)
+- [Platforms](https://docs.openclaw.ai/platforms)
+- [Linux App](https://docs.openclaw.ai/platforms/linux)
+
+Notes:
+
+- `openclaw dashboard` opens the stock Control UI.
+- Stock OpenClaw surfaces are host surfaces. They are not automatically the ClawChain miner product layer.
+
+## Repo-Local Skill Mount (Development Only)
+
+Today this repo is primarily used as a local/dev integration path.
+
+If you want the repo skill visible inside your active OpenClaw workspace, mount or copy `skill/` into the active workspace `skills/` directory according to your local workspace setup.
+
+Important:
+
+- This is a **development path**, not a published install contract.
+- `openclaw skills install <slug>` is the ClawHub install path for published skills, not the canonical way to install this repo-local directory.
+- Path note: in the repo root, commands use `skill/scripts/...`; if you mount `skill/` into an OpenClaw workspace as a skill directory, the same files appear as `scripts/...`.
+
+## Future Published Install Path
+
+These are target-state distribution paths, not current guarantees:
+
+- published ClawHub skill
+- published OpenClaw plugin / bundle
+- custom Control UI / companion browser module
+
+Until those ship, the supported path is the repo-local script flow documented above.
+
+## Supported Platform Matrix
+
+| Platform | Current ClawChain recommendation | Notes |
+|---|---|---|
+| macOS | OpenClaw Gateway + stock Control UI/WebChat/TUI + repo-local ClawChain scripts | OpenClaw has a native menu bar app on macOS, but ClawChain-specific companion UX still needs custom work |
+| Linux | OpenClaw Gateway + stock Control UI/TUI + repo-local ClawChain scripts | Official OpenClaw Gateway is fully supported; native Linux companion apps are still planned upstream |
+| WSL2 | Same as Linux | Preferred over native Windows for the full Gateway/tooling path |
+| Native Windows | Not the recommended primary path for this repo today | Use WSL2 unless you have a specific reason not to |
 
 ## Requirements
 
-- Python 3.9+
-- `requests` library (`pip install requests`)
-- `cryptography` library (`pip install cryptography`) — for wallet encryption (optional but recommended)
-- [OpenClaw](https://github.com/openclaw/openclaw) installed and initialized:
-  ```bash
-  npm install -g openclaw && openclaw init
-  ```
-  This creates `~/.openclaw/workspace/skills/` which is needed for skill installation.
-- No GPU, no special hardware
+- Python 3.10+
+- `requests`
+- `cryptography` recommended for encrypted wallet storage
+- A reachable ClawChain mining-service endpoint
+- Optional: Codex CLI if you want `forecast_mode=codex_v1`
 
-## Verify Release Integrity
+No local ClawChain testnet node is required for the current forecast-first miner path.
 
-After cloning, verify file checksums:
+## Wallet And Local State
+
+Current `setup.py` behavior:
+
+- generates or loads a local secp256k1 private key
+- stores the wallet by default at `~/.clawchain/wallet.json`
+- registers the miner against the mining service
+- writes back runtime config such as `miner_address` and `forecast_mode`
+
+Important boundaries:
+
+- This is **not** a BIP-39 mnemonic / seed-phrase wallet flow today.
+- Do not document or depend on `claw wallet ...` commands; those do not currently exist in this repo.
+
+## State Ownership
+
+| State category | Current authority | Notes |
+|---|---|---|
+| miner / task / reward / settlement truth | `mining-service + Postgres` | Browser truth should come from the service |
+| wallet / config / local log | local files under `~/.clawchain/` and repo skill config | Local helper state, not protocol authority |
+| companion shell identity | not shipped yet | Do not assume session transcript or plugin cache is already the authority |
+
+## Effective Runtime Config
+
+Current effective fields in [`skill/scripts/config.json`](/Users/yanchengren/Documents/Projects/clawchain/skill/scripts/config.json):
+
+- `rpc_url`
+- `miner_name`
+- `wallet_path`
+- `forecast_mode`
+- `codex_binary`
+- `codex_model`
+- `codex_timeout_seconds`
+- `request_timeout_seconds`
+- `min_commit_time_remaining_seconds`
+- `parallel_tasks`
+- `max_tasks_per_run`
+- `miner_address`
+
+Current default file:
+
+```json
+{
+  "rpc_url": "http://127.0.0.1:1317",
+  "wallet_path": "~/.clawchain/wallet.json",
+  "forecast_mode": "codex_v1"
+}
+```
+
+`forecast_mode` is the active miner-mode switch. The old `solver_mode` language is stale.
+
+## Current Runtime Flow
+
+Today the active miner path is:
+
+1. `python3 skill/scripts/setup.py`
+2. `python3 skill/scripts/mine.py`
+3. `python3 skill/scripts/status.py`
+
+Under the hood:
+
+- the mining service publishes active tasks
+- the local miner loop prioritizes `daily_anchor`
+- then processes capped `forecast_15m` tasks
+- the client performs commit/reveal
+- settlement, reward windows, and anchor progression stay service-side
+
+This is a **service-led forecast-first** runtime. It is not the old challenge/PoA miner.
+
+## Optional Forecast Modes
+
+### `heuristic_v1`
+
+- default low-dependency forecast path
+- does not require Codex CLI
+
+### `codex_v1`
+
+- uses the local Codex CLI path
+- requires the configured `codex` binary and model
+- usually benefits from a larger commit safety window
+
+If you do not need model-assisted forecasting, prefer `heuristic_v1`.
+
+## Current Status Surfaces
+
+Current runnable status entry points are:
+
+- `python3 skill/scripts/status.py`
+- repo website read surfaces:
+  - `/dashboard`
+  - `/network`
+  - `/risk` (operator-oriented, not miner-primary)
+
+Current stock OpenClaw host surfaces are:
+
+- TUI
+- Control UI / WebChat
+- macOS menu bar status on macOS
+
+Those host surfaces do **not** mean that `Companion Home`, `Activities`, or `History` already exist as finished ClawChain UI.
+
+## Known Gaps
+
+- No durable companion state store yet
+- No shipped `Companion Home / Activities / History` surface yet
+- Current `daily_anchor` path still has an idempotency gap on repeated already-submitted / already-revealed responses; do not describe the current loop as a fully hardened always-on companion daemon until that gap is closed
+- `arena_multiplier` is read-only from the miner client perspective
+- Poker MTT is still operator-gated and should not be described here as a default public miner activity
+
+## Verification
+
+Useful checks:
 
 ```bash
-# macOS
-shasum -a 256 -c CHECKSUMS.txt
-
-# Linux
-sha256sum -c CHECKSUMS.txt
+openclaw gateway status
+python3 skill/scripts/doctor.py
+python3 skill/scripts/status.py --json
 ```
 
-All files should show `OK`. If any fail, do not proceed — re-download from a trusted source.
+`doctor.py` is a pre-flight helper. It is useful for connectivity/runtime checks, but it is not an authority for companion command availability or browser IA truth.
 
-## Wallet Security
+If the service is running and the miner is registered, `status.py` should return a service-backed status envelope plus recent local mining records.
 
-Private keys are **encrypted at rest** using PBKDF2 + Fernet (AES-128-CBC with HMAC).
+## Related Documents
 
-- **Encrypted wallet** (v2, default): Requires `cryptography` library and a passphrase.
-- **Obfuscated wallet** (v1, legacy): Base64-only, not real encryption.
-- **Plaintext wallet** (v0): Raw hex key in file.
-
-### Encryption Setup
-
-```bash
-# Install cryptography library (required for wallet encryption)
-pip install cryptography
-
-# During setup, you'll be prompted for a passphrase
-python3 scripts/setup.py
-# 🔑 Enter passphrase for new wallet: ****
-# 🔑 Confirm passphrase: ****
-```
-
-### Non-Interactive / CI Mode
-
-```bash
-# Set passphrase via environment variable
-export CLAWCHAIN_WALLET_PASSPHRASE="your-strong-passphrase"
-python3 scripts/setup.py --non-interactive
-```
-
-### Migrate Existing Wallet
-
-If you have an older (unencrypted) wallet:
-
-```bash
-python3 scripts/setup.py --migrate-wallet
-```
-
-### Upgrade Wallet (v0.2.0+)
-
-If your wallet was created before v0.3.0, re-run setup to generate a secp256k1 keypair for signature-authenticated submissions (replaces HMAC):
-
-```bash
-python3 scripts/setup.py
-# Select "Use existing wallet" — setup will automatically generate and register
-# an auth_secret if one is missing.
-```
-
-Without `auth_secret`, your submissions will still be accepted during the Alpha transition period, but will be rejected in Beta.
-
-### Insecure Mode (Not Recommended)
-
-```bash
-# Store wallet without encryption (for testing only)
-python3 scripts/setup.py --insecure
-```
-
-### Other Options
-
-- Override private key via environment variable: `export CLAWCHAIN_PRIVATE_KEY=<hex>`
-- File permissions are always set to `600` (owner-only read/write)
-- **⚠️ This is a mining/test wallet only. Do not store significant value.**
-
-## Solver Mode
-
-The default solver mode is **`local_only`** — all challenge solving happens locally on your machine. No data is sent to external services.
-
-Edit `scripts/config.json` to change `solver_mode`:
-
-| Mode | Default? | Behavior |
-|------|:--------:|----------|
-| `local_only` | ✅ | Only use local solvers. All Alpha challenges are solvable locally. Most private. |
-| `auto` | | Try local solver first, fall back to LLM if available. Not required for Alpha mining. |
-| `llm` | | Always use LLM provider. Not required for Alpha — all 8 task types are deterministic. |
-
-> ⚠️ **Privacy note**: `auto` and `llm` modes send challenge prompt text to third-party LLM APIs (OpenAI, Google, or Anthropic). Only enable these if you understand and accept external data sharing. `local_only` never sends any data externally.
-
-## RPC Endpoint Security
-
-The `rpc_url` in `config.json` should use HTTPS for production deployments. The mining scripts will warn if a non-localhost HTTP URL is detected.
-
-## LLM API Key (Optional)
-
-Set one of: `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`
-
-- **Without API key**: You can mine all Alpha challenges. All 8 Alpha task types are deterministic and solvable with local solvers.
-- **With API key**: May improve accuracy on sentiment/classification challenges, but is not required.
-- **No API key ≠ can't mine.** Alpha mining is deterministic-first — every challenge has a verifiable correct answer.
-
-> **Note**: Free-form generative tasks (translation, summarization) are not part of Alpha reward-critical mining. They will be enabled in Beta with proper multi-validator verification.
-
-## How It Works
-
-1. Every **10 minutes** (1 epoch), the network generates deterministic AI challenges
-2. Your agent solves challenges (math, logic, hash, text_transform, json_extract, format_convert, sentiment, classification)
-3. Correct answers earn **$CLAW** tokens
-4. **50 CLAW per epoch**, split among all active miners who complete challenges
-5. 20% of challenges are spot-checked with known answers for fraud detection
-
-## Mining Rewards
-
-| Miners Online | CLAW/Day/Miner | Pioneer 3x | Early 2x | Growth 1.5x |
-|:---:|:---:|:---:|:---:|:---:|
-| 100 | 72 | 216 | 144 | 108 |
-| 500 | 14.4 | 43.2 | 28.8 | 21.6 |
-| 1,000 | 7.2 | 21.6 | 14.4 | 10.8 |
-| 5,000 | 1.44 | 4.32 | 2.88 | 2.16 |
-
-- **Early bird**: First 1,000 miners get 3x / First 5,000 get 2x / First 10,000 get 1.5x
-- **Streak bonus**: 7 days +10%, 30 days +25%, 90 days +50%
-- **Difficulty tiers**: Harder challenges = higher reward weight
-
-## Tokenomics
-
-- **Total supply**: 21,000,000 CLAW (hard cap)
-- **Distribution**: 100% mining (zero pre-mine, zero team allocation)
-- **Daily output**: 7,200 CLAW (50 CLAW × 144 epochs/day)
-- **Halving**: Every ~4 years (210,000 epochs)
-- **Fair launch**: Every single CLAW is mined, not printed
-
-## Project Structure
-
-```
-clawchain/
-├── skill/                   # ⛏️ Mining Skill — install this to mine
-│   ├── SKILL.md             #    Skill documentation
-│   └── scripts/             #    setup.py, mine.py, status.py, config.json
-├── mining-service/          # Independent mining API server (Python/SQLite)
-│   ├── server.py            # HTTP API (challenges, submit, register, stats)
-│   ├── models.py            # SQLite database models
-│   ├── challenge_engine.py  # AI challenge generation (8 Alpha types, deterministic-first)
-│   ├── rewards.py           # Reward calculation with bonuses
-│   └── epoch_scheduler.py   # 10-minute epoch scheduler
-├── chain/                   # Cosmos SDK blockchain (Go)
-│   ├── x/poa/               # Proof of Availability module
-│   ├── x/challenge/         # Challenge engine module
-│   ├── x/reputation/        # Reputation system module
-│   └── vendor/              # Vendored dependencies
-├── website/                 # Next.js 14 landing page
-├── scripts/                 # Dev/test scripts only (not for mining)
-├── WHITEPAPER.md            # Whitepaper (Chinese)
-├── WHITEPAPER_EN.md         # Whitepaper (English)
-└── docs/
-    ├── PRODUCT_SPEC.md      # Product spec (Chinese)
-    ├── PRODUCT_SPEC_EN.md   # Product spec (English)
-    └── MINING_DESIGN.md     # Mining mechanism design
-```
-
-## For Developers
-
-### Build the chain binary
-
-```bash
-cd chain
-go build -mod=vendor -o ../build/clawchaind ./cmd/clawchaind
-```
-
-### Run tests
-
-```bash
-cd chain
-go test -mod=vendor ./...
-```
-
-### Run the mining service locally
-
-```bash
-cd mining-service
-python3 server.py
-# API available at http://localhost:1317
-```
-
-### Build the website
-
-```bash
-cd website
-npm install
-npm run build
-```
-
-## Links
-
-- **Website**: https://0xverybigorange.github.io/clawchain/
-- **GitHub**: https://github.com/0xVeryBigOrange/clawchain
-- **Whitepaper**: [English](WHITEPAPER_EN.md) | [中文](WHITEPAPER.md)
-
-## License
-
-Apache 2.0
-build
-```
-
-## Links
-
-- **Website**: https://0xverybigorange.github.io/clawchain/
-- **GitHub**: https://github.com/0xVeryBigOrange/clawchain
-- **Whitepaper**: [English](WHITEPAPER_EN.md) | [中文](WHITEPAPER.md)
-
-## License
-
-Apache 2.0
-/github.com/0xVeryBigOrange/clawchain
-- **Whitepaper**: [English](WHITEPAPER_EN.md) | [中文](WHITEPAPER.md)
-
-## License
-
-Apache 2.0
+- [`docs/IMPLEMENTATION_STATUS_2026_04_10.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/IMPLEMENTATION_STATUS_2026_04_10.md)
+- [`docs/PRODUCT_SPEC.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/PRODUCT_SPEC.md)
+- [`docs/MINING_DESIGN.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/MINING_DESIGN.md)
+- [`docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md`](/Users/yanchengren/Documents/Projects/clawchain/docs/superpowers/specs/2026-04-10-companion-miner-product-layer-design.md)

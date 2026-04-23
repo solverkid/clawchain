@@ -1,6 +1,6 @@
 # ClawChain Implementation Status
 
-Date: 2026-04-10
+Last updated: 2026-04-23
 
 This document is the current memory checkpoint for the forecast-first mining rebuild.
 
@@ -9,6 +9,20 @@ It answers three questions:
 1. What is actually implemented and runnable today?
 2. What is still legacy drift or partial implementation?
 3. What are the next major protocol/data workstreams, ordered by miner user flow value and chain value?
+
+## 0. How To Read This Document
+
+> **Authority:** This file is the current runtime and implementation truth for the miner path.
+>
+> **Rule:** If this file conflicts with `PRODUCT_SPEC.md`, `PRODUCT_SPEC_EN.md`, `SETUP.md`, or `skill/SKILL.md`, this file wins on what is actually implemented and runnable today.
+>
+> **Scope:** Product language and companion-shell goals still live in `PRODUCT_SPEC.md`. Protocol and settlement design still live in `MINING_DESIGN.md`.
+
+This file distinguishes three things:
+
+1. **Public miner path today**: what a miner can actually run, see, and rely on.
+2. **Operator integration paths**: admin-only or release-review-only bridge paths such as Arena ingestion and Poker MTT reward-window work.
+3. **Target-state product shell**: companion-first UX that may be defined elsewhere but is not yet implemented by default.
 
 ## Update: 2026-04-22 Hardening Delta
 
@@ -30,7 +44,7 @@ Still not finished:
 - forecast still does not perform the broader daily/arena overlay merge described by the architecture prose; the landed `quality_envelope` is forecast-side only
 - a local runtime with old pending anchor jobs in Postgres can still show degraded chain health until those jobs are cleared or a real RPC node is configured
 
-## Update: 2026-04-23 Three-Lane Local Acceptance
+## Update: 2026-04-23 Operator Integration Acceptance
 
 Validated on local Postgres + local FastAPI + local arena runtime with a shared 33-miner manifest:
 
@@ -51,17 +65,28 @@ Important runtime truth from this acceptance:
   - `forecast_capture_ready=true` appears first when the bucket is fully revealed
   - `forecast_ready=true` follows only after the reconcile loop sees Gamma resolution and builds the reward window
 
+This acceptance result is **not** the same thing as the current public miner contract. It proves local operator-side integration of forecast, Poker MTT, and Arena inputs; it does not mean all three are public miner-facing activities or read models today.
+
 ## 1. Current Product Reality
 
 The active default path is no longer challenge mining.
 
-The active path is:
+### 1.1 Public miner path today
+
+The public miner path today is:
 
 - `forecast_15m` fast lane
 - `daily_anchor` slow calibration lane
 - externally-ingested `arena_multiplier`
 - FastAPI + Postgres service ledger
 - miner CLI scripts for setup, mine, and status
+
+What this means in practice:
+
+- `forecast_15m` is the only fully correct public reward-bearing lane today
+- `daily_anchor` is calibration-only scaffolding
+- `arena_multiplier` is a read-only shared-state bridge field from the miner perspective
+- repo website read surfaces (`dashboard`, `network`, `risk`) are custom ClawChain read surfaces, not stock OpenClaw Control UI pages
 
 The system is currently **service-led**, not chain-led.
 
@@ -71,6 +96,16 @@ That means:
 - settlement logic lives in `mining-service/forecast_engine.py`
 - market discovery and resolution live in `mining-service/market_data.py`
 - no onchain reward window, proof anchoring, validator consensus, or staking/slashing pipeline is active yet
+
+### 1.2 Operator integration paths under validation
+
+Separate from the public miner path, the repo also contains operator-side integration work for:
+
+- Arena result ingestion and multiplier bridge
+- Poker MTT evidence, projection, rating, reward-window, and settlement-gating pipelines
+- release-review and rollback bundles
+
+These paths are real, but they should not be described as default public miner-facing activities unless the corresponding miner contract, read model, and rollout gate are explicitly closed.
 
 ## 2. What A Miner Can Actually Do Today
 
@@ -116,7 +151,7 @@ Current runtime shape:
 - miner uses built-in `heuristic_v1`
 - no tool-using harness runtime yet
 - no multi-model miner strategy switching yet
-- no miner-side history browser beyond local JSON log + status output
+- no dedicated miner-facing `History` IA yet; history is still fragmented across local JSON log, `status.py`, and repo website read surfaces
 
 ### 2.3 Status / Read Surfaces
 
@@ -147,6 +182,18 @@ Current visible data:
 - artifact-backed replay proof
 - public leaderboard
 - open risk cases
+
+Notes:
+
+- miner-primary accessible surfaces today:
+  - `status.py`
+  - repo `/dashboard`
+  - repo `/network`
+- operator-oriented accessible surface today:
+  - repo `/risk`
+- `dashboard`, `network`, and `risk` are repo-local ClawChain read surfaces, not stock OpenClaw Control UI pages.
+- There is still no shipped `Companion Home`, `Activities`, or dedicated `History` IA surface in the current repo.
+- `/risk` is closer to an operator-oriented read surface than a miner-primary IA node.
 
 ## 3. Protocol / Data Chain Status
 
@@ -510,8 +557,6 @@ These still exist and should be treated as legacy or partially misleading:
 - `mining-service/challenge_engine.py`
 - `mining-service/epoch_scheduler.py`
 - `mining-service/rewards.py`
-- `skill/SKILL.md`
-- `skill/scripts/doctor.py`
 - `website/src/app/page.tsx`
 - `website/src/app/layout.tsx`
 - `docs/protocol-spec.md`
@@ -520,10 +565,15 @@ These still exist and should be treated as legacy or partially misleading:
 
 Current drift examples:
 
-- old challenge/Proof-of-Availability language is still present in website landing and metadata
-- `skill/SKILL.md` still describes challenge fetching and LLM solving
-- `doctor.py` still checks `solver_mode`, reports `MINER_VERSION = 0.2.0`, and assumes challenge-era behavior
+- old challenge / Proof-of-Availability language is still present in website landing copy and site metadata
+- website landing and navigation still point miners toward `/risk`, which does not match the desired miner-vs-operator IA split
+- dashboard still has a field-label mismatch: the “Release ratio” label currently reflects `anti_abuse_discount`, not `admission_release_ratio`
+- parts of `docs/KNOWN_LIMITATIONS.md` still describe future wallet and UX goals such as BIP-39 style recovery rather than the current wallet/runtime contract
 - old protocol docs still describe `/clawchain/challenges/*` APIs as if they were the main path
+
+Helper but not authority:
+
+- `skill/scripts/doctor.py` is forecast-aware and useful as a pre-flight helper, but it is not an authority for companion control, browser IA, or miner product contract
 
 This is now one of the largest sources of cognitive load in the repo.
 
@@ -550,10 +600,14 @@ So the honest protocol statement today is:
 
 These are the biggest missing pieces from a miner’s point of view:
 
-1. richer local doctor checks around actual anchor sender health and sequence drift
-2. more than one built-in miner strategy
-3. clearer miner-facing explanation of why a reward was reduced or held
-4. richer replay / proof surface for one task or reward window
+1. service-owned companion state store and cross-surface identity envelope
+2. deterministic extension command registration for `/buddy` / `/brief` / `/pause` / `/resume`
+3. `daily_anchor` idempotency hardening on repeated already-committed / already-revealed paths
+4. dedicated miner-facing `Companion Home / Activities / History` IA instead of fragmented read surfaces
+5. richer local doctor checks around actual anchor sender health and sequence drift
+6. more than one built-in miner strategy
+7. clearer miner-facing explanation of why a reward was reduced or held
+8. richer replay / proof surface for one task or reward window
 
 ## 6.2 Protocol / Data Gaps
 
