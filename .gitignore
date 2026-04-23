@@ -37,6 +37,7 @@ data/
 artifacts/
 __pycache__/
 .gitnexus
+.worktrees/
 
 # Local/generated poker MTT and testnet artifacts
 deploy/testnet-artifacts/
