@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -34,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--poll-interval-seconds", type=float, default=5.0)
     parser.add_argument("--forecast-wait-seconds", type=float, default=1200.0)
     parser.add_argument("--forecast-submit-max-workers", type=int, default=33)
+    parser.add_argument("--admin-reconcile-interval-seconds", type=float, default=15.0)
     parser.add_argument("--arena-attempt-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--arena-runner-concurrency", type=int, default=8)
     parser.add_argument("--arena-cycle-delay-ms", type=int, default=75)
@@ -97,6 +100,37 @@ def should_restart_forecast_swarm(summary: dict[str, object]) -> bool:
     if bool(summary.get("forecast_ready")):
         return False
     return not bool(summary.get("forecast_capture_ready"))
+
+
+def should_admin_reconcile_forecast(summary: dict[str, object]) -> bool:
+    return bool(summary.get("forecast_capture_ready")) and not bool(summary.get("forecast_ready"))
+
+
+def build_poker_round_command(
+    *,
+    base_url: str,
+    manifest: Path,
+    tournament_id: str,
+    request_timeout_seconds: float = 180.0,
+) -> list[str]:
+    return [
+        sys.executable,
+        str(SCRIPT_DIR / "run_poker_round.py"),
+        "--base-url",
+        base_url,
+        "--manifest",
+        str(manifest),
+        "--tournament-id",
+        tournament_id,
+        "--request-timeout-seconds",
+        str(request_timeout_seconds),
+    ]
+
+
+def post_admin_reconcile(base_url: str, *, timeout_seconds: float = 5.0) -> dict[str, object]:
+    request = urllib.request.Request(f"{base_url}/admin/reconcile", data=b"", method="POST")
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - local harness URL.
+        return json.loads(response.read().decode("utf-8"))
 
 
 async def _seed_arena_warmup_history(database_url: str, manifest: dict[str, object]) -> None:
@@ -210,18 +244,11 @@ def main() -> int:
         acceptance_log.flush()
 
         _run(
-            [
-                sys.executable,
-                str(SCRIPT_DIR / "run_poker_round.py"),
-                "--base-url",
-                args.forecast_base_url,
-                "--manifest",
-                str(args.manifest),
-                "--tournament-id",
-                poker_tournament_id,
-                "--request-timeout-seconds",
-                "180",
-            ]
+            build_poker_round_command(
+                base_url=args.forecast_base_url,
+                manifest=args.manifest,
+                tournament_id=poker_tournament_id,
+            )
         )
         poker_summary = _read_json(DEFAULT_BUILD_DIR / "poker-round.json") or {}
         poker_reward_window_id = str(poker_summary.get("reward_window_id") or f"rw:poker_mtt_daily:{poker_tournament_id}")
@@ -243,6 +270,7 @@ def main() -> int:
         arena_attempt = 0
         deadline = time.time() + args.acceptance_timeout_seconds
         last_heartbeat_at = 0.0
+        last_admin_reconcile_at = 0.0
         all_ready = False
 
         def start_forecast_swarm() -> subprocess.Popen[str]:
@@ -375,6 +403,27 @@ def main() -> int:
                 all_ready = bool(summary["forecast_ready"] and summary["poker_ready"] and summary["arena_ready"])
                 if all_ready:
                     break
+
+                if should_admin_reconcile_forecast(summary) and (
+                    now - last_admin_reconcile_at >= args.admin_reconcile_interval_seconds
+                ):
+                    try:
+                        result = post_admin_reconcile(args.forecast_base_url)
+                    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError) as exc:
+                        acceptance_log.write(
+                            f"{isoformat_z(utc_now())} admin_reconcile_failed error={type(exc).__name__}:{exc}\n"
+                        )
+                    else:
+                        acceptance_log.write(
+                            (
+                                f"{isoformat_z(utc_now())} admin_reconcile_done "
+                                f"task_count={result.get('task_count')} "
+                                f"reward_window_count={result.get('reward_window_count')} "
+                                f"settlement_batch_count={result.get('settlement_batch_count')}\n"
+                            )
+                        )
+                    acceptance_log.flush()
+                    last_admin_reconcile_at = now
 
                 if forecast_proc is not None:
                     forecast_exit_code = forecast_proc.poll()

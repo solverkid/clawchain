@@ -51,6 +51,7 @@ Validated on local Postgres + local FastAPI + local arena runtime with a shared 
 - `scripts/three_lane/run_local_acceptance.py` now drives forecast swarm using `33` submit workers per task by default; with two fast tasks this produces `66` concurrent submit workers, matching the 33-miner local acceptance target instead of under-driving the 3 second commit window
 - `scripts/three_lane/run_forecast_swarm.py` now scales submit workers by `task_count`, so the local 33-miner swarm no longer collapses to a single global worker cap when two fast tasks publish together
 - forecast swarm now treats `400 commit window closed` as a reveal-compensation case and still attempts reveal; this closes the edge race where the commit landed server-side but the client classified the response as a terminal failure
+- `scripts/three_lane/run_local_acceptance.py` now triggers bounded `POST /admin/reconcile` calls after `forecast_capture_ready=true` and before `forecast_ready=true`; this keeps local acceptance deterministic when Polymarket Gamma has resolved but reward-window materialization is waiting on the service progression loop
 - local acceptance proof is now clean for the main three-lane path:
   - Poker MTT: `33` miners, reward window built, total reward `3300`
   - Arena: `33` results, `20` non-default multipliers written back to shared miner state
@@ -63,7 +64,7 @@ Important runtime truth from this acceptance:
 - Polymarket-backed fast-task resolution is not instantaneous; the `05:25` bucket had `resolve_at=05:30:00Z` but the reward window finalized at `05:32:13Z`
 - the correct operator expectation is therefore:
   - `forecast_capture_ready=true` appears first when the bucket is fully revealed
-  - `forecast_ready=true` follows only after the reconcile loop sees Gamma resolution and builds the reward window
+  - `forecast_ready=true` follows after the service progression loop or the local acceptance harness calls `POST /admin/reconcile` and builds the reward window
 
 This acceptance result is **not** the same thing as the current public miner contract. It proves local operator-side integration of forecast, Poker MTT, and Arena inputs; it does not mean all three are public miner-facing activities or read models today.
 
