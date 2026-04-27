@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -41,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--arena-runner-concurrency", type=int, default=8)
     parser.add_argument("--arena-cycle-delay-ms", type=int, default=75)
     parser.add_argument("--arena-http-timeout-seconds", type=int, default=45)
+    parser.add_argument("--leave-stack-running", action="store_true")
     return parser.parse_args()
 
 
@@ -88,6 +90,56 @@ def _terminate_process(process: subprocess.Popen[str] | None, *, timeout_seconds
     except subprocess.TimeoutExpired:
         process.kill()
         return process.wait(timeout=timeout_seconds)
+
+
+def _terminate_pid_file_process(pid_path: Path, *, timeout_seconds: float = 10.0) -> bool:
+    if not pid_path.exists():
+        return False
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        pid_path.unlink(missing_ok=True)
+        return False
+    if pid <= 0:
+        pid_path.unlink(missing_ok=True)
+        return False
+
+    def process_running() -> bool:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    if not process_running():
+        pid_path.unlink(missing_ok=True)
+        return False
+
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pid_path.unlink(missing_ok=True)
+            return False
+
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if not process_running():
+            pid_path.unlink(missing_ok=True)
+            return True
+        time.sleep(0.2)
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    pid_path.unlink(missing_ok=True)
+    return True
 
 
 def _read_json(path: Path) -> dict[str, object] | None:
@@ -240,6 +292,9 @@ def main() -> int:
                 args.namespace,
             ]
         )
+        if not args.leave_stack_running:
+            stack.callback(_terminate_pid_file_process, DEFAULT_BUILD_DIR / "forecast-service.pid")
+            stack.callback(_terminate_pid_file_process, DEFAULT_BUILD_DIR / "arena-runtime.pid")
         acceptance_log.write(f"{isoformat_z(utc_now())} stack_ready\n")
         acceptance_log.flush()
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -106,6 +109,29 @@ def test_post_admin_reconcile_posts_to_admin_endpoint(monkeypatch):
     }
 
 
+def test_terminate_pid_file_process_stops_started_process(tmp_path):
+    process = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    pid_path = tmp_path / "service.pid"
+    pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
+
+    try:
+        assert run_local_acceptance._terminate_pid_file_process(pid_path, timeout_seconds=2.0) is True
+
+        deadline = time.time() + 2.0
+        while process.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+
+        assert process.poll() is not None
+        assert not pid_path.exists()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, 9)
+
+
+def test_terminate_pid_file_process_ignores_missing_pid_file(tmp_path):
+    assert run_local_acceptance._terminate_pid_file_process(tmp_path / "missing.pid") is False
+
+
 def test_parse_args_uses_longer_arena_attempt_timeout_by_default(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["run_local_acceptance.py"])
 
@@ -114,3 +140,4 @@ def test_parse_args_uses_longer_arena_attempt_timeout_by_default(monkeypatch):
     assert args.forecast_submit_max_workers == 33
     assert args.admin_reconcile_interval_seconds == 15.0
     assert args.arena_attempt_timeout_seconds == 900.0
+    assert args.leave_stack_running is False
